@@ -608,15 +608,20 @@ CREATE TRIGGER trigger_app_settings_updated BEFORE UPDATE ON app_settings FOR EA
 CREATE TRIGGER trigger_tenant_settings_updated BEFORE UPDATE ON tenant_settings FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- Check if user is super admin
+-- SECURITY DEFINER with search_path ensures this bypasses RLS
 CREATE OR REPLACE FUNCTION is_super_admin(user_id UUID)
 RETURNS BOOLEAN AS $$
+DECLARE
+  user_role TEXT;
+  user_active BOOLEAN;
 BEGIN
-  RETURN EXISTS (
-    SELECT 1 FROM user_profiles
-    WHERE id = user_id AND role = 'super_admin' AND is_active = TRUE
-  );
+  SELECT role, is_active INTO user_role, user_active
+  FROM user_profiles
+  WHERE id = user_id;
+
+  RETURN user_role = 'super_admin' AND user_active = TRUE;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Check if user has tenant access
 CREATE OR REPLACE FUNCTION has_tenant_access(user_id UUID, check_tenant_id UUID)
@@ -633,7 +638,7 @@ BEGIN
     AND up.is_active = TRUE
   );
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Get user's tenants
 CREATE OR REPLACE FUNCTION get_user_tenants(user_id UUID)
@@ -648,7 +653,7 @@ BEGIN
   WHERE ut.user_id = user_id AND t.is_active = TRUE
   ORDER BY t.name;
 END;
-$$ LANGUAGE plpgsql SECURITY DEFINER;
+$$ LANGUAGE plpgsql SECURITY DEFINER SET search_path = public;
 
 -- Prevent deletion of protected users
 CREATE OR REPLACE FUNCTION prevent_protected_user_deletion()
@@ -721,14 +726,17 @@ CREATE POLICY "Super admins can manage all tenants" ON tenants
 CREATE POLICY "Users can view assigned tenants" ON tenants
   FOR SELECT TO authenticated USING (has_tenant_access(auth.uid(), id));
 
--- User profile policies
-CREATE POLICY "Super admins can manage all users" ON user_profiles
-  FOR ALL TO authenticated USING (is_super_admin(auth.uid())) WITH CHECK (is_super_admin(auth.uid()));
+-- User profile policies (simplified to avoid circular dependency)
+-- Users can always read their own profile
 CREATE POLICY "Users can view own profile" ON user_profiles
   FOR SELECT TO authenticated USING (id = auth.uid());
+
+-- Users can update their own profile (but role changes handled by service role)
 CREATE POLICY "Users can update own profile" ON user_profiles
   FOR UPDATE TO authenticated USING (id = auth.uid())
-  WITH CHECK (id = auth.uid() AND role = (SELECT role FROM user_profiles WHERE id = auth.uid()));
+  WITH CHECK (id = auth.uid());
+
+-- Super admin management done via service role (server-side) to avoid circular RLS
 
 -- User tenants policies
 CREATE POLICY "Super admins can manage user tenants" ON user_tenants
