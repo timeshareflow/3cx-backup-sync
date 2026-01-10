@@ -2,17 +2,26 @@
 
 import { useState } from "react";
 import { Play, FileText, Download, X, ZoomIn, ZoomOut } from "lucide-react";
-import { Modal } from "@/components/ui/Modal";
 import type { MediaFile } from "@/types";
 
 interface MediaPreviewProps {
   media: MediaFile;
 }
 
+// Helper to determine file type from mime_type
+function getFileType(mimeType: string | null): "image" | "video" | "document" {
+  if (!mimeType) return "document";
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  return "document";
+}
+
 export function MediaPreview({ media }: MediaPreviewProps) {
   const [isViewerOpen, setIsViewerOpen] = useState(false);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+
+  const fileType = getFileType(media.mime_type);
 
   const fetchMediaUrl = async () => {
     if (imageUrl) return imageUrl;
@@ -46,7 +55,7 @@ export function MediaPreview({ media }: MediaPreviewProps) {
   };
 
   // Render based on file type
-  if (media.file_type === "image") {
+  if (fileType === "image") {
     return (
       <>
         <button
@@ -87,7 +96,7 @@ export function MediaPreview({ media }: MediaPreviewProps) {
     );
   }
 
-  if (media.file_type === "video") {
+  if (fileType === "video") {
     return (
       <>
         <button
@@ -128,9 +137,9 @@ export function MediaPreview({ media }: MediaPreviewProps) {
         <p className="text-sm font-medium text-gray-900 truncate max-w-[200px]">
           {media.original_filename || "Document"}
         </p>
-        {media.file_size_bytes && (
+        {media.file_size && (
           <p className="text-xs text-gray-500">
-            {formatFileSize(media.file_size_bytes)}
+            {formatFileSize(media.file_size)}
           </p>
         )}
       </div>
