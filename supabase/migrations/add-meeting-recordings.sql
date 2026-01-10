@@ -126,7 +126,8 @@ ADD COLUMN IF NOT EXISTS can_view_meetings BOOLEAN DEFAULT TRUE;
 -- ============================================
 -- UPDATE STORAGE USAGE VIEW
 -- ============================================
-CREATE OR REPLACE VIEW tenant_storage_usage AS
+DROP VIEW IF EXISTS tenant_storage_usage;
+CREATE VIEW tenant_storage_usage AS
 SELECT
   t.id as tenant_id,
   t.name as tenant_name,

@@ -4,6 +4,7 @@
 
 -- ============================================
 -- CLEANUP: Drop existing tables if they exist
+-- NOTE: user_profiles is PRESERVED to maintain admin roles
 -- ============================================
 DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
 DROP VIEW IF EXISTS messages_with_media CASCADE;
@@ -23,9 +24,10 @@ DROP TABLE IF EXISTS call_logs CASCADE;
 DROP TABLE IF EXISTS extensions CASCADE;
 DROP TABLE IF EXISTS tenant_settings CASCADE;
 DROP TABLE IF EXISTS storage_usage CASCADE;
-DROP TABLE IF EXISTS user_tenants CASCADE;
-DROP TABLE IF EXISTS user_profiles CASCADE;
-DROP TABLE IF EXISTS tenants CASCADE;
+-- IMPORTANT: DO NOT drop user data or tenant configuration
+-- DROP TABLE IF EXISTS user_tenants CASCADE;
+-- DROP TABLE IF EXISTS user_profiles CASCADE;
+-- DROP TABLE IF EXISTS tenants CASCADE;
 DROP TABLE IF EXISTS app_settings CASCADE;
 
 -- Enable extensions
@@ -57,8 +59,9 @@ INSERT INTO app_settings (key, value, description, is_public) VALUES
 
 -- ============================================
 -- TENANTS (Each 3CX instance/customer)
+-- NOTE: Uses IF NOT EXISTS to preserve existing tenant configs
 -- ============================================
-CREATE TABLE tenants (
+CREATE TABLE IF NOT EXISTS tenants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   name VARCHAR(255) NOT NULL,
   slug VARCHAR(100) UNIQUE NOT NULL,
@@ -105,13 +108,14 @@ CREATE TABLE tenants (
   created_by UUID REFERENCES auth.users(id)
 );
 
-CREATE INDEX idx_tenants_slug ON tenants(slug);
-CREATE INDEX idx_tenants_active ON tenants(is_active);
+CREATE INDEX IF NOT EXISTS idx_tenants_slug ON tenants(slug);
+CREATE INDEX IF NOT EXISTS idx_tenants_active ON tenants(is_active);
 
 -- ============================================
 -- USER PROFILES (Extends auth.users)
+-- NOTE: Uses IF NOT EXISTS to preserve existing users
 -- ============================================
-CREATE TABLE user_profiles (
+CREATE TABLE IF NOT EXISTS user_profiles (
   id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email VARCHAR(255) NOT NULL,
   full_name VARCHAR(255),
@@ -125,13 +129,14 @@ CREATE TABLE user_profiles (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_user_profiles_role ON user_profiles(role);
-CREATE INDEX idx_user_profiles_email ON user_profiles(email);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_role ON user_profiles(role);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_email ON user_profiles(email);
 
 -- ============================================
 -- USER-TENANT ASSOCIATIONS
+-- NOTE: Uses IF NOT EXISTS to preserve existing user permissions
 -- ============================================
-CREATE TABLE user_tenants (
+CREATE TABLE IF NOT EXISTS user_tenants (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
   tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
@@ -147,8 +152,8 @@ CREATE TABLE user_tenants (
   UNIQUE(user_id, tenant_id)
 );
 
-CREATE INDEX idx_user_tenants_user ON user_tenants(user_id);
-CREATE INDEX idx_user_tenants_tenant ON user_tenants(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_user_tenants_user ON user_tenants(user_id);
+CREATE INDEX IF NOT EXISTS idx_user_tenants_tenant ON user_tenants(tenant_id);
 
 -- ============================================
 -- TENANT SETTINGS
