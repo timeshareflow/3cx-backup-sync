@@ -17,12 +17,12 @@ export async function generateMetadata({ params }: PageProps) {
 
   const { data: conversation } = await supabase
     .from("conversations")
-    .select("conversation_name, participants(display_name)")
+    .select("conversation_name, participants(external_name)")
     .eq("id", id)
     .single();
 
   const title = conversation?.conversation_name ||
-    conversation?.participants?.map((p: { display_name: string | null }) => p.display_name).join(", ") ||
+    conversation?.participants?.map((p: { external_name: string | null }) => p.external_name).join(", ") ||
     "Conversation";
 
   return {
@@ -48,8 +48,8 @@ export default async function ConversationPage({ params }: PageProps) {
   }
 
   const participantNames = conversation.participants
-    .map((p: { display_name: string | null; extension_number: string | null }) =>
-      p.display_name || p.extension_number || "Unknown"
+    .map((p: { external_name: string | null; external_id: string | null }) =>
+      p.external_name || p.external_id || "Unknown"
     )
     .join(", ");
 
@@ -102,17 +102,17 @@ export default async function ConversationPage({ params }: PageProps) {
         <div className="mt-4 flex flex-wrap gap-2">
           {conversation.participants.map((p: {
             id: string;
-            display_name: string | null;
-            extension_number: string | null;
+            external_name: string | null;
+            external_id: string | null;
             participant_type: string;
           }) => (
             <span
               key={p.id}
               className="inline-flex items-center px-2 py-1 rounded-full text-sm bg-gray-100 text-gray-700"
             >
-              {p.display_name || p.extension_number}
-              {p.extension_number && p.display_name && (
-                <span className="text-gray-400 ml-1">({p.extension_number})</span>
+              {p.external_name || p.external_id}
+              {p.external_id && p.external_name && (
+                <span className="text-gray-400 ml-1">({p.external_id})</span>
               )}
             </span>
           ))}

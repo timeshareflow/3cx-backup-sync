@@ -188,51 +188,52 @@ export async function getConversations(
   }, pool);
 }
 
-// Get all extensions - compatible with 3CX V20
+// Get all extensions - compatible with 3CX V20 and hosted 3CX
 export async function getExtensions(pool?: Pool): Promise<ThreeCXExtension[]> {
   return withClient(async (client) => {
     logger.info("Fetching extensions from 3CX database...");
 
-    // Try 3CX V20 schema first (uses dn table directly)
+    // Try users_view first (3CX hosted / V20+)
     try {
       const query = `
         SELECT
-          dn.iddn as idextension,
-          dn.number as extension_number,
-          dn.firstname,
-          dn.lastname
-        FROM dn
-        WHERE dn.number IS NOT NULL
-          AND dn.dntype = 0
-        ORDER BY dn.number
+          uv.id as idextension,
+          uv.dn as extension_number,
+          u.firstname,
+          u.lastname
+        FROM users_view uv
+        LEFT JOIN users u ON u.iduser = uv.id
+        WHERE uv.dn IS NOT NULL
+        ORDER BY uv.dn
       `;
 
       const result = await client.query(query);
-      logger.info(`Fetched ${result.rows.length} extensions from 3CX (V20 schema)`);
+      logger.info(`Fetched ${result.rows.length} extensions from 3CX (users_view)`);
       return result.rows;
     } catch (err) {
-      logger.warn("V20 schema query failed, trying legacy schema", { error: (err as Error).message });
+      logger.warn("users_view query failed, trying legacy dn schema", { error: (err as Error).message });
 
-      // Fallback to legacy schema
+      // Fallback to legacy dn schema
       try {
         const query = `
           SELECT
-            e.id as idextension,
-            e.number as extension_number,
-            e.firstname,
-            e.lastname
-          FROM extensions e
-          WHERE e.number IS NOT NULL
-          ORDER BY e.number
+            dn.iddn as idextension,
+            dn.number as extension_number,
+            dn.firstname,
+            dn.lastname
+          FROM dn
+          WHERE dn.number IS NOT NULL
+            AND dn.dntype = 0
+          ORDER BY dn.number
         `;
 
         const result = await client.query(query);
-        logger.info(`Fetched ${result.rows.length} extensions from 3CX (legacy schema)`);
+        logger.info(`Fetched ${result.rows.length} extensions from 3CX (dn schema)`);
         return result.rows;
       } catch (err2) {
         logger.error("Both extension queries failed", {
-          v20Error: (err as Error).message,
-          legacyError: (err2 as Error).message,
+          usersViewError: (err as Error).message,
+          dnError: (err2 as Error).message,
         });
         return [];
       }

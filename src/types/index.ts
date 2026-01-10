@@ -16,12 +16,14 @@ export interface Conversation {
 export interface Participant {
   id: string;
   conversation_id: string;
-  extension_number: string | null;
-  display_name: string | null;
-  email: string | null;
-  phone: string | null;
+  extension_id: string | null;
+  external_id: string | null;
+  external_name: string | null;
+  external_number: string | null;
   participant_type: "extension" | "external" | "queue";
-  created_at: string;
+  joined_at: string | null;
+  left_at: string | null;
+  metadata: Record<string, unknown> | null;
 }
 
 export interface Message {

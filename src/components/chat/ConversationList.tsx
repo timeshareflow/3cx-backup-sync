@@ -71,8 +71,8 @@ export function ConversationList({ initialConversations }: ConversationListProps
         });
       case "name":
         return sorted.sort((a, b) => {
-          const aName = a.conversation_name || a.participants[0]?.display_name || "";
-          const bName = b.conversation_name || b.participants[0]?.display_name || "";
+          const aName = a.conversation_name || a.participants[0]?.external_name || "";
+          const bName = b.conversation_name || b.participants[0]?.external_name || "";
           return aName.localeCompare(bName);
         });
       case "messages":

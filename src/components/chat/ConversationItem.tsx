@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { MessageSquare, Users, Image, Video, FileText } from "lucide-react";
+import { MessageSquare, Users } from "lucide-react";
 import { formatConversationTime } from "@/lib/utils/date";
 import type { ConversationWithParticipants } from "@/types";
 
@@ -11,7 +11,7 @@ interface ConversationItemProps {
 
 export function ConversationItem({ conversation }: ConversationItemProps) {
   const participantNames = conversation.participants
-    .map((p) => p.display_name || p.extension_number || "Unknown")
+    .map((p) => p.external_name || p.external_id || "Unknown")
     .join(", ");
 
   return (
@@ -79,8 +79,8 @@ export function ConversationItem({ conversation }: ConversationItemProps) {
 export function ConversationCard({ conversation }: ConversationItemProps) {
   const primaryParticipant = conversation.participants[0];
   const displayName = conversation.conversation_name ||
-    primaryParticipant?.display_name ||
-    primaryParticipant?.extension_number ||
+    primaryParticipant?.external_name ||
+    primaryParticipant?.external_id ||
     "Unknown";
 
   const initial = displayName.charAt(0).toUpperCase();
@@ -111,10 +111,10 @@ export function ConversationCard({ conversation }: ConversationItemProps) {
           {displayName}
         </p>
 
-        {/* Extension number if different from name */}
-        {primaryParticipant?.extension_number && primaryParticipant.display_name && (
+        {/* Extension ID if different from name */}
+        {primaryParticipant?.external_id && primaryParticipant.external_name && (
           <p className="text-xs text-slate-500 truncate w-full">
-            Ext. {primaryParticipant.extension_number}
+            Ext. {primaryParticipant.external_id}
           </p>
         )}
 
@@ -147,7 +147,7 @@ export function ConversationItemCompact({
   conversation,
 }: ConversationItemProps) {
   const participantNames = conversation.participants
-    .map((p) => p.display_name || p.extension_number)
+    .map((p) => p.external_name || p.external_id)
     .join(", ");
 
   return (

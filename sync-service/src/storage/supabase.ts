@@ -77,20 +77,29 @@ export async function upsertParticipant(participant: {
 }): Promise<void> {
   const client = getSupabaseClient();
 
-  const { error } = await client.from("participants").upsert(
-    {
-      conversation_id: participant.conversation_id,
-      extension_number: participant.extension_number,
-      display_name: participant.display_name,
-      email: participant.email,
-      phone: participant.phone,
-      participant_type: participant.participant_type || "extension",
-    },
-    { onConflict: "conversation_id,extension_number" }
-  );
+  // Check if participant already exists
+  const { data: existing } = await client
+    .from("participants")
+    .select("id")
+    .eq("conversation_id", participant.conversation_id)
+    .eq("external_id", participant.extension_number || "")
+    .single();
+
+  if (existing) {
+    return; // Already exists
+  }
+
+  const { error } = await client.from("participants").insert({
+    conversation_id: participant.conversation_id,
+    external_id: participant.extension_number,
+    external_name: participant.display_name,
+    external_number: participant.participant_type === "external" ? participant.phone : null,
+    participant_type: participant.participant_type || "extension",
+    joined_at: new Date().toISOString(),
+  });
 
   if (error) {
-    logger.warn("Failed to upsert participant", { error, participant });
+    logger.warn("Failed to insert participant", { error, participant });
   }
 }
 
@@ -108,6 +117,21 @@ export async function insertMessage(message: {
 }): Promise<string | null> {
   const client = getSupabaseClient();
 
+  // Check if message already exists
+  if (message.tenant_id) {
+    const { data: existing } = await client
+      .from("messages")
+      .select("id")
+      .eq("tenant_id", message.tenant_id)
+      .eq("threecx_message_id", message.threecx_message_id)
+      .single();
+
+    if (existing) {
+      return null; // Already exists
+    }
+  }
+
+  const now = new Date().toISOString();
   const insertData: Record<string, unknown> = {
     conversation_id: message.conversation_id,
     threecx_message_id: message.threecx_message_id,
@@ -117,6 +141,11 @@ export async function insertMessage(message: {
     message_type: message.message_type || "text",
     has_media: message.has_media || false,
     sent_at: message.sent_at,
+    // Required fields for the table schema
+    topic: "chat",  // Required NOT NULL field
+    extension: message.sender_extension || "unknown",  // Required NOT NULL field
+    updated_at: now,  // Required NOT NULL field
+    inserted_at: now,  // Required NOT NULL field
   };
 
   if (message.tenant_id) {
@@ -125,12 +154,7 @@ export async function insertMessage(message: {
 
   const { data, error } = await client
     .from("messages")
-    .upsert(insertData, {
-      onConflict: message.tenant_id
-        ? "tenant_id,threecx_message_id"
-        : "threecx_message_id",
-      ignoreDuplicates: true
-    })
+    .insert(insertData)
     .select("id")
     .single();
 
