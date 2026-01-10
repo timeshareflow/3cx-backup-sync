@@ -38,6 +38,7 @@ export async function GET() {
     }
 
     // Get tenant config using admin client to bypass RLS
+    // Fetch BOTH old and new columns for backward compatibility
     const adminClient = createAdminClient();
     const { data: tenant, error } = await adminClient
       .from("tenants")
@@ -45,6 +46,7 @@ export async function GET() {
         id, name, slug,
         threecx_host,
         ssh_port, ssh_user,
+        sftp_port, sftp_user,
         threecx_chat_files_path, threecx_recordings_path,
         threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
         backup_chats, backup_chat_media, backup_recordings,
@@ -58,7 +60,7 @@ export async function GET() {
       throw error;
     }
 
-    // Return config with defaults for null values
+    // Return config with fallback: new columns -> legacy columns -> defaults
     // Note: passwords are not returned for security
     const config = {
       id: tenant.id,
@@ -66,9 +68,9 @@ export async function GET() {
       slug: tenant.slug,
       // 3CX Server
       threecx_host: tenant.threecx_host || "",
-      // SSH credentials (password not returned)
-      ssh_port: tenant.ssh_port || 22,
-      ssh_user: tenant.ssh_user || "",
+      // SSH credentials (use new columns with fallback to legacy)
+      ssh_port: tenant.ssh_port ?? tenant.sftp_port ?? 22,
+      ssh_user: tenant.ssh_user || tenant.sftp_user || "",
       // File paths
       threecx_chat_files_path: tenant.threecx_chat_files_path || "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files",
       threecx_recordings_path: tenant.threecx_recordings_path || "/var/lib/3cxpbx/Instance1/Data/Recordings",
@@ -130,19 +132,32 @@ export async function POST(request: Request) {
       }
     }
 
-    // Build update object with new SSH-based columns
+    // Build update object - write to BOTH old and new columns for compatibility
     const updateData: Record<string, unknown> = {};
 
     // 3CX Server host
     if (body.threecx_host !== undefined) updateData.threecx_host = body.threecx_host;
 
-    // SSH credentials (used for both database tunnel and file access)
-    if (body.ssh_port !== undefined) updateData.ssh_port = parseInt(body.ssh_port) || 22;
-    if (body.ssh_user !== undefined) updateData.ssh_user = body.ssh_user;
-    if (body.ssh_password) updateData.ssh_password = body.ssh_password;
+    // SSH credentials - write to BOTH new and legacy columns
+    if (body.ssh_port !== undefined) {
+      const port = parseInt(body.ssh_port) || 22;
+      updateData.ssh_port = port;
+      updateData.sftp_port = port;  // Keep legacy in sync
+    }
+    if (body.ssh_user !== undefined) {
+      updateData.ssh_user = body.ssh_user;
+      updateData.sftp_user = body.ssh_user;  // Keep legacy in sync
+    }
+    if (body.ssh_password) {
+      updateData.ssh_password = body.ssh_password;
+      updateData.sftp_password = body.ssh_password;  // Keep legacy in sync
+    }
 
-    // PostgreSQL password (connects via SSH tunnel)
-    if (body.threecx_db_password) updateData.threecx_db_password = body.threecx_db_password;
+    // PostgreSQL password - write to BOTH new and legacy columns
+    if (body.threecx_db_password) {
+      updateData.threecx_db_password = body.threecx_db_password;
+      updateData.threecx_password = body.threecx_db_password;  // Keep legacy in sync
+    }
 
     // 3CX File paths
     if (body.threecx_chat_files_path !== undefined) updateData.threecx_chat_files_path = body.threecx_chat_files_path;
@@ -176,13 +191,14 @@ export async function POST(request: Request) {
       throw error;
     }
 
-    // Fetch updated config
+    // Fetch updated config (with both old and new columns)
     const { data: tenant, error: fetchError } = await adminClient
       .from("tenants")
       .select(`
         id, name, slug,
         threecx_host,
         ssh_port, ssh_user,
+        sftp_port, sftp_user,
         threecx_chat_files_path, threecx_recordings_path,
         threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
         backup_chats, backup_chat_media, backup_recordings,
@@ -202,9 +218,9 @@ export async function POST(request: Request) {
       slug: tenant.slug,
       // 3CX Server
       threecx_host: tenant.threecx_host || "",
-      // SSH credentials (password not returned)
-      ssh_port: tenant.ssh_port || 22,
-      ssh_user: tenant.ssh_user || "",
+      // SSH credentials (fallback to legacy)
+      ssh_port: tenant.ssh_port ?? tenant.sftp_port ?? 22,
+      ssh_user: tenant.ssh_user || tenant.sftp_user || "",
       // File paths
       threecx_chat_files_path: tenant.threecx_chat_files_path || "",
       threecx_recordings_path: tenant.threecx_recordings_path || "",

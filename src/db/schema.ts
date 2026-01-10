@@ -39,16 +39,27 @@ export const tenants = pgTable(
     description: text("description"),
     isActive: boolean("is_active").default(true),
 
-    // 3CX Server Connection (SSH-based - no firewall changes needed)
+    // 3CX Server Connection
     threecxHost: varchar("threecx_host", { length: 255 }),
 
-    // SSH Credentials (used for both database tunnel and file access)
+    // SSH Credentials (PRIMARY - used for database tunnel and file access)
     sshPort: integer("ssh_port").default(22),
     sshUser: varchar("ssh_user", { length: 100 }),
     sshPassword: text("ssh_password"),
 
     // PostgreSQL password (connects via SSH tunnel, user is always "phonesystem")
     threecxDbPassword: text("threecx_db_password"),
+
+    // LEGACY columns - kept for backward compatibility, DO NOT REMOVE
+    // Data migrates: sftp_user -> ssh_user, sftp_password -> ssh_password, threecx_password -> threecx_db_password
+    threecxPort: integer("threecx_port").default(5432),
+    threecxDatabase: varchar("threecx_database", { length: 100 }).default("database_single"),
+    threecxUser: varchar("threecx_user", { length: 100 }).default("phonesystem"),
+    threecxPassword: text("threecx_password"),
+    sftpHost: varchar("sftp_host", { length: 255 }),
+    sftpPort: integer("sftp_port").default(22),
+    sftpUser: varchar("sftp_user", { length: 100 }),
+    sftpPassword: text("sftp_password"),
 
     // 3CX File Paths
     threecxChatFilesPath: varchar("threecx_chat_files_path", { length: 500 }).default("/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files"),

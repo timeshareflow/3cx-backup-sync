@@ -4,19 +4,23 @@ import { logger } from "./utils/logger";
 import { SftpConfig } from "./storage/sftp";
 import { createSshTunnel, closeTunnel, closeAllTunnels as closeAllSshTunnels } from "./ssh-tunnel";
 
-export interface TenantConfig {
+// Raw tenant data from database (includes both old and new columns)
+interface RawTenantData {
   id: string;
   name: string;
   slug: string;
-  // 3CX Server Host (used for SSH connection)
   threecx_host: string | null;
-  // SSH credentials (used for both tunnel and SFTP - ONE set of credentials)
+  // New SSH columns (primary)
   ssh_port: number | null;
   ssh_user: string | null;
   ssh_password: string | null;
-  // PostgreSQL password only (connects via SSH tunnel to localhost:5432)
   threecx_db_password: string | null;
-  // File paths on 3CX server
+  // Legacy columns (fallback) - NEVER REMOVE THESE
+  sftp_port: number | null;
+  sftp_user: string | null;
+  sftp_password: string | null;
+  threecx_password: string | null;
+  // File paths
   threecx_chat_files_path: string | null;
   threecx_recordings_path: string | null;
   threecx_voicemail_path: string | null;
@@ -35,19 +39,78 @@ export interface TenantConfig {
   sync_enabled: boolean;
 }
 
+// Normalized tenant config (after applying fallback logic)
+export interface TenantConfig {
+  id: string;
+  name: string;
+  slug: string;
+  threecx_host: string | null;
+  ssh_port: number | null;
+  ssh_user: string | null;
+  ssh_password: string | null;
+  threecx_db_password: string | null;
+  threecx_chat_files_path: string | null;
+  threecx_recordings_path: string | null;
+  threecx_voicemail_path: string | null;
+  threecx_fax_path: string | null;
+  threecx_meetings_path: string | null;
+  backup_chats: boolean;
+  backup_chat_media: boolean;
+  backup_recordings: boolean;
+  backup_voicemails: boolean;
+  backup_faxes: boolean;
+  backup_cdr: boolean;
+  backup_meetings: boolean;
+  is_active: boolean;
+  sync_enabled: boolean;
+}
+
+// Normalize tenant data: use new columns, fall back to legacy columns
+function normalizeTenant(raw: RawTenantData): TenantConfig {
+  return {
+    id: raw.id,
+    name: raw.name,
+    slug: raw.slug,
+    threecx_host: raw.threecx_host,
+    // Use new columns with fallback to legacy columns
+    ssh_port: raw.ssh_port ?? raw.sftp_port ?? 22,
+    ssh_user: raw.ssh_user || raw.sftp_user,
+    ssh_password: raw.ssh_password || raw.sftp_password,
+    threecx_db_password: raw.threecx_db_password || raw.threecx_password,
+    // File paths
+    threecx_chat_files_path: raw.threecx_chat_files_path,
+    threecx_recordings_path: raw.threecx_recordings_path,
+    threecx_voicemail_path: raw.threecx_voicemail_path,
+    threecx_fax_path: raw.threecx_fax_path,
+    threecx_meetings_path: raw.threecx_meetings_path,
+    // Backup settings
+    backup_chats: raw.backup_chats,
+    backup_chat_media: raw.backup_chat_media,
+    backup_recordings: raw.backup_recordings,
+    backup_voicemails: raw.backup_voicemails,
+    backup_faxes: raw.backup_faxes,
+    backup_cdr: raw.backup_cdr,
+    backup_meetings: raw.backup_meetings,
+    // Status
+    is_active: raw.is_active,
+    sync_enabled: raw.sync_enabled,
+  };
+}
+
 // Cache for tenant database pools
 const tenantPools: Map<string, Pool> = new Map();
 
 export async function getActiveTenants(): Promise<TenantConfig[]> {
   const supabase = getSupabaseClient();
 
+  // Fetch BOTH old and new columns - backward compatible
   const { data: tenants, error } = await supabase
     .from("tenants")
     .select(`
       id, name, slug,
       threecx_host,
-      ssh_port, ssh_user, ssh_password,
-      threecx_db_password,
+      ssh_port, ssh_user, ssh_password, threecx_db_password,
+      sftp_port, sftp_user, sftp_password, threecx_password,
       threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
       backup_chats, backup_chat_media, backup_recordings, backup_voicemails, backup_faxes, backup_cdr, backup_meetings,
       is_active, sync_enabled
@@ -61,12 +124,19 @@ export async function getActiveTenants(): Promise<TenantConfig[]> {
     throw new Error(`Failed to fetch tenants: ${error.message}`);
   }
 
-  return tenants || [];
+  // Normalize each tenant (apply fallback logic)
+  return (tenants || []).map(normalizeTenant);
 }
 
 export async function getTenantPool(tenant: TenantConfig): Promise<Pool | null> {
   if (!tenant.threecx_host || !tenant.ssh_user || !tenant.ssh_password || !tenant.threecx_db_password) {
-    logger.warn(`Tenant ${tenant.slug} missing connection credentials`, { tenantId: tenant.id });
+    logger.warn(`Tenant ${tenant.slug} missing connection credentials`, {
+      tenantId: tenant.id,
+      hasHost: !!tenant.threecx_host,
+      hasSshUser: !!tenant.ssh_user,
+      hasSshPassword: !!tenant.ssh_password,
+      hasDbPassword: !!tenant.threecx_db_password,
+    });
     return null;
   }
 
