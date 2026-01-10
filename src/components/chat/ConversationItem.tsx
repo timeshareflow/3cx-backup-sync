@@ -75,6 +75,73 @@ export function ConversationItem({ conversation }: ConversationItemProps) {
   );
 }
 
+// Compact square card for grid layout
+export function ConversationCard({ conversation }: ConversationItemProps) {
+  const primaryParticipant = conversation.participants[0];
+  const displayName = conversation.conversation_name ||
+    primaryParticipant?.display_name ||
+    primaryParticipant?.extension_number ||
+    "Unknown";
+
+  const initial = displayName.charAt(0).toUpperCase();
+
+  return (
+    <Link
+      href={`/conversations/${conversation.id}`}
+      className="block p-3 bg-gradient-to-br from-slate-50 to-white rounded-xl border border-slate-200 hover:border-teal-300 hover:shadow-md transition-all group"
+    >
+      <div className="flex flex-col items-center text-center">
+        {/* Avatar */}
+        <div className={`h-12 w-12 rounded-full flex items-center justify-center text-white text-lg font-bold mb-2 ${
+          conversation.is_group_chat
+            ? "bg-gradient-to-br from-purple-500 to-violet-600"
+            : conversation.is_external
+            ? "bg-gradient-to-br from-amber-500 to-orange-600"
+            : "bg-gradient-to-br from-teal-500 to-cyan-600"
+        }`}>
+          {conversation.is_group_chat ? (
+            <Users className="h-6 w-6" />
+          ) : (
+            initial
+          )}
+        </div>
+
+        {/* Name */}
+        <p className="font-medium text-slate-800 text-sm truncate w-full group-hover:text-teal-700">
+          {displayName}
+        </p>
+
+        {/* Extension number if different from name */}
+        {primaryParticipant?.extension_number && primaryParticipant.display_name && (
+          <p className="text-xs text-slate-500 truncate w-full">
+            Ext. {primaryParticipant.extension_number}
+          </p>
+        )}
+
+        {/* Message count */}
+        <div className="flex items-center gap-1 mt-1.5 text-xs text-slate-500">
+          <MessageSquare className="h-3 w-3" />
+          <span>{conversation.message_count}</span>
+        </div>
+
+        {/* Tags */}
+        <div className="flex gap-1 mt-1.5 flex-wrap justify-center">
+          {conversation.is_group_chat && (
+            <span className="px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-[10px] font-medium">
+              Group
+            </span>
+          )}
+          {conversation.is_external && (
+            <span className="px-1.5 py-0.5 bg-amber-100 text-amber-700 rounded text-[10px] font-medium">
+              External
+            </span>
+          )}
+        </div>
+      </div>
+    </Link>
+  );
+}
+
 // Smaller version for search results
 export function ConversationItemCompact({
   conversation,
