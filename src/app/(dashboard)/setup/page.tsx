@@ -46,6 +46,7 @@ export default function TenantSetupPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isTestingConnection, setIsTestingConnection] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<"success" | "error" | null>(null);
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isConfigured, setIsConfigured] = useState(false);
 
@@ -86,6 +87,7 @@ export default function TenantSetupPage() {
   const handleTestConnection = async () => {
     setIsTestingConnection(true);
     setConnectionStatus(null);
+    setConnectionError(null);
     try {
       const response = await fetch("/api/tenant/test-connection", {
         method: "POST",
@@ -98,9 +100,16 @@ export default function TenantSetupPage() {
           db_password: formData.threecx_db_password,
         }),
       });
-      setConnectionStatus(response.ok ? "success" : "error");
+      const data = await response.json();
+      if (response.ok) {
+        setConnectionStatus("success");
+      } else {
+        setConnectionStatus("error");
+        setConnectionError(data.error || "Connection failed");
+      }
     } catch (error) {
       setConnectionStatus("error");
+      setConnectionError((error as Error).message || "Connection failed");
     } finally {
       setIsTestingConnection(false);
     }
@@ -356,6 +365,11 @@ export default function TenantSetupPage() {
                 </Button>
               </div>
             </div>
+            {connectionError && (
+              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
+                <p className="text-sm text-red-700">{connectionError}</p>
+              </div>
+            )}
           </div>
         </div>
 
