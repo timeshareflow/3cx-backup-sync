@@ -16,36 +16,26 @@ import {
   Lock,
   ArrowRight,
   Shield,
-  FolderSync,
+  Terminal,
 } from "lucide-react";
 
 interface SetupFormData {
-  // Database connection (required)
+  // 3CX Server
   threecx_host: string;
-  threecx_port: string;
-  threecx_database: string;
-  threecx_user: string;
-  threecx_password: string;
-  // SFTP connection (optional - for file backup)
-  sftp_host: string;
-  sftp_port: string;
-  sftp_user: string;
-  sftp_password: string;
-  // File paths
-  threecx_chat_files_path: string;
+  // SSH credentials (used for both database tunnel and file access)
+  ssh_port: string;
+  ssh_user: string;
+  ssh_password: string;
+  // PostgreSQL password (connects via SSH tunnel)
+  threecx_db_password: string;
 }
 
 const defaultFormData: SetupFormData = {
   threecx_host: "",
-  threecx_port: "5432",
-  threecx_database: "database_single",
-  threecx_user: "phonesystem",
-  threecx_password: "",
-  sftp_host: "",
-  sftp_port: "22",
-  sftp_user: "",
-  sftp_password: "",
-  threecx_chat_files_path: "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files",
+  ssh_port: "22",
+  ssh_user: "root",
+  ssh_password: "",
+  threecx_db_password: "",
 };
 
 export default function TenantSetupPage() {
@@ -78,15 +68,10 @@ export default function TenantSetupPage() {
         if (data.config) {
           setFormData({
             threecx_host: data.config.threecx_host || "",
-            threecx_port: String(data.config.threecx_port || 5432),
-            threecx_database: data.config.threecx_database || "database_single",
-            threecx_user: data.config.threecx_user || "phonesystem",
-            threecx_password: "", // Don't show existing password
-            sftp_host: data.config.sftp_host || "",
-            sftp_port: String(data.config.sftp_port || 22),
-            sftp_user: data.config.sftp_user || "",
-            sftp_password: "", // Don't show existing password
-            threecx_chat_files_path: data.config.threecx_chat_files_path || defaultFormData.threecx_chat_files_path,
+            ssh_port: String(data.config.ssh_port || 22),
+            ssh_user: data.config.ssh_user || "root",
+            ssh_password: "", // Don't show existing password
+            threecx_db_password: "", // Don't show existing password
           });
           setIsConfigured(!!data.config.threecx_host);
         }
@@ -107,10 +92,10 @@ export default function TenantSetupPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           host: formData.threecx_host,
-          port: parseInt(formData.threecx_port),
-          database: formData.threecx_database,
-          user: formData.threecx_user,
-          password: formData.threecx_password,
+          ssh_port: parseInt(formData.ssh_port),
+          ssh_user: formData.ssh_user,
+          ssh_password: formData.ssh_password,
+          db_password: formData.threecx_db_password,
         }),
       });
       setConnectionStatus(response.ok ? "success" : "error");
@@ -125,27 +110,18 @@ export default function TenantSetupPage() {
     setIsSubmitting(true);
     setError(null);
     try {
-      // Build payload - only include SFTP fields if they have values
       const payload: Record<string, unknown> = {
         threecx_host: formData.threecx_host,
-        threecx_port: formData.threecx_port,
-        threecx_database: formData.threecx_database,
-        threecx_user: formData.threecx_user,
-        threecx_chat_files_path: formData.threecx_chat_files_path,
+        ssh_port: formData.ssh_port,
+        ssh_user: formData.ssh_user,
       };
 
-      if (formData.threecx_password) {
-        payload.threecx_password = formData.threecx_password;
+      if (formData.ssh_password) {
+        payload.ssh_password = formData.ssh_password;
       }
 
-      // Include SFTP settings if host is provided
-      if (formData.sftp_host || formData.sftp_user) {
-        payload.sftp_host = formData.sftp_host || formData.threecx_host; // Default to same host
-        payload.sftp_port = formData.sftp_port;
-        payload.sftp_user = formData.sftp_user;
-        if (formData.sftp_password) {
-          payload.sftp_password = formData.sftp_password;
-        }
+      if (formData.threecx_db_password) {
+        payload.threecx_db_password = formData.threecx_db_password;
       }
 
       const response = await fetch("/api/tenant/config", {
@@ -184,12 +160,12 @@ export default function TenantSetupPage() {
           <Settings className="h-10 w-10 text-white" />
         </div>
         <h1 className="text-3xl font-bold text-slate-800">
-          {isConfigured ? "3CX Configuration" : "Welcome! Let's Set Up Your 3CX Connection"}
+          {isConfigured ? "3CX Configuration" : "Connect Your 3CX Server"}
         </h1>
         <p className="text-slate-500 mt-2 max-w-lg mx-auto">
           {isConfigured
             ? "Update your 3CX connection settings"
-            : "Configure the connection to your 3CX server to start archiving chat messages."}
+            : "Just enter your SSH credentials and database password - that's it!"}
         </p>
       </div>
 
@@ -201,7 +177,7 @@ export default function TenantSetupPage() {
               <Shield className="h-6 w-6 text-teal-600" />
             </div>
             <div>
-              <h3 className="font-semibold text-slate-800">What you'll need</h3>
+              <h3 className="font-semibold text-slate-800">Simple Setup - No Server Changes Needed</h3>
               <ul className="mt-2 space-y-2 text-sm text-slate-600">
                 <li className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4 text-teal-500" />
@@ -209,17 +185,16 @@ export default function TenantSetupPage() {
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4 text-teal-500" />
-                  PostgreSQL database credentials (3CX V20 uses port 5432)
+                  SSH login credentials (same as SSH/terminal access)
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4 text-teal-500" />
-                  Network access from our servers to your 3CX instance
-                </li>
-                <li className="flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 text-teal-500" />
-                  SFTP/SSH credentials (optional - for recording/voicemail backup)
+                  PostgreSQL password from <code className="bg-teal-100 px-1 rounded">/var/lib/3cxpbx/Instance1/Bin/3CX.Postgres.ini</code>
                 </li>
               </ul>
+              <p className="mt-3 text-xs text-teal-700 font-medium">
+                We connect securely through SSH - no firewall changes or PostgreSQL configuration needed!
+              </p>
             </div>
           </div>
         </div>
@@ -242,178 +217,114 @@ export default function TenantSetupPage() {
                 <Server className="h-5 w-5 text-teal-600" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-800">Server Connection</h3>
-                <p className="text-sm text-slate-500">Enter your 3CX server details</p>
+                <h3 className="font-semibold text-slate-800">3CX Server</h3>
+                <p className="text-sm text-slate-500">Your 3CX server address</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  Host / IP Address *
-                </label>
-                <Input
-                  placeholder="192.168.1.100 or 3cx.yourcompany.com"
-                  value={formData.threecx_host}
-                  onChange={(e) => setFormData({ ...formData, threecx_host: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  Port
-                </label>
-                <Input
-                  placeholder="5432"
-                  value={formData.threecx_port}
-                  onChange={(e) => setFormData({ ...formData, threecx_port: e.target.value })}
-                />
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                Host / IP Address *
+              </label>
+              <Input
+                placeholder="192.168.1.100 or 3cx.yourcompany.com"
+                value={formData.threecx_host}
+                onChange={(e) => setFormData({ ...formData, threecx_host: e.target.value })}
+              />
             </div>
           </div>
 
-          {/* Database Credentials */}
+          {/* SSH Credentials */}
           <div>
             <div className="flex items-center gap-3 pb-4 border-b border-slate-200 mb-4">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <Database className="h-5 w-5 text-blue-600" />
+              <div className="p-2 bg-purple-100 rounded-lg">
+                <Terminal className="h-5 w-5 text-purple-600" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-800">Database Credentials</h3>
-                <p className="text-sm text-slate-500">PostgreSQL database access for chat sync</p>
+                <h3 className="font-semibold text-slate-800">SSH Credentials</h3>
+                <p className="text-sm text-slate-500">Used for secure access to database and files</p>
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  Database Name
+                  SSH Username *
                 </label>
                 <Input
-                  placeholder="database_single"
-                  value={formData.threecx_database}
-                  onChange={(e) => setFormData({ ...formData, threecx_database: e.target.value })}
+                  placeholder="root"
+                  value={formData.ssh_user}
+                  onChange={(e) => setFormData({ ...formData, ssh_user: e.target.value })}
                 />
               </div>
               <div>
                 <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  Username
+                  SSH Port
                 </label>
                 <Input
-                  placeholder="phonesystem"
-                  value={formData.threecx_user}
-                  onChange={(e) => setFormData({ ...formData, threecx_user: e.target.value })}
+                  placeholder="22"
+                  value={formData.ssh_port}
+                  onChange={(e) => setFormData({ ...formData, ssh_port: e.target.value })}
                 />
               </div>
             </div>
 
             <div className="mt-4">
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Password *
+                SSH Password *
               </label>
               <div className="relative">
                 <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
                 <Input
                   type="password"
-                  placeholder={isConfigured ? "Leave blank to keep existing" : "Enter database password"}
-                  value={formData.threecx_password}
-                  onChange={(e) => setFormData({ ...formData, threecx_password: e.target.value })}
+                  placeholder={isConfigured ? "Leave blank to keep existing" : "Your SSH/server password"}
+                  value={formData.ssh_password}
+                  onChange={(e) => setFormData({ ...formData, ssh_password: e.target.value })}
                   className="pl-10"
                 />
               </div>
             </div>
           </div>
 
-          {/* SFTP Credentials - For File Backup */}
+          {/* Database Password */}
           <div>
             <div className="flex items-center gap-3 pb-4 border-b border-slate-200 mb-4">
-              <div className="p-2 bg-purple-100 rounded-lg">
-                <FolderSync className="h-5 w-5 text-purple-600" />
+              <div className="p-2 bg-blue-100 rounded-lg">
+                <Database className="h-5 w-5 text-blue-600" />
               </div>
               <div>
-                <h3 className="font-semibold text-slate-800">SFTP Access <span className="text-slate-400 font-normal">(Optional)</span></h3>
-                <p className="text-sm text-slate-500">Required for backing up recordings, voicemails, and faxes</p>
+                <h3 className="font-semibold text-slate-800">Database Password</h3>
+                <p className="text-sm text-slate-500">PostgreSQL password for the &quot;phonesystem&quot; user</p>
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  SFTP Host
-                </label>
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                PostgreSQL Password *
+              </label>
+              <div className="relative">
+                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
                 <Input
-                  placeholder="Same as 3CX host (leave blank)"
-                  value={formData.sftp_host}
-                  onChange={(e) => setFormData({ ...formData, sftp_host: e.target.value })}
-                />
-                <p className="text-xs text-slate-500 mt-1">Leave blank to use the 3CX host above</p>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  SFTP Port
-                </label>
-                <Input
-                  placeholder="22"
-                  value={formData.sftp_port}
-                  onChange={(e) => setFormData({ ...formData, sftp_port: e.target.value })}
+                  type="password"
+                  placeholder={isConfigured ? "Leave blank to keep existing" : "From 3CX.Postgres.ini file"}
+                  value={formData.threecx_db_password}
+                  onChange={(e) => setFormData({ ...formData, threecx_db_password: e.target.value })}
+                  className="pl-10"
                 />
               </div>
+              <p className="text-xs text-slate-500 mt-2 p-3 bg-slate-50 rounded-lg">
+                Find this in: <code className="bg-slate-200 px-1 rounded">/var/lib/3cxpbx/Instance1/Bin/3CX.Postgres.ini</code>
+                <br />Look for the <code className="bg-slate-200 px-1 rounded">password=</code> line.
+              </p>
             </div>
-
-            <div className="grid grid-cols-2 gap-4 mt-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  SFTP Username
-                </label>
-                <Input
-                  placeholder="root or ssh user"
-                  value={formData.sftp_user}
-                  onChange={(e) => setFormData({ ...formData, sftp_user: e.target.value })}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                  SFTP Password
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-                  <Input
-                    type="password"
-                    placeholder={isConfigured ? "Leave blank to keep existing" : "Enter SSH/SFTP password"}
-                    value={formData.sftp_password}
-                    onChange={(e) => setFormData({ ...formData, sftp_password: e.target.value })}
-                    className="pl-10"
-                  />
-                </div>
-              </div>
-            </div>
-
-            <p className="text-xs text-slate-500 mt-3 p-3 bg-slate-50 rounded-lg">
-              <strong>Note:</strong> SFTP access is only needed for file backups (recordings, voicemails, faxes).
-              Chat messages sync via the database connection and don't require SFTP.
-            </p>
-          </div>
-
-          {/* Chat Files Path */}
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Chat Files Path (for media sync via SFTP)
-            </label>
-            <Input
-              placeholder="/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files"
-              value={formData.threecx_chat_files_path}
-              onChange={(e) => setFormData({ ...formData, threecx_chat_files_path: e.target.value })}
-            />
-            <p className="text-xs text-slate-500 mt-1">
-              The path on your 3CX server where chat media files are stored
-            </p>
           </div>
 
           {/* Test Connection */}
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="font-medium text-slate-800">Test Database Connection</h4>
-                <p className="text-sm text-slate-500">Verify the database settings before saving</p>
+                <h4 className="font-medium text-slate-800">Test Connection</h4>
+                <p className="text-sm text-slate-500">Verify SSH and database access before saving</p>
               </div>
               <div className="flex items-center gap-3">
                 {connectionStatus && (
@@ -439,7 +350,7 @@ export default function TenantSetupPage() {
                   variant="outline"
                   onClick={handleTestConnection}
                   isLoading={isTestingConnection}
-                  disabled={!formData.threecx_host || !formData.threecx_password}
+                  disabled={!formData.threecx_host || !formData.ssh_user || !formData.ssh_password || !formData.threecx_db_password}
                 >
                   Test Connection
                 </Button>
@@ -456,7 +367,7 @@ export default function TenantSetupPage() {
           <Button
             onClick={handleSaveConfig}
             isLoading={isSubmitting}
-            disabled={!formData.threecx_host || (!isConfigured && !formData.threecx_password)}
+            disabled={!formData.threecx_host || !formData.ssh_user || (!isConfigured && (!formData.ssh_password || !formData.threecx_db_password))}
           >
             {isConfigured ? "Save Changes" : "Save & Continue"}
             <ArrowRight className="h-4 w-4 ml-2" />

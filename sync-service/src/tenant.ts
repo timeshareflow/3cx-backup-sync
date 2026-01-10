@@ -2,27 +2,26 @@ import { Pool } from "pg";
 import { getSupabaseClient } from "./storage/supabase";
 import { logger } from "./utils/logger";
 import { SftpConfig } from "./storage/sftp";
+import { createSshTunnel, closeTunnel, closeAllTunnels as closeAllSshTunnels } from "./ssh-tunnel";
 
 export interface TenantConfig {
   id: string;
   name: string;
   slug: string;
-  // PostgreSQL connection (remote)
+  // 3CX Server Host (used for SSH connection)
   threecx_host: string | null;
-  threecx_port: number | null;
-  threecx_database: string | null;
-  threecx_user: string | null;
-  threecx_password: string | null;
-  // SFTP for file access (remote)
-  sftp_host: string | null;
-  sftp_port: number | null;
-  sftp_user: string | null;
-  sftp_password: string | null;
+  // SSH credentials (used for both tunnel and SFTP - ONE set of credentials)
+  ssh_port: number | null;
+  ssh_user: string | null;
+  ssh_password: string | null;
+  // PostgreSQL password only (connects via SSH tunnel to localhost:5432)
+  threecx_db_password: string | null;
   // File paths on 3CX server
   threecx_chat_files_path: string | null;
   threecx_recordings_path: string | null;
   threecx_voicemail_path: string | null;
   threecx_fax_path: string | null;
+  threecx_meetings_path: string | null;
   // Backup settings
   backup_chats: boolean;
   backup_chat_media: boolean;
@@ -30,6 +29,7 @@ export interface TenantConfig {
   backup_voicemails: boolean;
   backup_faxes: boolean;
   backup_cdr: boolean;
+  backup_meetings: boolean;
   // Status
   is_active: boolean;
   sync_enabled: boolean;
@@ -45,10 +45,11 @@ export async function getActiveTenants(): Promise<TenantConfig[]> {
     .from("tenants")
     .select(`
       id, name, slug,
-      threecx_host, threecx_port, threecx_database, threecx_user, threecx_password,
-      sftp_host, sftp_port, sftp_user, sftp_password,
-      threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path, threecx_fax_path,
-      backup_chats, backup_chat_media, backup_recordings, backup_voicemails, backup_faxes, backup_cdr,
+      threecx_host,
+      ssh_port, ssh_user, ssh_password,
+      threecx_db_password,
+      threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
+      backup_chats, backup_chat_media, backup_recordings, backup_voicemails, backup_faxes, backup_cdr, backup_meetings,
       is_active, sync_enabled
     `)
     .eq("is_active", true)
@@ -63,9 +64,9 @@ export async function getActiveTenants(): Promise<TenantConfig[]> {
   return tenants || [];
 }
 
-export function getTenantPool(tenant: TenantConfig): Pool | null {
-  if (!tenant.threecx_host || !tenant.threecx_password) {
-    logger.warn(`Tenant ${tenant.slug} missing 3CX database credentials`, { tenantId: tenant.id });
+export async function getTenantPool(tenant: TenantConfig): Promise<Pool | null> {
+  if (!tenant.threecx_host || !tenant.ssh_user || !tenant.ssh_password || !tenant.threecx_db_password) {
+    logger.warn(`Tenant ${tenant.slug} missing connection credentials`, { tenantId: tenant.id });
     return null;
   }
 
@@ -74,58 +75,76 @@ export function getTenantPool(tenant: TenantConfig): Pool | null {
     return tenantPools.get(tenant.id)!;
   }
 
-  // Create new pool for this tenant - connects REMOTELY to their 3CX server
-  const pool = new Pool({
-    host: tenant.threecx_host,
-    port: tenant.threecx_port || 5432,
-    database: tenant.threecx_database || "database_single",
-    user: tenant.threecx_user || "phonesystem",
-    password: tenant.threecx_password,
-    max: 3,
-    idleTimeoutMillis: 30000,
-    connectionTimeoutMillis: 15000, // Longer timeout for remote connections
-    ssl: false, // 3CX typically doesn't use SSL for PostgreSQL
-  });
-
-  pool.on("error", (err) => {
-    logger.error(`Tenant ${tenant.slug} database pool error`, {
-      tenantId: tenant.id,
-      error: err.message,
+  try {
+    // First, establish SSH tunnel to the 3CX server
+    // This tunnels localhost:localPort -> 3CXServer:5432 via SSH
+    const tunnel = await createSshTunnel(tenant.id, {
+      sshHost: tenant.threecx_host,
+      sshPort: tenant.ssh_port || 22,
+      sshUsername: tenant.ssh_user,
+      sshPassword: tenant.ssh_password,
+      remoteHost: "127.0.0.1",  // PostgreSQL listens on localhost on the 3CX server
+      remotePort: 5432,
     });
-  });
 
-  tenantPools.set(tenant.id, pool);
+    // Create pool connecting through the SSH tunnel
+    const pool = new Pool({
+      host: "127.0.0.1",
+      port: tunnel.localPort,  // Connect to local end of SSH tunnel
+      database: "database_single",  // 3CX default database
+      user: "phonesystem",  // 3CX default user
+      password: tenant.threecx_db_password,
+      max: 3,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 15000,
+      ssl: false,
+    });
 
-  logger.info(`Created remote database pool for tenant ${tenant.slug}`, {
-    tenantId: tenant.id,
-    host: tenant.threecx_host,
-    port: tenant.threecx_port || 5432,
-  });
+    pool.on("error", (err) => {
+      logger.error(`Tenant ${tenant.slug} database pool error`, {
+        tenantId: tenant.id,
+        error: err.message,
+      });
+    });
 
-  return pool;
+    tenantPools.set(tenant.id, pool);
+
+    logger.info(`Created database pool for tenant ${tenant.slug} via SSH tunnel`, {
+      tenantId: tenant.id,
+      host: tenant.threecx_host,
+      tunnelPort: tunnel.localPort,
+    });
+
+    return pool;
+  } catch (error) {
+    logger.error(`Failed to create SSH tunnel for tenant ${tenant.slug}`, {
+      tenantId: tenant.id,
+      host: tenant.threecx_host,
+      error: (error as Error).message,
+    });
+    return null;
+  }
 }
 
 export function getTenantSftpConfig(tenant: TenantConfig): SftpConfig | null {
-  // SFTP host defaults to same as database host if not specified
-  const sftpHost = tenant.sftp_host || tenant.threecx_host;
-
-  if (!sftpHost || !tenant.sftp_user || !tenant.sftp_password) {
-    logger.debug(`Tenant ${tenant.slug} missing SFTP credentials - file sync disabled`, {
+  // Use same SSH credentials for SFTP (they're the same connection)
+  if (!tenant.threecx_host || !tenant.ssh_user || !tenant.ssh_password) {
+    logger.debug(`Tenant ${tenant.slug} missing SSH credentials - file sync disabled`, {
       tenantId: tenant.id
     });
     return null;
   }
 
   return {
-    host: sftpHost,
-    port: tenant.sftp_port || 22,
-    username: tenant.sftp_user,
-    password: tenant.sftp_password,
+    host: tenant.threecx_host,
+    port: tenant.ssh_port || 22,
+    username: tenant.ssh_user,
+    password: tenant.ssh_password,
   };
 }
 
 export async function testTenantConnection(tenant: TenantConfig): Promise<boolean> {
-  const pool = getTenantPool(tenant);
+  const pool = await getTenantPool(tenant);
   if (!pool) {
     return false;
   }
@@ -134,11 +153,11 @@ export async function testTenantConnection(tenant: TenantConfig): Promise<boolea
     const client = await pool.connect();
     await client.query("SELECT 1");
     client.release();
-    logger.info(`Tenant ${tenant.slug} remote database connection successful`, { tenantId: tenant.id });
+    logger.info(`Tenant ${tenant.slug} database connection successful (via SSH tunnel)`, { tenantId: tenant.id });
     return true;
   } catch (error) {
     const err = error as Error;
-    logger.error(`Tenant ${tenant.slug} remote database connection failed`, {
+    logger.error(`Tenant ${tenant.slug} database connection failed`, {
       tenantId: tenant.id,
       host: tenant.threecx_host,
       error: err.message,
@@ -154,6 +173,8 @@ export async function closeTenantPool(tenantId: string): Promise<void> {
     tenantPools.delete(tenantId);
     logger.info(`Closed database pool for tenant`, { tenantId });
   }
+  // Also close the SSH tunnel
+  await closeTunnel(tenantId);
 }
 
 export async function closeAllTenantPools(): Promise<void> {
@@ -166,4 +187,7 @@ export async function closeAllTenantPools(): Promise<void> {
     }
   }
   tenantPools.clear();
+
+  // Close all SSH tunnels
+  await closeAllSshTunnels();
 }

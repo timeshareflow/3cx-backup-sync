@@ -43,8 +43,8 @@ export async function GET() {
       .from("tenants")
       .select(`
         id, name, slug,
-        threecx_host, threecx_port, threecx_database, threecx_user,
-        sftp_host, sftp_port, sftp_user,
+        threecx_host,
+        ssh_port, ssh_user,
         threecx_chat_files_path, threecx_recordings_path,
         threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
         backup_chats, backup_chat_media, backup_recordings,
@@ -64,15 +64,11 @@ export async function GET() {
       id: tenant.id,
       name: tenant.name,
       slug: tenant.slug,
-      // Database connection
+      // 3CX Server
       threecx_host: tenant.threecx_host || "",
-      threecx_port: tenant.threecx_port || 5432,
-      threecx_database: tenant.threecx_database || "database_single",
-      threecx_user: tenant.threecx_user || "phonesystem",
-      // SFTP connection (for file backup)
-      sftp_host: tenant.sftp_host || "",
-      sftp_port: tenant.sftp_port || 22,
-      sftp_user: tenant.sftp_user || "",
+      // SSH credentials (password not returned)
+      ssh_port: tenant.ssh_port || 22,
+      ssh_user: tenant.ssh_user || "",
       // File paths
       threecx_chat_files_path: tenant.threecx_chat_files_path || "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files",
       threecx_recordings_path: tenant.threecx_recordings_path || "/var/lib/3cxpbx/Instance1/Data/Recordings",
@@ -134,21 +130,19 @@ export async function POST(request: Request) {
       }
     }
 
-    // Build update object with dedicated columns
+    // Build update object with new SSH-based columns
     const updateData: Record<string, unknown> = {};
 
-    // 3CX Database Connection settings
+    // 3CX Server host
     if (body.threecx_host !== undefined) updateData.threecx_host = body.threecx_host;
-    if (body.threecx_port !== undefined) updateData.threecx_port = parseInt(body.threecx_port) || 5432;
-    if (body.threecx_database !== undefined) updateData.threecx_database = body.threecx_database;
-    if (body.threecx_user !== undefined) updateData.threecx_user = body.threecx_user;
-    if (body.threecx_password) updateData.threecx_password = body.threecx_password;
 
-    // SFTP Connection settings (for file backup)
-    if (body.sftp_host !== undefined) updateData.sftp_host = body.sftp_host;
-    if (body.sftp_port !== undefined) updateData.sftp_port = parseInt(body.sftp_port) || 22;
-    if (body.sftp_user !== undefined) updateData.sftp_user = body.sftp_user;
-    if (body.sftp_password) updateData.sftp_password = body.sftp_password;
+    // SSH credentials (used for both database tunnel and file access)
+    if (body.ssh_port !== undefined) updateData.ssh_port = parseInt(body.ssh_port) || 22;
+    if (body.ssh_user !== undefined) updateData.ssh_user = body.ssh_user;
+    if (body.ssh_password) updateData.ssh_password = body.ssh_password;
+
+    // PostgreSQL password (connects via SSH tunnel)
+    if (body.threecx_db_password) updateData.threecx_db_password = body.threecx_db_password;
 
     // 3CX File paths
     if (body.threecx_chat_files_path !== undefined) updateData.threecx_chat_files_path = body.threecx_chat_files_path;
@@ -187,8 +181,8 @@ export async function POST(request: Request) {
       .from("tenants")
       .select(`
         id, name, slug,
-        threecx_host, threecx_port, threecx_database, threecx_user,
-        sftp_host, sftp_port, sftp_user,
+        threecx_host,
+        ssh_port, ssh_user,
         threecx_chat_files_path, threecx_recordings_path,
         threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
         backup_chats, backup_chat_media, backup_recordings,
@@ -206,15 +200,11 @@ export async function POST(request: Request) {
       id: tenant.id,
       name: tenant.name,
       slug: tenant.slug,
-      // Database connection
+      // 3CX Server
       threecx_host: tenant.threecx_host || "",
-      threecx_port: tenant.threecx_port || 5432,
-      threecx_database: tenant.threecx_database || "database_single",
-      threecx_user: tenant.threecx_user || "phonesystem",
-      // SFTP connection
-      sftp_host: tenant.sftp_host || "",
-      sftp_port: tenant.sftp_port || 22,
-      sftp_user: tenant.sftp_user || "",
+      // SSH credentials (password not returned)
+      ssh_port: tenant.ssh_port || 22,
+      ssh_user: tenant.ssh_user || "",
       // File paths
       threecx_chat_files_path: tenant.threecx_chat_files_path || "",
       threecx_recordings_path: tenant.threecx_recordings_path || "",

@@ -1,4 +1,3 @@
-import { Pool } from "pg";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import { syncMessages, MessageSyncResult } from "./messages";
@@ -61,10 +60,10 @@ export async function runTenantSync(
   };
 
   try {
-    // Get database pool for this tenant
-    const pool = getTenantPool(tenant);
+    // Get database pool for this tenant (via SSH tunnel)
+    const pool = await getTenantPool(tenant);
     if (!pool) {
-      throw new Error("Failed to create database connection pool");
+      throw new Error("Failed to create database connection pool via SSH tunnel");
     }
 
     // Sync messages (database data - works remotely)
