@@ -1,7 +1,15 @@
-import { pgTable, index, foreignKey, unique, pgPolicy, check, uuid, varchar, boolean, timestamp, jsonb, text, integer, bigint, date, pgView, numeric } from "drizzle-orm/pg-core"
+import { pgTable, pgSchema, index, foreignKey, unique, pgPolicy, check, uuid, varchar, boolean, timestamp, jsonb, text, integer, bigint, date, pgView, numeric } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
+// Reference to Supabase auth.users table (in auth schema)
+const authSchema = pgSchema("auth");
 
+export const usersInAuth = authSchema.table("users", {
+  id: uuid().primaryKey().notNull(),
+});
+
+// Alias for foreign key references
+export const users = usersInAuth;
 
 export const userTenants = pgTable("user_tenants", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
