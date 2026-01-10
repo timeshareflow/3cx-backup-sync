@@ -16,9 +16,14 @@ export default function ExtensionsPage() {
 
   const fetchExtensions = async () => {
     try {
-      setIsLoading(false);
+      const response = await fetch("/api/extensions");
+      if (response.ok) {
+        const data = await response.json();
+        setExtensions(data);
+      }
     } catch (error) {
       console.error("Failed to fetch extensions:", error);
+    } finally {
       setIsLoading(false);
     }
   };

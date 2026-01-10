@@ -104,24 +104,33 @@ export async function insertMessage(message: {
   message_type?: string;
   has_media?: boolean;
   sent_at: string;
+  tenant_id?: string;
 }): Promise<string | null> {
   const client = getSupabaseClient();
 
+  const insertData: Record<string, unknown> = {
+    conversation_id: message.conversation_id,
+    threecx_message_id: message.threecx_message_id,
+    sender_identifier: message.sender_extension,
+    sender_name: message.sender_name,
+    content: message.message_text,
+    message_type: message.message_type || "text",
+    has_media: message.has_media || false,
+    sent_at: message.sent_at,
+  };
+
+  if (message.tenant_id) {
+    insertData.tenant_id = message.tenant_id;
+  }
+
   const { data, error } = await client
     .from("messages")
-    .upsert(
-      {
-        conversation_id: message.conversation_id,
-        threecx_message_id: message.threecx_message_id,
-        sender_extension: message.sender_extension,
-        sender_name: message.sender_name,
-        message_text: message.message_text,
-        message_type: message.message_type || "text",
-        has_media: message.has_media || false,
-        sent_at: message.sent_at,
-      },
-      { onConflict: "threecx_message_id", ignoreDuplicates: true }
-    )
+    .upsert(insertData, {
+      onConflict: message.tenant_id
+        ? "tenant_id,threecx_message_id"
+        : "threecx_message_id",
+      ignoreDuplicates: true
+    })
     .select("id")
     .single();
 

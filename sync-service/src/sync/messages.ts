@@ -185,6 +185,7 @@ export async function syncMessages(
           message_type: messageType,
           has_media: hasMedia,
           sent_at: msg.time_sent.toISOString(),
+          tenant_id: tenantId,
         });
 
         if (messageId) {
