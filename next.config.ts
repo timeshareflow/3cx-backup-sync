@@ -13,6 +13,8 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  // Exclude native packages from bundling (used in API routes)
+  serverExternalPackages: ["ssh2", "pg", "pg-native"],
 };
 
 export default nextConfig;
