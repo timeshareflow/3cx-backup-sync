@@ -191,6 +191,8 @@ export async function getConversations(
 // Get all extensions - compatible with 3CX V20
 export async function getExtensions(pool?: Pool): Promise<ThreeCXExtension[]> {
   return withClient(async (client) => {
+    logger.info("Fetching extensions from 3CX database...");
+
     // Try 3CX V20 schema first (uses dn table directly)
     try {
       const query = `
@@ -206,26 +208,34 @@ export async function getExtensions(pool?: Pool): Promise<ThreeCXExtension[]> {
       `;
 
       const result = await client.query(query);
-      logger.debug(`Fetched ${result.rows.length} extensions from 3CX (V20 schema)`);
+      logger.info(`Fetched ${result.rows.length} extensions from 3CX (V20 schema)`);
       return result.rows;
     } catch (err) {
       logger.warn("V20 schema query failed, trying legacy schema", { error: (err as Error).message });
 
       // Fallback to legacy schema
-      const query = `
-        SELECT
-          e.id as idextension,
-          e.number as extension_number,
-          e.firstname,
-          e.lastname
-        FROM extensions e
-        WHERE e.number IS NOT NULL
-        ORDER BY e.number
-      `;
+      try {
+        const query = `
+          SELECT
+            e.id as idextension,
+            e.number as extension_number,
+            e.firstname,
+            e.lastname
+          FROM extensions e
+          WHERE e.number IS NOT NULL
+          ORDER BY e.number
+        `;
 
-      const result = await client.query(query);
-      logger.debug(`Fetched ${result.rows.length} extensions from 3CX (legacy schema)`);
-      return result.rows;
+        const result = await client.query(query);
+        logger.info(`Fetched ${result.rows.length} extensions from 3CX (legacy schema)`);
+        return result.rows;
+      } catch (err2) {
+        logger.error("Both extension queries failed", {
+          v20Error: (err as Error).message,
+          legacyError: (err2 as Error).message,
+        });
+        return [];
+      }
     }
   }, pool);
 }
