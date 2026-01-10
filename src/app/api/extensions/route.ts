@@ -1,20 +1,25 @@
 import { NextResponse } from "next/server";
-import { createServerClient } from "@/lib/supabase/server";
-import { getTenantId } from "@/lib/tenant";
+import { createClient } from "@/lib/supabase/server";
+import { getTenantContext } from "@/lib/tenant";
 
 export async function GET() {
   try {
-    const supabase = await createServerClient();
-    const tenantId = await getTenantId();
+    const context = await getTenantContext();
 
-    if (!tenantId) {
+    if (!context.isAuthenticated) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    if (!context.tenantId) {
       return NextResponse.json({ error: "No tenant found" }, { status: 400 });
     }
+
+    const supabase = await createClient();
 
     const { data: extensions, error } = await supabase
       .from("extensions")
       .select("*")
-      .eq("tenant_id", tenantId)
+      .eq("tenant_id", context.tenantId)
       .order("extension_number", { ascending: true });
 
     if (error) {
