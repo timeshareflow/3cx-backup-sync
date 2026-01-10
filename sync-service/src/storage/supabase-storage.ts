@@ -244,3 +244,6 @@ export function getPublicUrl(storagePath: string): string {
   const { data } = supabase.storage.from(BUCKET_NAME).getPublicUrl(storagePath);
   return data.publicUrl;
 }
+
+// Alias for uploadBuffer for clarity in SFTP contexts
+export const uploadFileBuffer = uploadBuffer;

@@ -1,35 +1,27 @@
 import cron from "node-cron";
 import { logger } from "./utils/logger";
-import { runQuickSync, runFullSync, runMultiTenantSync } from "./sync";
-import { getLegacyPool } from "./tenant";
+import { runMultiTenantSync } from "./sync";
 
 let isRunning = false;
 let syncTask: cron.ScheduledTask | null = null;
-
-// Check if we're in multi-tenant mode
-function isMultiTenantMode(): boolean {
-  return process.env.MULTI_TENANT_MODE === "true";
-}
+let cycleCount = 0;
 
 export function startScheduler(): void {
   const intervalSeconds = parseInt(process.env.SYNC_INTERVAL_SECONDS || "60");
 
   // Convert seconds to cron expression
-  // For intervals less than 60 seconds, we use a different approach
   let cronExpression: string;
 
   if (intervalSeconds < 60) {
-    // Run every minute and check internally
+    // Run every minute for sub-minute intervals
     cronExpression = "* * * * *";
   } else {
     const minutes = Math.floor(intervalSeconds / 60);
     cronExpression = `*/${minutes} * * * *`;
   }
 
-  const mode = isMultiTenantMode() ? "multi-tenant" : "single-tenant";
-  logger.info(`Starting scheduler in ${mode} mode with ${intervalSeconds}s interval`, {
+  logger.info(`Starting scheduler with ${intervalSeconds}s interval`, {
     cronExpression,
-    mode,
   });
 
   syncTask = cron.schedule(cronExpression, async () => {
@@ -39,34 +31,19 @@ export function startScheduler(): void {
     }
 
     isRunning = true;
+    cycleCount++;
 
     try {
-      if (isMultiTenantMode()) {
-        // Multi-tenant mode: sync all active tenants
-        const now = new Date();
+      // Every 10 cycles, do a full sync including media and extensions
+      // Otherwise, quick sync (messages/CDR only)
+      const isFullSync = cycleCount % 10 === 0;
 
-        // Every 10 cycles, do a full sync including media and extensions
-        if (now.getMinutes() % 10 === 0) {
-          logger.info("Running periodic full multi-tenant sync");
-          await runMultiTenantSync({ skipMedia: false, skipExtensions: false });
-        } else {
-          // Quick sync - messages only
-          await runMultiTenantSync({ skipMedia: true, skipExtensions: true });
-        }
+      if (isFullSync) {
+        logger.info("Running full sync (including media)");
+        await runMultiTenantSync({ skipMedia: false, skipExtensions: false });
       } else {
-        // Legacy single-tenant mode
-        const pool = getLegacyPool();
-
-        // Run quick sync (messages only) every interval
-        await runQuickSync(undefined, pool);
-
-        // Run full sync (including media and extensions) less frequently
-        // Every 10 cycles, do a full sync
-        const now = new Date();
-        if (now.getMinutes() % 10 === 0) {
-          logger.info("Running periodic full sync");
-          await runFullSync({ skipMedia: false, skipExtensions: false, pool });
-        }
+        logger.debug("Running quick sync (messages only)");
+        await runMultiTenantSync({ skipMedia: true, skipExtensions: true });
       }
     } catch (error) {
       logger.error("Scheduled sync failed", {

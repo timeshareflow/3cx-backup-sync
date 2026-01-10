@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import { syncMessages, MessageSyncResult } from "./messages";
-import { syncMedia, MediaSyncResult } from "./media";
+import { syncMedia, syncRecordings, syncVoicemails, MediaSyncResult } from "./media";
 import { syncExtensions, ExtensionSyncResult } from "./extensions";
 import { createSyncLog, updateSyncLog } from "../storage/supabase";
 import { TenantConfig, getActiveTenants, getTenantPool, testTenantConnection } from "../tenant";
@@ -10,6 +10,8 @@ import { TenantConfig, getActiveTenants, getTenantPool, testTenantConnection } f
 export interface SyncResult {
   messages: MessageSyncResult;
   media: MediaSyncResult;
+  recordings: MediaSyncResult;
+  voicemails: MediaSyncResult;
   extensions: ExtensionSyncResult;
   duration: number;
 }
@@ -28,44 +30,72 @@ export interface MultiTenantSyncResult {
   failureCount: number;
 }
 
-export async function runFullSync(options?: {
-  skipMedia?: boolean;
-  skipExtensions?: boolean;
-  batchSize?: number;
-  tenantId?: string; // Optional: sync specific tenant only
-  pool?: Pool; // Optional: use provided pool (for legacy single-tenant mode)
-}): Promise<SyncResult> {
+// Run sync for a single tenant
+export async function runTenantSync(
+  tenant: TenantConfig,
+  options?: {
+    skipMedia?: boolean;
+    skipExtensions?: boolean;
+    batchSize?: number;
+  }
+): Promise<SyncResult> {
   const startTime = Date.now();
-  const batchSize = options?.batchSize || parseInt(process.env.SYNC_BATCH_SIZE || "100");
+  const batchSize = options?.batchSize || 100;
 
-  logger.info("Starting full sync", { options });
+  logger.info(`Starting sync for tenant: ${tenant.name}`, { tenantId: tenant.id });
 
   // Create sync log
   const logId = await createSyncLog({
     sync_type: "full",
     started_at: new Date().toISOString(),
-    tenant_id: options?.tenantId,
+    tenant_id: tenant.id,
   });
 
   const result: SyncResult = {
     messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
     media: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    recordings: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
     extensions: { extensionsSynced: 0, errors: [] },
     duration: 0,
   };
 
   try {
-    // Sync messages
-    result.messages = await syncMessages(batchSize, options?.pool, options?.tenantId);
-
-    // Sync media (optional)
-    if (!options?.skipMedia) {
-      result.media = await syncMedia(options?.tenantId);
+    // Get database pool for this tenant
+    const pool = getTenantPool(tenant);
+    if (!pool) {
+      throw new Error("Failed to create database connection pool");
     }
 
-    // Sync extensions (optional, less frequent)
+    // Sync messages (database data - works remotely)
+    if (tenant.backup_chats) {
+      result.messages = await syncMessages(batchSize, pool, tenant.id);
+    }
+
+    // Sync media files via SFTP (only if not skipped and tenant has SFTP configured)
+    if (!options?.skipMedia) {
+      try {
+        result.media = await syncMedia(tenant);
+      } catch (err) {
+        logger.warn("Media sync failed, continuing", { error: (err as Error).message });
+      }
+
+      try {
+        result.recordings = await syncRecordings(tenant);
+      } catch (err) {
+        logger.warn("Recordings sync failed, continuing", { error: (err as Error).message });
+      }
+
+      try {
+        result.voicemails = await syncVoicemails(tenant);
+      } catch (err) {
+        logger.warn("Voicemails sync failed, continuing", { error: (err as Error).message });
+      }
+    }
+
+    // Sync extensions
     if (!options?.skipExtensions) {
-      result.extensions = await syncExtensions(options?.pool, options?.tenantId);
+      result.extensions = await syncExtensions(pool, tenant.id);
     }
 
     result.duration = Date.now() - startTime;
@@ -75,17 +105,21 @@ export async function runFullSync(options?: {
       completed_at: new Date().toISOString(),
       status: "success",
       messages_synced: result.messages.messagesSynced,
-      media_synced: result.media.filesSynced,
+      media_synced: result.media.filesSynced + result.recordings.filesSynced + result.voicemails.filesSynced,
       errors_count:
         result.messages.errors.length +
         result.media.errors.length +
+        result.recordings.errors.length +
+        result.voicemails.errors.length +
         result.extensions.errors.length,
     });
 
-    logger.info("Full sync completed", {
-      tenantId: options?.tenantId,
+    logger.info(`Sync completed for tenant: ${tenant.name}`, {
+      tenantId: tenant.id,
       messagesSynced: result.messages.messagesSynced,
       mediaSynced: result.media.filesSynced,
+      recordingsSynced: result.recordings.filesSynced,
+      voicemailsSynced: result.voicemails.filesSynced,
       extensionsSynced: result.extensions.extensionsSynced,
       duration: `${result.duration}ms`,
     });
@@ -107,7 +141,7 @@ export async function runFullSync(options?: {
   }
 }
 
-// Sync all active tenants
+// Sync all active tenants - MAIN ENTRY POINT for centralized service
 export async function runMultiTenantSync(options?: {
   skipMedia?: boolean;
   skipExtensions?: boolean;
@@ -116,7 +150,7 @@ export async function runMultiTenantSync(options?: {
   const startTime = Date.now();
   const results: TenantSyncResult[] = [];
 
-  logger.info("Starting multi-tenant sync");
+  logger.info("=== Starting centralized multi-tenant sync ===");
 
   // Get all active tenants with configured 3CX connections
   const tenants = await getActiveTenants();
@@ -141,50 +175,35 @@ export async function runMultiTenantSync(options?: {
       success: false,
       messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
       media: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      recordings: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
       extensions: { extensionsSynced: 0, errors: [] },
       duration: 0,
     };
 
     try {
-      logger.info(`Starting sync for tenant: ${tenant.name}`, { tenantId: tenant.id });
-
-      // Test connection first
+      // Test remote connection first
       const connected = await testTenantConnection(tenant);
       if (!connected) {
-        tenantResult.error = "Failed to connect to 3CX database";
-        results.push(tenantResult);
-        continue;
-      }
-
-      // Get tenant pool
-      const pool = getTenantPool(tenant);
-      if (!pool) {
-        tenantResult.error = "Failed to create database pool";
+        tenantResult.error = `Failed to connect to 3CX database at ${tenant.threecx_host}`;
         results.push(tenantResult);
         continue;
       }
 
       // Run sync for this tenant
-      const syncResult = await runFullSync({
-        ...options,
-        tenantId: tenant.id,
-        pool,
-      });
+      const syncResult = await runTenantSync(tenant, options);
 
       tenantResult.messages = syncResult.messages;
       tenantResult.media = syncResult.media;
+      tenantResult.recordings = syncResult.recordings;
+      tenantResult.voicemails = syncResult.voicemails;
       tenantResult.extensions = syncResult.extensions;
       tenantResult.duration = syncResult.duration;
       tenantResult.success = true;
-
-      logger.info(`Completed sync for tenant: ${tenant.name}`, {
-        tenantId: tenant.id,
-        messagesSynced: syncResult.messages.messagesSynced,
-      });
     } catch (error) {
       const err = error as Error;
       tenantResult.error = err.message;
-      logger.error(`Failed sync for tenant: ${tenant.name}`, {
+      logger.error(`Sync failed for tenant: ${tenant.name}`, {
         tenantId: tenant.id,
         error: err.message,
       });
@@ -196,7 +215,7 @@ export async function runMultiTenantSync(options?: {
   const successCount = results.filter((r) => r.success).length;
   const failureCount = results.filter((r) => !r.success).length;
 
-  logger.info("Multi-tenant sync completed", {
+  logger.info("=== Multi-tenant sync completed ===", {
     totalTenants: tenants.length,
     successCount,
     failureCount,
@@ -209,18 +228,4 @@ export async function runMultiTenantSync(options?: {
     successCount,
     failureCount,
   };
-}
-
-// Quick sync - messages only
-export async function runQuickSync(
-  batchSize?: number,
-  pool?: Pool,
-  tenantId?: string
-): Promise<MessageSyncResult> {
-  logger.info("Starting quick sync (messages only)", { tenantId });
-  return syncMessages(
-    batchSize || parseInt(process.env.SYNC_BATCH_SIZE || "100"),
-    pool,
-    tenantId
-  );
 }

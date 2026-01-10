@@ -16,14 +16,22 @@ import {
   Lock,
   ArrowRight,
   Shield,
+  FolderSync,
 } from "lucide-react";
 
 interface SetupFormData {
+  // Database connection (required)
   threecx_host: string;
   threecx_port: string;
   threecx_database: string;
   threecx_user: string;
   threecx_password: string;
+  // SFTP connection (optional - for file backup)
+  sftp_host: string;
+  sftp_port: string;
+  sftp_user: string;
+  sftp_password: string;
+  // File paths
   threecx_chat_files_path: string;
 }
 
@@ -33,6 +41,10 @@ const defaultFormData: SetupFormData = {
   threecx_database: "database_single",
   threecx_user: "phonesystem",
   threecx_password: "",
+  sftp_host: "",
+  sftp_port: "22",
+  sftp_user: "",
+  sftp_password: "",
   threecx_chat_files_path: "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files",
 };
 
@@ -68,8 +80,12 @@ export default function TenantSetupPage() {
             threecx_host: data.config.threecx_host || "",
             threecx_port: String(data.config.threecx_port || 5432),
             threecx_database: data.config.threecx_database || "database_single",
-            threecx_user: data.config.threecx_user || "postgres",
+            threecx_user: data.config.threecx_user || "phonesystem",
             threecx_password: "", // Don't show existing password
+            sftp_host: data.config.sftp_host || "",
+            sftp_port: String(data.config.sftp_port || 22),
+            sftp_user: data.config.sftp_user || "",
+            sftp_password: "", // Don't show existing password
             threecx_chat_files_path: data.config.threecx_chat_files_path || defaultFormData.threecx_chat_files_path,
           });
           setIsConfigured(!!data.config.threecx_host);
@@ -109,10 +125,33 @@ export default function TenantSetupPage() {
     setIsSubmitting(true);
     setError(null);
     try {
+      // Build payload - only include SFTP fields if they have values
+      const payload: Record<string, unknown> = {
+        threecx_host: formData.threecx_host,
+        threecx_port: formData.threecx_port,
+        threecx_database: formData.threecx_database,
+        threecx_user: formData.threecx_user,
+        threecx_chat_files_path: formData.threecx_chat_files_path,
+      };
+
+      if (formData.threecx_password) {
+        payload.threecx_password = formData.threecx_password;
+      }
+
+      // Include SFTP settings if host is provided
+      if (formData.sftp_host || formData.sftp_user) {
+        payload.sftp_host = formData.sftp_host || formData.threecx_host; // Default to same host
+        payload.sftp_port = formData.sftp_port;
+        payload.sftp_user = formData.sftp_user;
+        if (formData.sftp_password) {
+          payload.sftp_password = formData.sftp_password;
+        }
+      }
+
       const response = await fetch("/api/tenant/config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify(payload),
       });
       if (response.ok) {
         setIsConfigured(true);
@@ -149,7 +188,7 @@ export default function TenantSetupPage() {
         </h1>
         <p className="text-slate-500 mt-2 max-w-lg mx-auto">
           {isConfigured
-            ? "Update your 3CX database connection settings"
+            ? "Update your 3CX connection settings"
             : "Configure the connection to your 3CX server to start archiving chat messages."}
         </p>
       </div>
@@ -174,7 +213,11 @@ export default function TenantSetupPage() {
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4 text-teal-500" />
-                  Network access from this server to your 3CX instance
+                  Network access from our servers to your 3CX instance
+                </li>
+                <li className="flex items-center gap-2">
+                  <CheckCircle className="h-4 w-4 text-teal-500" />
+                  SFTP/SSH credentials (optional - for recording/voicemail backup)
                 </li>
               </ul>
             </div>
@@ -236,7 +279,7 @@ export default function TenantSetupPage() {
               </div>
               <div>
                 <h3 className="font-semibold text-slate-800">Database Credentials</h3>
-                <p className="text-sm text-slate-500">PostgreSQL database access</p>
+                <p className="text-sm text-slate-500">PostgreSQL database access for chat sync</p>
               </div>
             </div>
 
@@ -280,10 +323,80 @@ export default function TenantSetupPage() {
             </div>
           </div>
 
+          {/* SFTP Credentials - For File Backup */}
+          <div>
+            <div className="flex items-center gap-3 pb-4 border-b border-slate-200 mb-4">
+              <div className="p-2 bg-purple-100 rounded-lg">
+                <FolderSync className="h-5 w-5 text-purple-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-800">SFTP Access <span className="text-slate-400 font-normal">(Optional)</span></h3>
+                <p className="text-sm text-slate-500">Required for backing up recordings, voicemails, and faxes</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  SFTP Host
+                </label>
+                <Input
+                  placeholder="Same as 3CX host (leave blank)"
+                  value={formData.sftp_host}
+                  onChange={(e) => setFormData({ ...formData, sftp_host: e.target.value })}
+                />
+                <p className="text-xs text-slate-500 mt-1">Leave blank to use the 3CX host above</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  SFTP Port
+                </label>
+                <Input
+                  placeholder="22"
+                  value={formData.sftp_port}
+                  onChange={(e) => setFormData({ ...formData, sftp_port: e.target.value })}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4 mt-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  SFTP Username
+                </label>
+                <Input
+                  placeholder="root or ssh user"
+                  value={formData.sftp_user}
+                  onChange={(e) => setFormData({ ...formData, sftp_user: e.target.value })}
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  SFTP Password
+                </label>
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+                  <Input
+                    type="password"
+                    placeholder={isConfigured ? "Leave blank to keep existing" : "Enter SSH/SFTP password"}
+                    value={formData.sftp_password}
+                    onChange={(e) => setFormData({ ...formData, sftp_password: e.target.value })}
+                    className="pl-10"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-500 mt-3 p-3 bg-slate-50 rounded-lg">
+              <strong>Note:</strong> SFTP access is only needed for file backups (recordings, voicemails, faxes).
+              Chat messages sync via the database connection and don't require SFTP.
+            </p>
+          </div>
+
           {/* Chat Files Path */}
           <div>
             <label className="block text-sm font-medium text-slate-700 mb-1.5">
-              Chat Files Path (for media sync)
+              Chat Files Path (for media sync via SFTP)
             </label>
             <Input
               placeholder="/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files"
@@ -299,8 +412,8 @@ export default function TenantSetupPage() {
           <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="font-medium text-slate-800">Test Connection</h4>
-                <p className="text-sm text-slate-500">Verify the settings before saving</p>
+                <h4 className="font-medium text-slate-800">Test Database Connection</h4>
+                <p className="text-sm text-slate-500">Verify the database settings before saving</p>
               </div>
               <div className="flex items-center gap-3">
                 {connectionStatus && (

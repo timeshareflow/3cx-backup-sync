@@ -261,24 +261,21 @@ export async function updateSyncStatus(
   const update: Record<string, unknown> = {
     status,
     last_sync_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   };
 
   if (status === "success") {
-    update.last_successful_sync_at = new Date().toISOString();
-    update.error_message = null;
+    update.last_success_at = new Date().toISOString();
+    update.last_error = null;
   }
 
-  if (details?.lastSyncedTimestamp) {
-    update.last_synced_timestamp = details.lastSyncedTimestamp;
+  if (status === "error" && details?.errorMessage) {
+    update.last_error_at = new Date().toISOString();
+    update.last_error = details.errorMessage;
   }
-  if (details?.lastSyncedMessageId) {
-    update.last_synced_message_id = details.lastSyncedMessageId;
-  }
+
   if (details?.recordsSynced !== undefined) {
-    update.records_synced = details.recordsSynced;
-  }
-  if (details?.errorMessage) {
-    update.error_message = details.errorMessage;
+    update.items_synced = details.recordsSynced;
   }
 
   let query = client
@@ -306,7 +303,7 @@ export async function getLastSyncedTimestamp(
 
   let query = client
     .from("sync_status")
-    .select("last_synced_timestamp")
+    .select("last_sync_at")
     .eq("sync_type", syncType);
 
   if (tenantId) {
@@ -315,30 +312,32 @@ export async function getLastSyncedTimestamp(
 
   const { data, error } = await query.single();
 
-  if (error || !data?.last_synced_timestamp) {
+  if (error || !data?.last_sync_at) {
     return null;
   }
 
-  return new Date(data.last_synced_timestamp);
+  return new Date(data.last_sync_at);
 }
 
 // Create sync log entry
 export async function createSyncLog(log: {
   sync_type: string;
   started_at: string;
-  completed_at?: string;
   status?: string;
-  messages_synced?: number;
-  media_synced?: number;
-  errors_count?: number;
-  error_details?: Record<string, unknown>;
   tenant_id?: string;
 }): Promise<string> {
   const client = getSupabaseClient();
 
   const { data, error } = await client
     .from("sync_logs")
-    .insert(log)
+    .insert({
+      tenant_id: log.tenant_id,
+      sync_type: log.sync_type,
+      status: log.status || "running",
+      message: "Sync started",
+      items_processed: 0,
+      items_failed: 0,
+    })
     .select("id")
     .single();
 
@@ -364,9 +363,29 @@ export async function updateSyncLog(
 ): Promise<void> {
   const client = getSupabaseClient();
 
+  // Map to actual column names from schema
+  const dbUpdates: Record<string, unknown> = {
+    status: updates.status,
+  };
+
+  if (updates.messages_synced !== undefined || updates.media_synced !== undefined) {
+    dbUpdates.items_processed = (updates.messages_synced || 0) + (updates.media_synced || 0);
+  }
+
+  if (updates.errors_count !== undefined) {
+    dbUpdates.items_failed = updates.errors_count;
+  }
+
+  if (updates.error_details) {
+    dbUpdates.details = updates.error_details;
+    dbUpdates.message = updates.error_details.message || "Sync completed with errors";
+  } else if (updates.status === "success") {
+    dbUpdates.message = "Sync completed successfully";
+  }
+
   const { error } = await client
     .from("sync_logs")
-    .update(updates)
+    .update(dbUpdates)
     .eq("id", logId);
 
   if (error) {

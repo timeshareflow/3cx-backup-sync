@@ -39,12 +39,18 @@ export const tenants = pgTable(
     description: text("description"),
     isActive: boolean("is_active").default(true),
 
-    // 3CX Connection Settings
+    // 3CX Database Connection (remote)
     threecxHost: varchar("threecx_host", { length: 255 }),
     threecxPort: integer("threecx_port").default(5432),
     threecxDatabase: varchar("threecx_database", { length: 100 }).default("database_single"),
-    threecxUser: varchar("threecx_user", { length: 100 }).default("postgres"),
+    threecxUser: varchar("threecx_user", { length: 100 }).default("phonesystem"),
     threecxPassword: text("threecx_password"),
+
+    // SFTP Connection (for file access - remote)
+    sftpHost: varchar("sftp_host", { length: 255 }),
+    sftpPort: integer("sftp_port").default(22),
+    sftpUser: varchar("sftp_user", { length: 100 }),
+    sftpPassword: text("sftp_password"),
 
     // 3CX File Paths
     threecxChatFilesPath: varchar("threecx_chat_files_path", { length: 500 }).default("/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files"),

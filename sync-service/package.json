@@ -1,27 +1,26 @@
 {
   "name": "3cx-chat-archiver-sync",
   "version": "1.0.0",
-  "description": "Sync service for 3CX Chat Archiver",
+  "description": "Sync service for 3CX Chat Archiver - Centralized multi-tenant sync",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
-    "initial-sync": "ts-node scripts/initial-sync.ts",
-    "verify-sync": "ts-node scripts/verify-sync.ts"
+    "dev": "ts-node src/index.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.700.0",
     "@supabase/supabase-js": "^2.47.10",
     "dotenv": "^16.4.7",
     "node-cron": "^3.0.3",
     "pg": "^8.13.1",
+    "ssh2-sftp-client": "^11.0.0",
     "winston": "^3.17.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/node-cron": "^3.0.11",
     "@types/pg": "^8.11.10",
+    "@types/ssh2-sftp-client": "^9.0.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
   }

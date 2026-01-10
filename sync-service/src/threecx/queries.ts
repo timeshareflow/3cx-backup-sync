@@ -125,25 +125,45 @@ export async function getConversations(
   }, pool);
 }
 
-// Get all extensions
+// Get all extensions - compatible with 3CX V20
 export async function getExtensions(pool?: Pool): Promise<ThreeCXExtension[]> {
   return withClient(async (client) => {
-    const query = `
-      SELECT
-        e.idextension,
-        e.authid as extension_number,
-        u.firstname,
-        u.lastname
-      FROM extension e
-      INNER JOIN dn ON dn.iddn = e.fkiddn
-      LEFT JOIN users u ON u.fkidextension = e.idextension
-      WHERE e.authid IS NOT NULL
-      ORDER BY e.authid
-    `;
+    // Try 3CX V20 schema first (uses dn table directly)
+    try {
+      const query = `
+        SELECT
+          dn.iddn as idextension,
+          dn.number as extension_number,
+          dn.firstname,
+          dn.lastname
+        FROM dn
+        WHERE dn.number IS NOT NULL
+          AND dn.dntype = 0
+        ORDER BY dn.number
+      `;
 
-    const result = await client.query(query);
-    logger.debug(`Fetched ${result.rows.length} extensions from 3CX`);
-    return result.rows;
+      const result = await client.query(query);
+      logger.debug(`Fetched ${result.rows.length} extensions from 3CX (V20 schema)`);
+      return result.rows;
+    } catch (err) {
+      logger.warn("V20 schema query failed, trying legacy schema", { error: (err as Error).message });
+
+      // Fallback to legacy schema
+      const query = `
+        SELECT
+          e.id as idextension,
+          e.number as extension_number,
+          e.firstname,
+          e.lastname
+        FROM extensions e
+        WHERE e.number IS NOT NULL
+        ORDER BY e.number
+      `;
+
+      const result = await client.query(query);
+      logger.debug(`Fetched ${result.rows.length} extensions from 3CX (legacy schema)`);
+      return result.rows;
+    }
   }, pool);
 }
 

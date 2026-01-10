@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 
 export async function GET() {
@@ -36,12 +37,14 @@ export async function GET() {
       }
     }
 
-    // Get tenant config - using dedicated columns that sync service expects
-    const { data: tenant, error } = await supabase
+    // Get tenant config using admin client to bypass RLS
+    const adminClient = createAdminClient();
+    const { data: tenant, error } = await adminClient
       .from("tenants")
       .select(`
         id, name, slug,
         threecx_host, threecx_port, threecx_database, threecx_user,
+        sftp_host, sftp_port, sftp_user,
         threecx_chat_files_path, threecx_recordings_path,
         threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
         backup_chats, backup_chat_media, backup_recordings,
@@ -56,19 +59,27 @@ export async function GET() {
     }
 
     // Return config with defaults for null values
+    // Note: passwords are not returned for security
     const config = {
       id: tenant.id,
       name: tenant.name,
       slug: tenant.slug,
+      // Database connection
       threecx_host: tenant.threecx_host || "",
       threecx_port: tenant.threecx_port || 5432,
       threecx_database: tenant.threecx_database || "database_single",
       threecx_user: tenant.threecx_user || "phonesystem",
+      // SFTP connection (for file backup)
+      sftp_host: tenant.sftp_host || "",
+      sftp_port: tenant.sftp_port || 22,
+      sftp_user: tenant.sftp_user || "",
+      // File paths
       threecx_chat_files_path: tenant.threecx_chat_files_path || "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files",
       threecx_recordings_path: tenant.threecx_recordings_path || "/var/lib/3cxpbx/Instance1/Data/Recordings",
       threecx_voicemail_path: tenant.threecx_voicemail_path || "/var/lib/3cxpbx/Instance1/Data/Voicemail",
       threecx_fax_path: tenant.threecx_fax_path || "/var/lib/3cxpbx/Instance1/Data/Fax",
       threecx_meetings_path: tenant.threecx_meetings_path || "/var/lib/3cxpbx/Instance1/Data/Http/Recordings",
+      // Backup settings
       backup_chats: tenant.backup_chats ?? true,
       backup_chat_media: tenant.backup_chat_media ?? true,
       backup_recordings: tenant.backup_recordings ?? true,
@@ -76,6 +87,7 @@ export async function GET() {
       backup_faxes: tenant.backup_faxes ?? true,
       backup_cdr: tenant.backup_cdr ?? true,
       backup_meetings: tenant.backup_meetings ?? true,
+      // Sync settings
       sync_enabled: tenant.sync_enabled ?? true,
       sync_interval_seconds: tenant.sync_interval_seconds || 60,
     };
@@ -125,12 +137,18 @@ export async function POST(request: Request) {
     // Build update object with dedicated columns
     const updateData: Record<string, unknown> = {};
 
-    // 3CX Connection settings
+    // 3CX Database Connection settings
     if (body.threecx_host !== undefined) updateData.threecx_host = body.threecx_host;
     if (body.threecx_port !== undefined) updateData.threecx_port = parseInt(body.threecx_port) || 5432;
     if (body.threecx_database !== undefined) updateData.threecx_database = body.threecx_database;
     if (body.threecx_user !== undefined) updateData.threecx_user = body.threecx_user;
     if (body.threecx_password) updateData.threecx_password = body.threecx_password;
+
+    // SFTP Connection settings (for file backup)
+    if (body.sftp_host !== undefined) updateData.sftp_host = body.sftp_host;
+    if (body.sftp_port !== undefined) updateData.sftp_port = parseInt(body.sftp_port) || 22;
+    if (body.sftp_user !== undefined) updateData.sftp_user = body.sftp_user;
+    if (body.sftp_password) updateData.sftp_password = body.sftp_password;
 
     // 3CX File paths
     if (body.threecx_chat_files_path !== undefined) updateData.threecx_chat_files_path = body.threecx_chat_files_path;
@@ -152,22 +170,25 @@ export async function POST(request: Request) {
     if (body.sync_enabled !== undefined) updateData.sync_enabled = body.sync_enabled;
     if (body.sync_interval_seconds !== undefined) updateData.sync_interval_seconds = body.sync_interval_seconds;
 
-    // Update tenant
-    const { error } = await supabase
+    // Update tenant using admin client to bypass RLS
+    const adminClient = createAdminClient();
+    const { error } = await adminClient
       .from("tenants")
       .update(updateData)
       .eq("id", userTenant.tenant_id);
 
     if (error) {
+      console.error("Error updating tenant:", error);
       throw error;
     }
 
     // Fetch updated config
-    const { data: tenant, error: fetchError } = await supabase
+    const { data: tenant, error: fetchError } = await adminClient
       .from("tenants")
       .select(`
         id, name, slug,
         threecx_host, threecx_port, threecx_database, threecx_user,
+        sftp_host, sftp_port, sftp_user,
         threecx_chat_files_path, threecx_recordings_path,
         threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
         backup_chats, backup_chat_media, backup_recordings,
@@ -185,15 +206,22 @@ export async function POST(request: Request) {
       id: tenant.id,
       name: tenant.name,
       slug: tenant.slug,
+      // Database connection
       threecx_host: tenant.threecx_host || "",
       threecx_port: tenant.threecx_port || 5432,
       threecx_database: tenant.threecx_database || "database_single",
       threecx_user: tenant.threecx_user || "phonesystem",
+      // SFTP connection
+      sftp_host: tenant.sftp_host || "",
+      sftp_port: tenant.sftp_port || 22,
+      sftp_user: tenant.sftp_user || "",
+      // File paths
       threecx_chat_files_path: tenant.threecx_chat_files_path || "",
       threecx_recordings_path: tenant.threecx_recordings_path || "",
       threecx_voicemail_path: tenant.threecx_voicemail_path || "",
       threecx_fax_path: tenant.threecx_fax_path || "",
       threecx_meetings_path: tenant.threecx_meetings_path || "",
+      // Backup settings
       backup_chats: tenant.backup_chats ?? true,
       backup_chat_media: tenant.backup_chat_media ?? true,
       backup_recordings: tenant.backup_recordings ?? true,
@@ -201,6 +229,7 @@ export async function POST(request: Request) {
       backup_faxes: tenant.backup_faxes ?? true,
       backup_cdr: tenant.backup_cdr ?? true,
       backup_meetings: tenant.backup_meetings ?? true,
+      // Sync settings
       sync_enabled: tenant.sync_enabled ?? true,
       sync_interval_seconds: tenant.sync_interval_seconds || 60,
     };
