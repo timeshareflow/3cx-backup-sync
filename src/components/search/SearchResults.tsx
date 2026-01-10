@@ -88,11 +88,11 @@ export function SearchResults({
                 {/* Sender and time */}
                 <div className="flex items-center gap-2 mb-2">
                   <span className="font-medium text-gray-900">
-                    {message.sender_name || message.sender_extension || "Unknown"}
+                    {message.sender_name || message.sender_identifier || "Unknown"}
                   </span>
-                  {message.sender_extension && message.sender_name && (
+                  {message.sender_identifier && message.sender_name && (
                     <span className="text-xs text-gray-500">
-                      ext. {message.sender_extension}
+                      ext. {message.sender_identifier}
                     </span>
                   )}
                   <span className="text-sm text-gray-400">
@@ -102,7 +102,7 @@ export function SearchResults({
 
                 {/* Message text */}
                 <p className="text-gray-700 line-clamp-3">
-                  {highlightText(message.message_text || "", query)}
+                  {highlightText(message.content || "", query)}
                 </p>
 
                 {/* Media indicator */}
