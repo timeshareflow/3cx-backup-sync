@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Sync service for 3CX Chat Archiver - Centralized multi-tenant sync",
   "main": "dist/index.js",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
