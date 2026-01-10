@@ -53,7 +53,7 @@ async function initialize(): Promise<void> {
     logger.warn("  - sync_enabled = true");
   } else {
     for (const tenant of tenants) {
-      logger.info(`  - ${tenant.name}: ${tenant.threecx_host}:${tenant.threecx_port || 5432}`);
+      logger.info(`  - ${tenant.name}: ${tenant.threecx_host} (SSH port ${tenant.ssh_port || 22})`);
     }
   }
 }
