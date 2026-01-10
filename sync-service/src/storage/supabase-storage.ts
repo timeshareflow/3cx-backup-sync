@@ -41,7 +41,7 @@ const mimeTypes: Record<string, string> = {
   tif: "image/tiff",
 };
 
-export type FileCategory = "chat-media" | "recordings" | "voicemails" | "faxes";
+export type FileCategory = "chat-media" | "recordings" | "voicemails" | "faxes" | "meetings";
 
 export interface FileTypeInfo {
   fileType: "image" | "video" | "audio" | "document";
