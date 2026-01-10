@@ -6,9 +6,9 @@ interface MessageWithMedia {
   id: string;
   sent_at: string;
   conversation_id: string;
-  sender_extension: string | null;
+  sender_identifier: string | null;
   sender_name: string | null;
-  message_text: string | null;
+  content: string | null;
   message_type: string;
   has_media: boolean;
   media_files: unknown[];

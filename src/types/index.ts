@@ -28,9 +28,9 @@ export interface Message {
   id: string;
   conversation_id: string;
   threecx_message_id: string | null;
-  sender_extension: string | null;
+  sender_identifier: string | null;
   sender_name: string | null;
-  message_text: string | null;
+  content: string | null;
   message_type: "text" | "image" | "video" | "file";
   has_media: boolean;
   sent_at: string;
@@ -40,20 +40,18 @@ export interface Message {
 
 export interface MediaFile {
   id: string;
+  tenant_id: string;
   message_id: string | null;
   conversation_id: string | null;
   original_filename: string | null;
-  stored_filename: string | null;
-  file_type: "image" | "video" | "document";
+  storage_path: string;
   mime_type: string | null;
-  file_size_bytes: number | null;
-  s3_key: string;
-  s3_bucket: string;
-  thumbnail_s3_key: string | null;
+  file_size: number | null;
   width: number | null;
   height: number | null;
   duration_seconds: number | null;
-  uploaded_at: string;
+  thumbnail_path: string | null;
+  created_at: string;
 }
 
 export interface Extension {

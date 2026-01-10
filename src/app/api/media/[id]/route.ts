@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { getPresignedUrl } from "@/lib/s3/utils";
 
 interface MediaFile {
   id: string;
-  s3_key: string;
+  storage_path: string;
   original_filename: string | null;
   mime_type: string | null;
   file_type: string;
+  tenant_id: string;
 }
 
 export async function GET(
@@ -35,11 +35,21 @@ export async function GET(
 
     const media = data as unknown as MediaFile;
 
-    // Generate presigned URL (valid for 1 hour)
-    const url = await getPresignedUrl(media.s3_key, 3600);
+    // Generate signed URL from Supabase Storage (valid for 1 hour)
+    const { data: signedUrlData, error: urlError } = await supabase
+      .storage
+      .from("media")
+      .createSignedUrl(media.storage_path, 3600);
+
+    if (urlError || !signedUrlData?.signedUrl) {
+      return NextResponse.json(
+        { error: "Failed to generate URL" },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json({
-      url,
+      url: signedUrlData.signedUrl,
       filename: media.original_filename,
       mime_type: media.mime_type,
       file_type: media.file_type,

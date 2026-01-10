@@ -1,58 +1,9 @@
 "use client";
 
-import { useState } from "react";
-// Card components not currently used but may be needed later
 import { Button } from "@/components/ui/Button";
-import { CheckCircle, XCircle, Database, Cloud, Server, Settings, Download, Trash2 } from "lucide-react";
+import { Settings, Download, Trash2, Bell, Clock, Shield } from "lucide-react";
 
 export default function SettingsPage() {
-  const [isTestingConnection, setIsTestingConnection] = useState<string | null>(null);
-  const [connectionStatus, setConnectionStatus] = useState<Record<string, boolean | null>>({
-    supabase: null,
-    s3: null,
-    threecx: null,
-  });
-
-  const testConnection = async (service: string) => {
-    setIsTestingConnection(service);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
-    setConnectionStatus((prev) => ({
-      ...prev,
-      [service]: Math.random() > 0.2,
-    }));
-    setIsTestingConnection(null);
-  };
-
-  const connectionConfigs = [
-    {
-      title: "Supabase",
-      service: "supabase",
-      icon: Database,
-      description: "Archive database for storing synced messages and media metadata",
-      gradient: "from-emerald-500 to-green-600",
-      bgGradient: "from-emerald-50 to-green-50",
-      borderColor: "border-emerald-200",
-    },
-    {
-      title: "AWS S3",
-      service: "s3",
-      icon: Cloud,
-      description: "Cloud storage for archived media files",
-      gradient: "from-amber-500 to-orange-600",
-      bgGradient: "from-amber-50 to-orange-50",
-      borderColor: "border-amber-200",
-    },
-    {
-      title: "3CX Database",
-      service: "threecx",
-      icon: Server,
-      description: "Source PostgreSQL database on 3CX server",
-      gradient: "from-blue-500 to-indigo-600",
-      bgGradient: "from-blue-50 to-indigo-50",
-      borderColor: "border-blue-200",
-    },
-  ];
-
   return (
     <div className="space-y-8 p-6 max-w-7xl mx-auto">
       {/* Header */}
@@ -62,88 +13,76 @@ export default function SettingsPage() {
         </div>
         <div>
           <h1 className="text-3xl font-bold text-slate-800">Settings</h1>
-          <p className="text-slate-500 mt-1">Configure connections and app settings</p>
+          <p className="text-slate-500 mt-1">Manage your backup preferences</p>
         </div>
       </div>
 
-      {/* Connections */}
+      {/* Sync Settings */}
       <div className="space-y-4">
-        <h2 className="text-xl font-bold text-slate-800">Connections</h2>
-        <div className="grid gap-4">
-          {connectionConfigs.map((config) => (
-            <div
-              key={config.service}
-              className={`bg-gradient-to-br ${config.bgGradient} rounded-2xl border-2 ${config.borderColor} p-6`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex items-start gap-4">
-                  <div className={`p-3 bg-gradient-to-br ${config.gradient} rounded-xl shadow-lg`}>
-                    <config.icon className="h-6 w-6 text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-slate-800">{config.title}</h3>
-                    <p className="text-sm text-slate-600 mt-1">{config.description}</p>
-                  </div>
+        <h2 className="text-xl font-bold text-slate-800">Sync Settings</h2>
+        <div className="bg-white rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-200 p-6">
+          <div className="space-y-6">
+            <div className="flex items-center justify-between p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+              <div className="flex items-center gap-4">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <Clock className="h-5 w-5 text-blue-600" />
                 </div>
-                <div className="flex items-center gap-3">
-                  {connectionStatus[config.service] !== null && (
-                    connectionStatus[config.service] ? (
-                      <span className="flex items-center gap-1.5 px-3 py-1 bg-emerald-100 text-emerald-700 rounded-full text-sm font-semibold">
-                        <CheckCircle className="h-4 w-4" />
-                        Connected
-                      </span>
-                    ) : (
-                      <span className="flex items-center gap-1.5 px-3 py-1 bg-red-100 text-red-700 rounded-full text-sm font-semibold">
-                        <XCircle className="h-4 w-4" />
-                        Failed
-                      </span>
-                    )
-                  )}
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => testConnection(config.service)}
-                    isLoading={isTestingConnection === config.service}
-                  >
-                    Test
-                  </Button>
+                <div>
+                  <h3 className="font-semibold text-slate-800">Sync Interval</h3>
+                  <p className="text-sm text-slate-500">How often to sync data from 3CX</p>
                 </div>
               </div>
+              <select className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-slate-800 font-medium">
+                <option value="60">Every minute</option>
+                <option value="300">Every 5 minutes</option>
+                <option value="900">Every 15 minutes</option>
+                <option value="3600">Every hour</option>
+              </select>
             </div>
-          ))}
+          </div>
         </div>
       </div>
 
-      {/* Environment */}
+      {/* Notifications */}
       <div className="space-y-4">
-        <h2 className="text-xl font-bold text-slate-800">Environment</h2>
+        <h2 className="text-xl font-bold text-slate-800">Notifications</h2>
         <div className="bg-white rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-200 p-6">
-          <dl className="space-y-4">
-            <div className="flex justify-between py-3 border-b border-slate-100">
-              <dt className="text-slate-600 font-medium">Supabase URL</dt>
-              <dd className="font-mono text-sm text-slate-800 bg-slate-100 px-3 py-1 rounded-lg">
-                {process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/^https?:\/\//, "").slice(0, 30) || "Not configured"}...
-              </dd>
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200">
+              <div className="flex items-center gap-4">
+                <div className="p-2 bg-amber-100 rounded-lg">
+                  <Bell className="h-5 w-5 text-amber-600" />
+                </div>
+                <div>
+                  <h3 className="font-semibold text-slate-800">Email Notifications</h3>
+                  <p className="text-sm text-slate-500">Get notified about sync errors</p>
+                </div>
+              </div>
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input type="checkbox" className="sr-only peer" />
+                <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-500"></div>
+              </label>
             </div>
-            <div className="flex justify-between py-3 border-b border-slate-100">
-              <dt className="text-slate-600 font-medium">AWS Region</dt>
-              <dd className="font-mono text-sm text-slate-800 bg-slate-100 px-3 py-1 rounded-lg">
-                {process.env.AWS_REGION || "Not configured"}
-              </dd>
+          </div>
+        </div>
+      </div>
+
+      {/* Security */}
+      <div className="space-y-4">
+        <h2 className="text-xl font-bold text-slate-800">Security</h2>
+        <div className="bg-white rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-200 p-6">
+          <div className="flex items-center justify-between p-4 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200">
+            <div className="flex items-center gap-4">
+              <div className="p-2 bg-violet-100 rounded-lg">
+                <Shield className="h-5 w-5 text-violet-600" />
+              </div>
+              <div>
+                <h3 className="font-semibold text-slate-800">Change Password</h3>
+                <p className="text-sm text-slate-500">Update your account password</p>
+              </div>
             </div>
-            <div className="flex justify-between py-3 border-b border-slate-100">
-              <dt className="text-slate-600 font-medium">S3 Bucket</dt>
-              <dd className="font-mono text-sm text-slate-800 bg-slate-100 px-3 py-1 rounded-lg">
-                {process.env.S3_BUCKET_NAME || "Not configured"}
-              </dd>
-            </div>
-            <div className="flex justify-between py-3">
-              <dt className="text-slate-600 font-medium">App URL</dt>
-              <dd className="font-mono text-sm text-slate-800 bg-slate-100 px-3 py-1 rounded-lg">
-                {process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}
-              </dd>
-            </div>
-          </dl>
+            <Button variant="outline">Change</Button>
+          </div>
         </div>
       </div>
 
