@@ -48,7 +48,7 @@ export function getTenantPool(tenant: TenantConfig): Pool | null {
   // Create new pool for this tenant
   const pool = new Pool({
     host: tenant.threecx_host,
-    port: tenant.threecx_port || 5480,
+    port: tenant.threecx_port || 5432,
     database: tenant.threecx_database || "database_single",
     user: tenant.threecx_user || "phonesystem",
     password: tenant.threecx_password,
@@ -129,7 +129,7 @@ export function getLegacyPool(): Pool | undefined {
 
   return new Pool({
     host,
-    port: parseInt(process.env.THREECX_DB_PORT || "5480"),
+    port: parseInt(process.env.THREECX_DB_PORT || "5432"),
     database: process.env.THREECX_DB_NAME || "database_single",
     user: process.env.THREECX_DB_USER || "phonesystem",
     password,

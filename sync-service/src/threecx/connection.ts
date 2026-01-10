@@ -8,7 +8,7 @@ export function getThreeCXPool(): Pool {
   if (!pool) {
     const config = {
       host: process.env.THREECX_DB_HOST || "127.0.0.1",
-      port: parseInt(process.env.THREECX_DB_PORT || "5480"),
+      port: parseInt(process.env.THREECX_DB_PORT || "5432"),
       database: process.env.THREECX_DB_NAME || "database_single",
       user: process.env.THREECX_DB_USER || "phonesystem",
       password: process.env.THREECX_DB_PASSWORD,

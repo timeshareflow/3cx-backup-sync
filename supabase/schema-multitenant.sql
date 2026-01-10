@@ -59,7 +59,7 @@ CREATE TABLE tenants (
 
   -- 3CX Connection Settings
   threecx_host VARCHAR(255),
-  threecx_db_port INTEGER DEFAULT 5480,
+  threecx_db_port INTEGER DEFAULT 5432,
   threecx_db_name VARCHAR(100) DEFAULT 'database_single',
   threecx_db_user VARCHAR(100) DEFAULT 'phonesystem',
   threecx_db_password_encrypted TEXT, -- Encrypted password

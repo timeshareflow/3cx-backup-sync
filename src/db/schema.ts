@@ -62,6 +62,9 @@ export const tenants = pgTable(
     backupCdr: boolean("backup_cdr").default(true),
     backupMeetings: boolean("backup_meetings").default(true),
 
+    // Settings (stores 3CX config as JSON)
+    settings: jsonb("settings").default({}),
+
     // Storage quota
     storageQuotaBytes: bigint("storage_quota_bytes", { mode: "number" }).default(0),
     storageUsedBytes: bigint("storage_used_bytes", { mode: "number" }).default(0),
@@ -119,10 +122,8 @@ export const userTenants = pgTable(
     id: uuid("id").primaryKey().defaultRandom(),
     userId: uuid("user_id").notNull().references(() => userProfiles.id, { onDelete: "cascade" }),
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
-    tenantRole: varchar("tenant_role", { length: 50 }).notNull().default("user"),
-    canExport: boolean("can_export").default(true),
-    canSearch: boolean("can_search").default(true),
-    canViewMedia: boolean("can_view_media").default(true),
+    role: varchar("role", { length: 50 }).notNull().default("user"),
+    canViewChats: boolean("can_view_chats").default(true),
     canViewRecordings: boolean("can_view_recordings").default(true),
     canViewVoicemails: boolean("can_view_voicemails").default(true),
     canViewFaxes: boolean("can_view_faxes").default(true),

@@ -31,7 +31,7 @@ const defaultFormData: SetupFormData = {
   threecx_host: "",
   threecx_port: "5432",
   threecx_database: "database_single",
-  threecx_user: "postgres",
+  threecx_user: "phonesystem",
   threecx_password: "",
   threecx_chat_files_path: "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files",
 };
@@ -170,7 +170,7 @@ export default function TenantSetupPage() {
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4 text-teal-500" />
-                  PostgreSQL database credentials (typically on port 5432)
+                  PostgreSQL database credentials (3CX V20 uses port 5432)
                 </li>
                 <li className="flex items-center gap-2">
                   <CheckCircle className="h-4 w-4 text-teal-500" />
@@ -256,7 +256,7 @@ export default function TenantSetupPage() {
                   Username
                 </label>
                 <Input
-                  placeholder="postgres"
+                  placeholder="phonesystem"
                   value={formData.threecx_user}
                   onChange={(e) => setFormData({ ...formData, threecx_user: e.target.value })}
                 />

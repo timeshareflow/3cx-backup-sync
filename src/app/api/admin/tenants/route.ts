@@ -130,13 +130,13 @@ export async function POST(request: Request) {
       console.error("Failed to create user profile:", profileError);
     }
 
-    // Link user to tenant with admin role (column is tenant_role, not role)
+    // Link user to tenant with admin role
     const { error: linkError } = await adminClient
       .from("user_tenants")
       .insert({
         user_id: authData.user.id,
         tenant_id: tenant.id,
-        tenant_role: "admin",
+        role: "admin",
       });
 
     if (linkError) {
