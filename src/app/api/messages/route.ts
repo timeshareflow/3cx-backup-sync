@@ -60,7 +60,16 @@ export async function GET(request: NextRequest) {
       .from("messages")
       .select(
         `
-        *,
+        id,
+        conversation_id,
+        threecx_message_id,
+        sender_identifier,
+        sender_name,
+        content,
+        message_type,
+        has_media,
+        sent_at,
+        created_at,
         media_files (*)
       `,
         { count: "exact" }

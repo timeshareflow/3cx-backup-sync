@@ -45,11 +45,15 @@ export function MessageBubble({ message, isHighlighted = false }: MessageBubbleP
           </div>
 
           {/* Text content */}
-          {hasText && (
+          {hasText ? (
             <div className="bg-gray-100 rounded-2xl rounded-tl-md px-4 py-2 inline-block max-w-[80%]">
               <p className="text-gray-800 whitespace-pre-wrap break-words">
                 {message.content}
               </p>
+            </div>
+          ) : (
+            <div className="text-gray-400 text-sm italic">
+              [No content - content field: {message.content === null ? 'null' : message.content === undefined ? 'undefined' : `"${message.content}"`}]
             </div>
           )}
 
