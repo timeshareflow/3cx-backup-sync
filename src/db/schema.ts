@@ -520,6 +520,48 @@ export const auditLogs = pgTable(
 );
 
 // ============================================
+// USER EXTENSION PERMISSIONS
+// ============================================
+export const userExtensionPermissions = pgTable(
+  "user_extension_permissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => userProfiles.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    extensionId: uuid("extension_id").notNull().references(() => extensions.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    createdBy: uuid("created_by").references(() => userProfiles.id),
+  },
+  (table) => ({
+    userIdx: index("idx_user_extension_permissions_user").on(table.userId),
+    tenantIdx: index("idx_user_extension_permissions_tenant").on(table.tenantId),
+    extensionIdx: index("idx_user_extension_permissions_extension").on(table.extensionId),
+    uniqueUserExtension: uniqueIndex("user_extension_permissions_user_extension_key").on(table.userId, table.extensionId),
+  })
+);
+
+// ============================================
+// USER GROUP CHAT PERMISSIONS
+// ============================================
+export const userGroupChatPermissions = pgTable(
+  "user_group_chat_permissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => userProfiles.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    conversationId: uuid("conversation_id").notNull().references(() => conversations.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    createdBy: uuid("created_by").references(() => userProfiles.id),
+  },
+  (table) => ({
+    userIdx: index("idx_user_group_chat_permissions_user").on(table.userId),
+    tenantIdx: index("idx_user_group_chat_permissions_tenant").on(table.tenantId),
+    conversationIdx: index("idx_user_group_chat_permissions_conversation").on(table.conversationId),
+    uniqueUserConversation: uniqueIndex("user_group_chat_permissions_user_conversation_key").on(table.userId, table.conversationId),
+  })
+);
+
+// ============================================
 // RELATIONS
 // ============================================
 export const tenantsRelations = relations(tenants, ({ many }) => ({
@@ -573,6 +615,36 @@ export const messagesRelations = relations(messages, ({ one, many }) => ({
   mediaFiles: many(mediaFiles),
 }));
 
+export const userExtensionPermissionsRelations = relations(userExtensionPermissions, ({ one }) => ({
+  user: one(userProfiles, {
+    fields: [userExtensionPermissions.userId],
+    references: [userProfiles.id],
+  }),
+  tenant: one(tenants, {
+    fields: [userExtensionPermissions.tenantId],
+    references: [tenants.id],
+  }),
+  extension: one(extensions, {
+    fields: [userExtensionPermissions.extensionId],
+    references: [extensions.id],
+  }),
+}));
+
+export const userGroupChatPermissionsRelations = relations(userGroupChatPermissions, ({ one }) => ({
+  user: one(userProfiles, {
+    fields: [userGroupChatPermissions.userId],
+    references: [userProfiles.id],
+  }),
+  tenant: one(tenants, {
+    fields: [userGroupChatPermissions.tenantId],
+    references: [tenants.id],
+  }),
+  conversation: one(conversations, {
+    fields: [userGroupChatPermissions.conversationId],
+    references: [conversations.id],
+  }),
+}));
+
 // Export types
 export type Tenant = typeof tenants.$inferSelect;
 export type NewTenant = typeof tenants.$inferInsert;
@@ -586,3 +658,5 @@ export type Voicemail = typeof voicemails.$inferSelect;
 export type Fax = typeof faxes.$inferSelect;
 export type CallLog = typeof callLogs.$inferSelect;
 export type MeetingRecording = typeof meetingRecordings.$inferSelect;
+export type UserExtensionPermission = typeof userExtensionPermissions.$inferSelect;
+export type UserGroupChatPermission = typeof userGroupChatPermissions.$inferSelect;

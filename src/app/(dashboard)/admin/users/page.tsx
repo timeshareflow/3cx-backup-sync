@@ -19,8 +19,10 @@ import {
   Edit,
   Mail,
   Calendar,
+  Key,
 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils/date";
+import { UserPermissionsModal } from "@/components/admin/UserPermissionsModal";
 
 interface UserProfile {
   id: string;
@@ -44,6 +46,8 @@ export default function UserManagementPage() {
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "user">("user");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [showPermissionsModal, setShowPermissionsModal] = useState(false);
+  const [permissionsUser, setPermissionsUser] = useState<UserProfile | null>(null);
 
   useEffect(() => {
     if (!authLoading && profile?.role !== "super_admin" && profile?.role !== "admin") {
@@ -242,6 +246,21 @@ export default function UserManagementPage() {
                 </td>
                 <td className="px-6 py-4 text-right">
                   <div className="flex items-center justify-end gap-2">
+                    {/* Permissions button - visible to admins for non-admin users */}
+                    {user.role === "user" && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setPermissionsUser(user);
+                          setShowPermissionsModal(true);
+                        }}
+                        className="hover:bg-purple-50 hover:text-purple-600"
+                        title="Manage Permissions"
+                      >
+                        <Key className="h-4 w-4" />
+                      </Button>
+                    )}
                     {!user.is_protected && profile?.role === "super_admin" && (
                       <>
                         <Button
@@ -378,6 +397,22 @@ export default function UserManagementPage() {
           </div>
         )}
       </Modal>
+
+      {/* Permissions Modal */}
+      {permissionsUser && (
+        <UserPermissionsModal
+          isOpen={showPermissionsModal}
+          onClose={() => {
+            setShowPermissionsModal(false);
+            setPermissionsUser(null);
+          }}
+          userId={permissionsUser.id}
+          userName={permissionsUser.full_name || permissionsUser.email}
+          onSave={() => {
+            // Could refresh users list if needed, but permissions don't affect the list
+          }}
+        />
+      )}
     </div>
   );
 }
