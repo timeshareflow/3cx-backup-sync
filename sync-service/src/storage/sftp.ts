@@ -59,6 +59,52 @@ export async function listRemoteFiles(
   }
 }
 
+// Recursively list all files including subdirectories
+export async function listRemoteFilesRecursive(
+  sftp: SftpClient,
+  remotePath: string,
+  basePath?: string
+): Promise<Array<{ filename: string; relativePath: string; fullPath: string }>> {
+  const results: Array<{ filename: string; relativePath: string; fullPath: string }> = [];
+  const currentBase = basePath || remotePath;
+
+  try {
+    const exists = await sftp.exists(remotePath);
+    if (!exists) {
+      logger.warn("Remote directory does not exist", { path: remotePath });
+      return results;
+    }
+
+    const listing = await sftp.list(remotePath);
+
+    for (const item of listing) {
+      const itemPath = `${remotePath}/${item.name}`;
+
+      if (item.type === "d") {
+        // It's a directory - recurse into it
+        const subFiles = await listRemoteFilesRecursive(sftp, itemPath, currentBase);
+        results.push(...subFiles);
+      } else if (item.type === "-") {
+        // It's a file
+        const relativePath = itemPath.replace(currentBase + "/", "");
+        results.push({
+          filename: item.name,
+          relativePath,
+          fullPath: itemPath,
+        });
+      }
+    }
+
+    return results;
+  } catch (error) {
+    logger.error("Failed to list remote directory recursively", {
+      path: remotePath,
+      error: (error as Error).message,
+    });
+    return results;
+  }
+}
+
 export async function downloadFile(
   sftp: SftpClient,
   remotePath: string

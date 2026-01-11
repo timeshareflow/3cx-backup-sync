@@ -102,17 +102,17 @@ export function SyncStatusCard() {
                     {sync.sync_type}
                   </p>
                   <p className="text-sm text-slate-500">
-                    {sync.last_successful_sync_at
-                      ? `Last sync: ${formatRelativeTime(sync.last_successful_sync_at)}`
+                    {sync.last_success_at
+                      ? `Last sync: ${formatRelativeTime(sync.last_success_at)}`
                       : "Never synced"}
                   </p>
                 </div>
               </div>
               <div className="text-right">
                 {getStatusBadge(sync.status)}
-                {sync.records_synced > 0 && (
+                {sync.items_synced > 0 && (
                   <p className="text-xs text-slate-500 mt-2 font-medium">
-                    {sync.records_synced.toLocaleString()} records
+                    {sync.items_synced.toLocaleString()} records
                   </p>
                 )}
               </div>
@@ -126,7 +126,7 @@ export function SyncStatusCard() {
           <div className="flex items-start gap-3">
             <XCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
             <p className="text-sm text-red-800 font-medium">
-              {syncStatuses.find((s) => s.status === "error")?.error_message ||
+              {syncStatuses.find((s) => s.status === "error")?.last_error ||
                 "An error occurred during sync"}
             </p>
           </div>

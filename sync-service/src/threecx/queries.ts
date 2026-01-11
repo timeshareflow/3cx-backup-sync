@@ -40,6 +40,19 @@ export interface ThreeCXExtension {
   email?: string | null;
 }
 
+export interface ThreeCXFileMapping {
+  message_id: string;
+  internal_file_name: string; // Hash stored on disk
+  public_file_name: string; // Original filename
+  file_info: {
+    HasPreview?: boolean;
+    FileType?: number;
+    Width?: number;
+    Height?: number;
+    Size?: number;
+  } | null;
+}
+
 // Get messages newer than a specific timestamp (from both active and history)
 export async function getNewMessages(
   since: Date | null,
@@ -340,4 +353,256 @@ export async function checkDatabaseSchema(): Promise<{
       hasActiveView: views.includes("chat_view"),
     };
   });
+}
+
+// Get file mappings for messages with attachments
+export async function getFileMappings(
+  messageIds: string[],
+  pool?: Pool
+): Promise<ThreeCXFileMapping[]> {
+  if (messageIds.length === 0) return [];
+
+  return withClient(async (client) => {
+    // Convert string message IDs to integers for comparison
+    const numericIds = messageIds.map((id) => parseInt(id, 10)).filter((id) => !isNaN(id));
+    if (numericIds.length === 0) return [];
+
+    const placeholders = numericIds.map((_, i) => `$${i + 1}`).join(", ");
+
+    const query = `
+      SELECT
+        id_message::text as message_id,
+        internal_file_name,
+        public_file_name,
+        file_info
+      FROM chat_message
+      WHERE id_message IN (${placeholders})
+        AND internal_file_name IS NOT NULL
+    `;
+
+    const result = await client.query(query, numericIds);
+
+    return result.rows.map((row) => ({
+      message_id: row.message_id,
+      internal_file_name: row.internal_file_name,
+      public_file_name: row.public_file_name,
+      file_info: row.file_info ? JSON.parse(row.file_info) : null,
+    }));
+  }, pool);
+}
+
+// Get all file mappings for recent messages (for bulk sync)
+export async function getAllFileMappings(
+  limit: number = 1000,
+  pool?: Pool
+): Promise<ThreeCXFileMapping[]> {
+  return withClient(async (client) => {
+    const query = `
+      SELECT
+        id_message::text as message_id,
+        internal_file_name,
+        public_file_name,
+        file_info
+      FROM chat_message
+      WHERE internal_file_name IS NOT NULL
+      ORDER BY id_message DESC
+      LIMIT $1
+    `;
+
+    const result = await client.query(query, [limit]);
+
+    return result.rows.map((row) => ({
+      message_id: row.message_id,
+      internal_file_name: row.internal_file_name,
+      public_file_name: row.public_file_name,
+      file_info: row.file_info ? JSON.parse(row.file_info) : null,
+    }));
+  }, pool);
+}
+
+// ============================================
+// CALL DETAIL RECORDS (CDR)
+// ============================================
+
+export interface ThreeCXCallRecord {
+  call_id: string;
+  caller_number: string | null;
+  caller_name: string | null;
+  callee_number: string | null;
+  callee_name: string | null;
+  extension_number: string | null;
+  direction: "inbound" | "outbound" | "internal";
+  call_type: string | null;
+  status: string | null;
+  ring_duration: number | null;
+  talk_duration: number | null;
+  total_duration: number | null;
+  call_started_at: Date;
+  call_answered_at: Date | null;
+  call_ended_at: Date | null;
+  has_recording: boolean;
+}
+
+// Get CDR records from 3CX database
+export async function getCallRecords(
+  since: Date | null,
+  limit: number = 500,
+  pool?: Pool
+): Promise<ThreeCXCallRecord[]> {
+  return withClient(async (client) => {
+    // 3CX stores call logs in different tables depending on version
+    // Try cl (call log) table first, then fallback to cdr table
+
+    // Check which tables exist
+    const schemaCheck = await client.query(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      AND table_name IN ('cl', 'cdr', 'callhistory', 'call_history')
+    `);
+    const availableTables = schemaCheck.rows.map((r) => r.table_name);
+
+    if (availableTables.length === 0) {
+      logger.warn("No CDR tables found in 3CX database");
+      return [];
+    }
+
+    // Try each possible table
+    for (const tableName of availableTables) {
+      try {
+        let query: string;
+        let params: (Date | number)[];
+
+        if (tableName === "cl") {
+          // 3CX V18+ cl table schema
+          query = since
+            ? `
+              SELECT
+                idcl::text as call_id,
+                src as caller_number,
+                srcname as caller_name,
+                dst as callee_number,
+                dstname as callee_name,
+                CASE
+                  WHEN srcdn IS NOT NULL THEN srcdn
+                  ELSE dstdn
+                END as extension_number,
+                CASE
+                  WHEN is_outbound = true THEN 'outbound'
+                  WHEN srcdn IS NULL THEN 'inbound'
+                  ELSE 'internal'
+                END as direction,
+                calltype as call_type,
+                CASE
+                  WHEN talk_time > 0 THEN 'answered'
+                  ELSE 'missed'
+                END as status,
+                ring_time as ring_duration,
+                talk_time as talk_duration,
+                (ring_time + talk_time + hold_time) as total_duration,
+                start_time as call_started_at,
+                CASE WHEN talk_time > 0 THEN start_time + (ring_time * INTERVAL '1 second') ELSE NULL END as call_answered_at,
+                end_time as call_ended_at,
+                COALESCE(has_rec, false) as has_recording
+              FROM cl
+              WHERE start_time > $1
+              ORDER BY start_time ASC
+              LIMIT $2
+            `
+            : `
+              SELECT
+                idcl::text as call_id,
+                src as caller_number,
+                srcname as caller_name,
+                dst as callee_number,
+                dstname as callee_name,
+                CASE
+                  WHEN srcdn IS NOT NULL THEN srcdn
+                  ELSE dstdn
+                END as extension_number,
+                CASE
+                  WHEN is_outbound = true THEN 'outbound'
+                  WHEN srcdn IS NULL THEN 'inbound'
+                  ELSE 'internal'
+                END as direction,
+                calltype as call_type,
+                CASE
+                  WHEN talk_time > 0 THEN 'answered'
+                  ELSE 'missed'
+                END as status,
+                ring_time as ring_duration,
+                talk_time as talk_duration,
+                (ring_time + talk_time + hold_time) as total_duration,
+                start_time as call_started_at,
+                CASE WHEN talk_time > 0 THEN start_time + (ring_time * INTERVAL '1 second') ELSE NULL END as call_answered_at,
+                end_time as call_ended_at,
+                COALESCE(has_rec, false) as has_recording
+              FROM cl
+              ORDER BY start_time ASC
+              LIMIT $1
+            `;
+          params = since ? [since, limit] : [limit];
+        } else {
+          // Generic fallback for other table names
+          query = since
+            ? `
+              SELECT
+                id::text as call_id,
+                caller as caller_number,
+                caller_name,
+                callee as callee_number,
+                callee_name,
+                extension as extension_number,
+                COALESCE(direction, 'unknown') as direction,
+                call_type,
+                status,
+                ring_duration,
+                talk_duration,
+                total_duration,
+                start_time as call_started_at,
+                answer_time as call_answered_at,
+                end_time as call_ended_at,
+                COALESCE(has_recording, false) as has_recording
+              FROM ${tableName}
+              WHERE start_time > $1
+              ORDER BY start_time ASC
+              LIMIT $2
+            `
+            : `
+              SELECT
+                id::text as call_id,
+                caller as caller_number,
+                caller_name,
+                callee as callee_number,
+                callee_name,
+                extension as extension_number,
+                COALESCE(direction, 'unknown') as direction,
+                call_type,
+                status,
+                ring_duration,
+                talk_duration,
+                total_duration,
+                start_time as call_started_at,
+                answer_time as call_answered_at,
+                end_time as call_ended_at,
+                COALESCE(has_recording, false) as has_recording
+              FROM ${tableName}
+              ORDER BY start_time ASC
+              LIMIT $1
+            `;
+          params = since ? [since, limit] : [limit];
+        }
+
+        const result = await client.query(query, params);
+        logger.info(`Fetched ${result.rows.length} CDR records from 3CX (${tableName})`);
+        return result.rows;
+      } catch (err) {
+        logger.debug(`CDR query failed for table ${tableName}`, { error: (err as Error).message });
+        continue;
+      }
+    }
+
+    logger.warn("All CDR query attempts failed");
+    return [];
+  }, pool);
 }

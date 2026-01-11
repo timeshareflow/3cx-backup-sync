@@ -30,6 +30,7 @@ export function getSupabaseClient(): SupabaseClient {
 export async function upsertConversation(conversation: {
   threecx_conversation_id: string;
   conversation_name?: string | null;
+  channel_type?: string | null;
   is_external?: boolean;
   is_group_chat?: boolean;
   participant_count?: number;
@@ -40,6 +41,7 @@ export async function upsertConversation(conversation: {
   const insertData: Record<string, unknown> = {
     threecx_conversation_id: conversation.threecx_conversation_id,
     conversation_name: conversation.conversation_name,
+    channel_type: conversation.channel_type ?? "internal",
     is_external: conversation.is_external ?? false,
     is_group_chat: conversation.is_group_chat ?? false,
     participant_count: conversation.participant_count ?? 2,
@@ -131,7 +133,6 @@ export async function insertMessage(message: {
     }
   }
 
-  const now = new Date().toISOString();
   const insertData: Record<string, unknown> = {
     conversation_id: message.conversation_id,
     threecx_message_id: message.threecx_message_id,
@@ -141,11 +142,6 @@ export async function insertMessage(message: {
     message_type: message.message_type || "text",
     has_media: message.has_media || false,
     sent_at: message.sent_at,
-    // Required fields for the table schema
-    topic: "chat",  // Required NOT NULL field
-    extension: message.sender_extension || "unknown",  // Required NOT NULL field
-    updated_at: now,  // Required NOT NULL field
-    inserted_at: now,  // Required NOT NULL field
   };
 
   if (message.tenant_id) {
@@ -163,6 +159,13 @@ export async function insertMessage(message: {
       // Duplicate - already exists
       return null;
     }
+    logger.error("Message insert failed", {
+      error: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      messageId: message.threecx_message_id,
+    });
     throw new SupabaseError("Failed to insert message", { error });
   }
 
@@ -277,7 +280,7 @@ export async function getConversationId(
   return data?.id || null;
 }
 
-// Update sync status
+// Update sync status - uses upsert to create if not exists
 export async function updateSyncStatus(
   syncType: string,
   status: "idle" | "running" | "success" | "error",
@@ -291,65 +294,76 @@ export async function updateSyncStatus(
 ): Promise<void> {
   const client = getSupabaseClient();
 
-  const update: Record<string, unknown> = {
+  if (!details?.tenantId) {
+    logger.error("updateSyncStatus requires tenantId");
+    return;
+  }
+
+  const now = new Date().toISOString();
+  const record: Record<string, unknown> = {
+    tenant_id: details.tenantId,
+    sync_type: syncType,
     status,
-    last_sync_at: new Date().toISOString(),
-    updated_at: new Date().toISOString(),
+    last_sync_at: now,
+    updated_at: now,
   };
 
   if (status === "success") {
-    update.last_success_at = new Date().toISOString();
-    update.last_error = null;
+    record.last_success_at = now;
+    record.last_error = null;
+    // Store the timestamp of the last synced message for incremental sync
+    if (details.lastSyncedTimestamp) {
+      record.last_synced_message_at = details.lastSyncedTimestamp;
+    }
   }
 
   if (status === "error" && details?.errorMessage) {
-    update.last_error_at = new Date().toISOString();
-    update.last_error = details.errorMessage;
+    record.last_error_at = now;
+    record.last_error = details.errorMessage;
   }
 
   if (details?.recordsSynced !== undefined) {
-    update.items_synced = details.recordsSynced;
+    record.items_synced = details.recordsSynced;
   }
 
-  let query = client
+  // Use upsert to create record if it doesn't exist
+  const { error } = await client
     .from("sync_status")
-    .update(update)
-    .eq("sync_type", syncType);
-
-  if (details?.tenantId) {
-    query = query.eq("tenant_id", details.tenantId);
-  }
-
-  const { error } = await query;
+    .upsert(record, {
+      onConflict: "tenant_id,sync_type",
+    });
 
   if (error) {
-    logger.error("Failed to update sync status", { error, syncType });
+    logger.error("Failed to update sync status", { error, syncType, tenantId: details.tenantId });
   }
 }
 
-// Get last synced timestamp
+// Get last synced message timestamp for incremental sync
 export async function getLastSyncedTimestamp(
   syncType: string,
   tenantId?: string
 ): Promise<Date | null> {
   const client = getSupabaseClient();
 
-  let query = client
-    .from("sync_status")
-    .select("last_sync_at")
-    .eq("sync_type", syncType);
-
-  if (tenantId) {
-    query = query.eq("tenant_id", tenantId);
-  }
-
-  const { data, error } = await query.single();
-
-  if (error || !data?.last_sync_at) {
+  if (!tenantId) {
+    logger.warn("getLastSyncedTimestamp called without tenantId");
     return null;
   }
 
-  return new Date(data.last_sync_at);
+  // Query for the last_synced_message_at which tracks the actual message timestamp
+  const { data, error } = await client
+    .from("sync_status")
+    .select("last_synced_message_at")
+    .eq("sync_type", syncType)
+    .eq("tenant_id", tenantId)
+    .single();
+
+  if (error || !data?.last_synced_message_at) {
+    // No record or no timestamp - this is a fresh sync
+    return null;
+  }
+
+  return new Date(data.last_synced_message_at);
 }
 
 // Create sync log entry
@@ -695,31 +709,115 @@ export async function insertMediaFileNew(media: {
 }): Promise<string> {
   const client = getSupabaseClient();
 
+  // Build insert data
+  // NOTE: Database has file_name (NOT NULL) - derive from original_filename or storage_path
+  const fileName = media.original_filename || media.storage_path.split("/").pop() || "unknown";
+
+  const insertData: Record<string, unknown> = {
+    tenant_id: media.tenant_id,
+    storage_path: media.storage_path,
+    mime_type: media.mime_type,
+    file_size: media.file_size,
+    file_name: fileName,  // Required NOT NULL column in database
+  };
+
+  // Optional fields
+  if (media.message_id) {
+    insertData.message_id = media.message_id;
+  }
+  if (media.conversation_id) {
+    insertData.conversation_id = media.conversation_id;
+  }
+
   const { data, error } = await client
     .from("media_files")
-    .upsert(
-      {
-        tenant_id: media.tenant_id,
-        message_id: media.message_id,
-        conversation_id: media.conversation_id,
-        original_filename: media.original_filename,
-        stored_filename: media.stored_filename,
-        file_type: media.file_type,
-        mime_type: media.mime_type,
-        file_size: media.file_size,
-        storage_path: media.storage_path,
-        thumbnail_path: media.thumbnail_path,
-      },
-      { onConflict: "tenant_id,storage_path" }
-    )
+    .insert(insertData)
     .select("id")
     .single();
 
   if (error) {
+    logger.error("Media file insert failed", {
+      error: error.message,
+      code: error.code,
+      details: error.details,
+      hint: error.hint,
+      storagePath: media.storage_path,
+    });
     throw new SupabaseError("Failed to insert media file", { error });
   }
 
   return data.id;
+}
+
+// Update media file with message link and original filename
+export async function linkMediaToMessage(
+  tenantId: string,
+  internalFileName: string, // The hash/filename stored on disk
+  messageId: string,
+  originalFilename: string,
+  fileInfo?: { Width?: number; Height?: number; Size?: number } | null
+): Promise<boolean> {
+  const client = getSupabaseClient();
+
+  // Find media file by hash (the internal_file_name is stored as file_name in our DB)
+  // The file_name might include or exclude the extension, so we check both
+  const hashWithoutExt = internalFileName.replace(/\.[^/.]+$/, "");
+
+  const { data: mediaFiles, error: findError } = await client
+    .from("media_files")
+    .select("id, file_name")
+    .eq("tenant_id", tenantId)
+    .or(`file_name.eq.${internalFileName},file_name.ilike.${hashWithoutExt}%`);
+
+  if (findError) {
+    logger.error("Failed to find media file by hash", {
+      hash: internalFileName,
+      tenantId,
+      error: findError.message,
+    });
+    return false;
+  }
+
+  if (!mediaFiles || mediaFiles.length === 0) {
+    logger.debug("No media file found for hash", { hash: internalFileName, tenantId });
+    return false;
+  }
+
+  // Update the first matching file
+  const mediaFile = mediaFiles[0];
+  const updateData: Record<string, unknown> = {
+    message_id: messageId,
+    file_name: originalFilename, // Replace hash with original filename
+  };
+
+  // Add dimensions if available
+  if (fileInfo?.Width) {
+    updateData.width = fileInfo.Width;
+  }
+  if (fileInfo?.Height) {
+    updateData.height = fileInfo.Height;
+  }
+
+  const { error: updateError } = await client
+    .from("media_files")
+    .update(updateData)
+    .eq("id", mediaFile.id);
+
+  if (updateError) {
+    logger.error("Failed to update media file", {
+      mediaId: mediaFile.id,
+      error: updateError.message,
+    });
+    return false;
+  }
+
+  logger.debug("Linked media to message", {
+    mediaId: mediaFile.id,
+    messageId,
+    originalFilename,
+  });
+
+  return true;
 }
 
 // ============================================

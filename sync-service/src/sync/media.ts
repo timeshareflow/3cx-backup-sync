@@ -8,7 +8,7 @@ import {
   generateStoragePath,
 } from "../storage/supabase-storage";
 import { insertMediaFileNew, updateSyncStatus } from "../storage/supabase";
-import { createSftpClient, listRemoteFiles, downloadFile, closeSftpClient } from "../storage/sftp";
+import { createSftpClient, listRemoteFiles, listRemoteFilesRecursive, downloadFile, closeSftpClient } from "../storage/sftp";
 import { TenantConfig, getTenantSftpConfig } from "../tenant";
 
 export interface MediaSyncResult {
@@ -16,6 +16,17 @@ export interface MediaSyncResult {
   filesSkipped: number;
   errors: Array<{ filename: string; error: string }>;
 }
+
+// Common 3CX chat files paths to try
+// Cloud-hosted 3CX stores chat attachments in /var/lib/3cxpbx/Instance1/Data/Chat
+const CHAT_FILES_PATHS = [
+  "/var/lib/3cxpbx/Instance1/Data/Chat",  // Cloud-hosted 3CX (Linux)
+  "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files",
+  "/var/lib/3cxpbx/Data/Http/Files/Chat Files",
+  "/var/lib/3cxpbx/Data/Chat",
+  "/home/phonesystem/.3CXPhone System/Data/Http/Files/Chat Files",
+  "/var/lib/3cxpbx/Instance1/Data/Http/Files",
+];
 
 export async function syncMedia(
   tenant: TenantConfig
@@ -41,7 +52,10 @@ export async function syncMedia(
     return result;
   }
 
-  const chatFilesPath = tenant.threecx_chat_files_path || "/var/lib/3cxpbx/Instance1/Data/Http/Files/Chat Files";
+  // Build list of paths to try - custom path first if configured
+  const pathsToTry = tenant.threecx_chat_files_path
+    ? [tenant.threecx_chat_files_path, ...CHAT_FILES_PATHS]
+    : CHAT_FILES_PATHS;
 
   let sftp;
   try {
@@ -54,29 +68,38 @@ export async function syncMedia(
     });
     sftp = await createSftpClient(sftpConfig);
 
-    // List files in chat directory
-    const files = await listRemoteFiles(sftp, chatFilesPath);
+    // Try each path until we find one that exists
+    let chatFilesPath: string | null = null;
+    let files: Array<{ filename: string; relativePath: string; fullPath: string }> = [];
 
-    if (files.length === 0) {
-      logger.info("No media files found on remote server", { tenantId, path: chatFilesPath });
+    for (const tryPath of pathsToTry) {
+      logger.debug("Trying chat files path", { tenantId, path: tryPath });
+      files = await listRemoteFilesRecursive(sftp, tryPath);
+      if (files.length > 0) {
+        chatFilesPath = tryPath;
+        logger.info("Found chat files directory", { tenantId, path: tryPath, fileCount: files.length });
+        break;
+      }
+    }
+
+    if (files.length === 0 || !chatFilesPath) {
+      logger.info("No media files found on remote server", { tenantId, pathsTried: pathsToTry });
       await updateSyncStatus("media", "success", { recordsSynced: 0, tenantId });
       return result;
     }
 
-    logger.info(`Found ${files.length} files to process`, { tenantId });
+    logger.info(`Found ${files.length} files to process (including subfolders)`, { tenantId });
 
-    for (const filename of files) {
+    for (const file of files) {
       try {
-        const remotePath = path.posix.join(chatFilesPath, filename);
-
-        // Download file from remote server
-        const buffer = await downloadFile(sftp, remotePath);
+        // Download file from remote server using full path
+        const buffer = await downloadFile(sftp, file.fullPath);
 
         // Detect file type
         const { fileType, mimeType, extension } = detectFileType(buffer);
 
-        // Generate storage path for Supabase Storage
-        const storagePath = generateStoragePath(tenantId, "chat-media", filename, extension);
+        // Generate storage path - preserve subfolder structure
+        const storagePath = generateStoragePath(tenantId, "chat-media", file.relativePath, extension);
 
         // Check if already uploaded
         const exists = await fileExists(storagePath);
@@ -91,8 +114,8 @@ export async function syncMedia(
         // Record in database
         await insertMediaFileNew({
           tenant_id: tenantId,
-          original_filename: filename,
-          stored_filename: `${path.basename(filename, path.extname(filename))}.${extension}`,
+          original_filename: file.filename,
+          stored_filename: `${path.basename(file.filename, path.extname(file.filename))}.${extension}`,
           file_type: fileType,
           mime_type: mimeType,
           file_size: size,
@@ -100,16 +123,16 @@ export async function syncMedia(
         });
 
         result.filesSynced++;
-        logger.debug(`Synced media file via SFTP`, { tenantId, filename });
+        logger.debug(`Synced media file via SFTP`, { tenantId, filename: file.relativePath });
       } catch (error) {
         const err = handleError(error);
         result.errors.push({
-          filename,
+          filename: file.relativePath,
           error: err.message,
         });
         logger.error("Failed to sync media file", {
           tenantId,
-          filename,
+          filename: file.relativePath,
           error: err.message,
         });
       }

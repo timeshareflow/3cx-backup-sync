@@ -42,17 +42,18 @@ export interface Message {
 
 export interface MediaFile {
   id: string;
+  file_name: string;
   tenant_id: string;
   message_id: string | null;
   conversation_id: string | null;
-  original_filename: string | null;
-  storage_path: string;
-  mime_type: string | null;
   file_size: number | null;
+  mime_type: string | null;
+  storage_path: string;
+  thumbnail_path: string | null;
   width: number | null;
   height: number | null;
   duration_seconds: number | null;
-  thumbnail_path: string | null;
+  metadata?: Record<string, unknown>;
   created_at: string;
 }
 
@@ -73,12 +74,11 @@ export interface SyncStatus {
   id: string;
   sync_type: "messages" | "media" | "extensions";
   last_sync_at: string | null;
-  last_successful_sync_at: string | null;
-  last_synced_message_id: string | null;
-  last_synced_timestamp: string | null;
-  records_synced: number;
+  last_success_at: string | null;
+  last_error_at: string | null;
+  last_error: string | null;
+  items_synced: number;
   status: "idle" | "running" | "success" | "error";
-  error_message: string | null;
   created_at: string;
   updated_at: string;
 }

@@ -9,9 +9,25 @@ interface MessageBubbleProps {
   isHighlighted?: boolean;
 }
 
+// Check if content is just a filename (should be hidden when media is present)
+function isJustFilename(content: string | null, mediaFiles: { file_name: string }[]): boolean {
+  if (!content) return false;
+  const trimmed = content.trim();
+
+  // Check if content matches any of the media file names
+  if (mediaFiles.some(m => m.file_name === trimmed)) return true;
+
+  // Check if content looks like a filename (common extensions)
+  const fileExtensions = /\.(jpg|jpeg|png|gif|webp|mp4|mov|avi|webm|wav|mp3|pdf|doc|docx)$/i;
+  return fileExtensions.test(trimmed);
+}
+
 export function MessageBubble({ message, isHighlighted = false }: MessageBubbleProps) {
   const hasMedia = message.media_files && message.media_files.length > 0;
   const hasText = message.content && message.content.trim().length > 0;
+
+  // Hide text if it's just a filename and we have media to show
+  const shouldShowText = hasText && !(hasMedia && isJustFilename(message.content, message.media_files));
 
   return (
     <div
@@ -45,21 +61,17 @@ export function MessageBubble({ message, isHighlighted = false }: MessageBubbleP
           </div>
 
           {/* Text content */}
-          {hasText ? (
+          {shouldShowText && (
             <div className="bg-gray-100 rounded-2xl rounded-tl-md px-4 py-2 inline-block max-w-[80%]">
               <p className="text-gray-800 whitespace-pre-wrap break-words">
                 {message.content}
               </p>
             </div>
-          ) : (
-            <div className="text-gray-400 text-sm italic">
-              [No content - content field: {message.content === null ? 'null' : message.content === undefined ? 'undefined' : `"${message.content}"`}]
-            </div>
           )}
 
           {/* Media content */}
           {hasMedia && (
-            <div className={`${hasText ? "mt-2" : ""}`}>
+            <div className={`${shouldShowText ? "mt-2" : ""}`}>
               <div className="flex flex-wrap gap-2">
                 {message.media_files.map((media) => (
                   <MediaPreview key={media.id} media={media} />

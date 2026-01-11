@@ -22,6 +22,7 @@ export function SearchPageContent() {
     sender: "",
     hasMedia: null,
     conversationId: "",
+    channelType: "",
   });
 
   // Fetch extensions for filter dropdown
@@ -36,7 +37,9 @@ export function SearchPageContent() {
   }, []);
 
   const performSearch = useCallback(async (searchQuery: string) => {
-    if (!searchQuery || searchQuery.trim().length < 2) {
+    // Allow search with date filters even without text query
+    const hasFilters = filters.startDate || filters.endDate || filters.channelType;
+    if (!hasFilters && (!searchQuery || searchQuery.trim().length < 2)) {
       setResults([]);
       setTotalCount(0);
       return;
@@ -45,7 +48,9 @@ export function SearchPageContent() {
     setIsLoading(true);
     try {
       const params = new URLSearchParams();
-      params.set("q", searchQuery);
+      if (searchQuery && searchQuery.trim()) {
+        params.set("q", searchQuery);
+      }
       params.set("limit", "50");
 
       if (filters.startDate) params.set("start_date", filters.startDate);
@@ -53,6 +58,7 @@ export function SearchPageContent() {
       if (filters.sender) params.set("sender", filters.sender);
       if (filters.hasMedia !== null) params.set("has_media", String(filters.hasMedia));
       if (filters.conversationId) params.set("conversation_id", filters.conversationId);
+      if (filters.channelType) params.set("channel_type", filters.channelType);
 
       const response = await fetch(`/api/search?${params.toString()}`);
       const data = await response.json();
@@ -74,10 +80,11 @@ export function SearchPageContent() {
 
   // Search when query or filters change
   useEffect(() => {
-    if (query) {
+    const hasFilters = filters.startDate || filters.endDate || filters.channelType;
+    if (query || hasFilters) {
       performSearch(query);
     }
-  }, [query, performSearch]);
+  }, [query, filters, performSearch]);
 
   // Handle search from URL params on initial load
   useEffect(() => {

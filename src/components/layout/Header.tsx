@@ -10,6 +10,7 @@ export function Header() {
   const { user, profile, tenants, currentTenant, setCurrentTenant, signOut } = useAuth();
   const [searchQuery, setSearchQuery] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
+  const [syncTriggered, setSyncTriggered] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showTenantMenu, setShowTenantMenu] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -37,11 +38,15 @@ export function Header() {
 
   const handleManualSync = async () => {
     setIsSyncing(true);
+    setSyncTriggered(false);
     try {
       const response = await fetch("/api/sync/trigger", { method: "POST" });
       if (!response.ok) {
         throw new Error("Sync trigger failed");
       }
+      // Show success state briefly
+      setSyncTriggered(true);
+      setTimeout(() => setSyncTriggered(false), 3000);
     } catch (error) {
       console.error("Failed to trigger sync:", error);
     } finally {
@@ -137,7 +142,7 @@ export function Header() {
             className="flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-gradient-to-r from-teal-500 to-cyan-600 hover:from-teal-600 hover:to-cyan-700 rounded-xl shadow-lg shadow-teal-500/25 hover:shadow-teal-500/40 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <RefreshCw className={`h-4 w-4 ${isSyncing ? "animate-spin" : ""}`} />
-            {isSyncing ? "Syncing..." : "Sync Now"}
+            {isSyncing ? "Syncing..." : syncTriggered ? "Triggered!" : "Sync Now"}
           </button>
 
           {/* User Menu */}

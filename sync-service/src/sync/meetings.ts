@@ -1,21 +1,30 @@
-import * as fs from "fs";
 import * as path from "path";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import {
-  uploadFile,
+  uploadFileBuffer,
   generateStoragePath,
   fileExists,
-  getFileInfo,
+  detectFileType,
 } from "../storage/supabase-storage";
 import { insertMeetingRecording, updateSyncStatus } from "../storage/supabase";
-import { TenantConfig } from "../storage/supabase";
+import { createSftpClient, listRemoteFiles, closeSftpClient, downloadFile } from "../storage/sftp";
+import { TenantConfig, getTenantSftpConfig } from "../tenant";
 
 export interface MeetingsSyncResult {
   filesSynced: number;
   filesSkipped: number;
   errors: Array<{ filename: string; error: string }>;
 }
+
+// Common 3CX meeting recording paths to try
+const MEETINGS_PATHS = [
+  "/var/lib/3cxpbx/Instance1/Data/Recordings/Meetings",
+  "/var/lib/3cxpbx/Instance1/Data/WebMeetings",
+  "/var/lib/3cxpbx/Data/Recordings/Meetings",
+  "/var/lib/3cxpbx/Data/WebMeetings",
+  "/home/phonesystem/.3CXPhone System/Data/Recordings/Meetings",
+];
 
 // Parse meeting recording filename to extract metadata
 // 3CX web meeting recordings typically named like:
@@ -107,44 +116,6 @@ function parseDateTime(dateStr: string, timeStr?: string): Date | undefined {
   }
 }
 
-// Get list of meeting recording files from 3CX directory
-function getMeetingFiles(meetingsPath: string): string[] {
-  try {
-    if (!fs.existsSync(meetingsPath)) {
-      logger.warn("Meetings directory does not exist", { path: meetingsPath });
-      return [];
-    }
-
-    const files: string[] = [];
-
-    // Recursively find all video/audio files
-    function scanDir(dir: string) {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          scanDir(fullPath);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          // Meeting recordings can be MP4 video or audio-only formats
-          if ([".mp4", ".webm", ".mkv", ".avi", ".mov", ".wav", ".mp3", ".ogg"].includes(ext)) {
-            files.push(fullPath);
-          }
-        }
-      }
-    }
-
-    scanDir(meetingsPath);
-    logger.debug(`Found ${files.length} meeting recording files`);
-    return files;
-  } catch (error) {
-    logger.error("Failed to read meetings directory", {
-      error: (error as Error).message,
-    });
-    return [];
-  }
-}
-
 export async function syncMeetings(tenant: TenantConfig): Promise<MeetingsSyncResult> {
   const result: MeetingsSyncResult = {
     filesSynced: 0,
@@ -157,37 +128,64 @@ export async function syncMeetings(tenant: TenantConfig): Promise<MeetingsSyncRe
     return result;
   }
 
-  if (!tenant.threecx_meetings_path) {
-    logger.info("No meetings path configured for tenant", { tenantId: tenant.id });
+  const sftpConfig = getTenantSftpConfig(tenant);
+  if (!sftpConfig) {
+    logger.info("No SFTP credentials configured - skipping meetings sync", { tenantId: tenant.id });
     return result;
   }
 
+  // Build list of paths to try - custom path first if configured
+  const pathsToTry = tenant.threecx_meetings_path
+    ? [tenant.threecx_meetings_path, ...MEETINGS_PATHS]
+    : MEETINGS_PATHS;
+
+  let sftp;
   try {
     await updateSyncStatus("meetings", "running", { tenantId: tenant.id });
 
-    const files = getMeetingFiles(tenant.threecx_meetings_path);
+    sftp = await createSftpClient(sftpConfig);
 
-    if (files.length === 0) {
-      logger.info("No meeting recording files to sync", { tenantId: tenant.id });
+    // Try each path until we find one that exists
+    let meetingsPath: string | null = null;
+    let files: string[] = [];
+
+    for (const tryPath of pathsToTry) {
+      logger.debug("Trying meetings path", { tenantId: tenant.id, path: tryPath });
+      try {
+        files = await listRemoteFiles(sftp, tryPath);
+        // Filter to video/audio files
+        files = files.filter(f => {
+          const ext = path.extname(f).toLowerCase();
+          return [".mp4", ".webm", ".mkv", ".avi", ".mov", ".wav", ".mp3", ".ogg"].includes(ext);
+        });
+        if (files.length > 0) {
+          meetingsPath = tryPath;
+          logger.info("Found meetings directory", { tenantId: tenant.id, path: tryPath, fileCount: files.length });
+          break;
+        }
+      } catch {
+        // Path doesn't exist, try next
+        continue;
+      }
+    }
+
+    if (files.length === 0 || !meetingsPath) {
+      logger.info("No meeting recording files found on remote server", { tenantId: tenant.id, pathsTried: pathsToTry });
       await updateSyncStatus("meetings", "success", { recordsSynced: 0, tenantId: tenant.id });
       return result;
     }
 
-    logger.info(`Processing ${files.length} meeting recording files`, { tenantId: tenant.id });
+    logger.info(`Found ${files.length} meeting recording files to process`, { tenantId: tenant.id });
 
-    for (const filePath of files) {
+    for (const filename of files) {
       try {
-        const filename = path.basename(filePath);
-        const stat = fs.statSync(filePath);
-
-        // Get file info
-        const { mimeType } = getFileInfo(filename);
+        const remotePath = path.posix.join(meetingsPath, filename);
+        const buffer = await downloadFile(sftp, remotePath);
+        const { mimeType, extension } = detectFileType(buffer);
         const metadata = parseMeetingFilename(filename);
 
-        // Generate storage path
-        const storagePath = generateStoragePath(tenant.id, "meetings", filename);
+        const storagePath = generateStoragePath(tenant.id, "meetings", filename, extension);
 
-        // Check if already uploaded
         const exists = await fileExists(storagePath);
         if (exists) {
           result.filesSkipped++;
@@ -198,36 +196,31 @@ export async function syncMeetings(tenant: TenantConfig): Promise<MeetingsSyncRe
         const ext = path.extname(filename).toLowerCase();
         const isVideo = [".mp4", ".webm", ".mkv", ".avi", ".mov"].includes(ext);
 
-        // Upload to Supabase Storage
-        const uploadResult = await uploadFile(filePath, storagePath, mimeType);
+        const { path: uploadedPath, size } = await uploadFileBuffer(buffer, storagePath, mimeType);
 
-        // Record in database
         await insertMeetingRecording({
           tenant_id: tenant.id,
           threecx_meeting_id: metadata.meetingId || filename,
           meeting_name: metadata.meetingName || filename.replace(/\.\w+$/, ""),
           host_extension: metadata.hostExtension,
           original_filename: filename,
-          file_size: uploadResult.size,
-          storage_path: uploadResult.path,
+          file_size: size,
+          storage_path: uploadedPath,
           mime_type: mimeType,
           has_video: isVideo,
           has_audio: true,
-          recorded_at: metadata.timestamp?.toISOString() || new Date(stat.mtime).toISOString(),
+          recorded_at: metadata.timestamp?.toISOString() || new Date().toISOString(),
           meeting_started_at: metadata.timestamp?.toISOString(),
         });
 
         result.filesSynced++;
-        logger.debug(`Synced meeting recording`, { tenantId: tenant.id, filename });
+        logger.debug(`Synced meeting recording via SFTP`, { tenantId: tenant.id, filename });
       } catch (error) {
         const err = handleError(error);
-        result.errors.push({
-          filename: filePath,
-          error: err.message,
-        });
+        result.errors.push({ filename, error: err.message });
         logger.error("Failed to sync meeting recording file", {
           tenantId: tenant.id,
-          filePath,
+          filename,
           error: err.message,
         });
       }
@@ -254,5 +247,9 @@ export async function syncMeetings(tenant: TenantConfig): Promise<MeetingsSyncRe
       tenantId: tenant.id,
     });
     throw err;
+  } finally {
+    if (sftp) {
+      await closeSftpClient(sftp);
+    }
   }
 }

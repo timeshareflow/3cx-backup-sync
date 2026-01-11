@@ -1,21 +1,28 @@
-import * as fs from "fs";
 import * as path from "path";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import {
-  uploadFile,
+  uploadFileBuffer,
   generateStoragePath,
   fileExists,
-  getFileInfo,
+  detectFileType,
 } from "../storage/supabase-storage";
 import { insertFax, updateSyncStatus } from "../storage/supabase";
-import { TenantConfig } from "../storage/supabase";
+import { createSftpClient, listRemoteFiles, closeSftpClient, downloadFile } from "../storage/sftp";
+import { TenantConfig, getTenantSftpConfig } from "../tenant";
 
 export interface FaxesSyncResult {
   filesSynced: number;
   filesSkipped: number;
   errors: Array<{ filename: string; error: string }>;
 }
+
+// Common 3CX fax paths to try
+const FAX_PATHS = [
+  "/var/lib/3cxpbx/Instance1/Data/Fax",
+  "/var/lib/3cxpbx/Data/Fax",
+  "/home/phonesystem/.3CXPhone System/Data/Fax",
+];
 
 // Parse fax filename to extract metadata
 function parseFaxFilename(filename: string): {
@@ -61,43 +68,6 @@ function parseFaxFilename(filename: string): {
   return result;
 }
 
-// Get list of fax files from 3CX directory
-function getFaxFiles(faxPath: string): string[] {
-  try {
-    if (!fs.existsSync(faxPath)) {
-      logger.warn("Fax directory does not exist", { path: faxPath });
-      return [];
-    }
-
-    const files: string[] = [];
-
-    // Recursively find all fax files (PDF, TIFF)
-    function scanDir(dir: string) {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          scanDir(fullPath);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          if ([".pdf", ".tiff", ".tif"].includes(ext)) {
-            files.push(fullPath);
-          }
-        }
-      }
-    }
-
-    scanDir(faxPath);
-    logger.debug(`Found ${files.length} fax files`);
-    return files;
-  } catch (error) {
-    logger.error("Failed to read fax directory", {
-      error: (error as Error).message,
-    });
-    return [];
-  }
-}
-
 export async function syncFaxes(tenant: TenantConfig): Promise<FaxesSyncResult> {
   const result: FaxesSyncResult = {
     filesSynced: 0,
@@ -110,65 +80,92 @@ export async function syncFaxes(tenant: TenantConfig): Promise<FaxesSyncResult> 
     return result;
   }
 
+  const sftpConfig = getTenantSftpConfig(tenant);
+  if (!sftpConfig) {
+    logger.info("No SFTP credentials configured - skipping fax sync", { tenantId: tenant.id });
+    return result;
+  }
+
+  // Build list of paths to try - custom path first if configured
+  const pathsToTry = tenant.threecx_fax_path
+    ? [tenant.threecx_fax_path, ...FAX_PATHS]
+    : FAX_PATHS;
+
+  let sftp;
   try {
     await updateSyncStatus("faxes", "running", { tenantId: tenant.id });
 
-    const files = getFaxFiles(tenant.threecx_fax_path);
+    sftp = await createSftpClient(sftpConfig);
 
-    if (files.length === 0) {
-      logger.info("No fax files to sync", { tenantId: tenant.id });
+    // Try each path until we find one that exists
+    let faxPath: string | null = null;
+    let files: string[] = [];
+
+    for (const tryPath of pathsToTry) {
+      logger.debug("Trying fax path", { tenantId: tenant.id, path: tryPath });
+      try {
+        files = await listRemoteFiles(sftp, tryPath);
+        // Filter to only PDF and TIFF files
+        files = files.filter(f => {
+          const ext = path.extname(f).toLowerCase();
+          return [".pdf", ".tiff", ".tif"].includes(ext);
+        });
+        if (files.length > 0) {
+          faxPath = tryPath;
+          logger.info("Found fax directory", { tenantId: tenant.id, path: tryPath, fileCount: files.length });
+          break;
+        }
+      } catch {
+        // Path doesn't exist, try next
+        continue;
+      }
+    }
+
+    if (files.length === 0 || !faxPath) {
+      logger.info("No fax files found on remote server", { tenantId: tenant.id, pathsTried: pathsToTry });
       await updateSyncStatus("faxes", "success", { recordsSynced: 0, tenantId: tenant.id });
       return result;
     }
 
-    logger.info(`Processing ${files.length} fax files`, { tenantId: tenant.id });
+    logger.info(`Found ${files.length} fax files to process`, { tenantId: tenant.id });
 
-    for (const filePath of files) {
+    for (const filename of files) {
       try {
-        const filename = path.basename(filePath);
-        const stat = fs.statSync(filePath);
-
-        // Get file info
-        const { mimeType } = getFileInfo(filename);
+        const remotePath = path.posix.join(faxPath, filename);
+        const buffer = await downloadFile(sftp, remotePath);
+        const { mimeType, extension } = detectFileType(buffer);
         const metadata = parseFaxFilename(filename);
 
-        // Generate storage path
-        const storagePath = generateStoragePath(tenant.id, "faxes", filename);
+        const storagePath = generateStoragePath(tenant.id, "faxes", filename, extension);
 
-        // Check if already uploaded
         const exists = await fileExists(storagePath);
         if (exists) {
           result.filesSkipped++;
           continue;
         }
 
-        // Upload to Supabase Storage
-        const uploadResult = await uploadFile(filePath, storagePath, mimeType);
+        const { path: uploadedPath, size } = await uploadFileBuffer(buffer, storagePath, mimeType);
 
-        // Record in database
         await insertFax({
           tenant_id: tenant.id,
           threecx_fax_id: filename,
           direction: metadata.direction,
           remote_number: metadata.remoteNumber,
           original_filename: filename,
-          file_size: uploadResult.size,
-          storage_path: uploadResult.path,
+          file_size: size,
+          storage_path: uploadedPath,
           mime_type: mimeType,
-          fax_time: metadata.timestamp?.toISOString() || new Date(stat.mtime).toISOString(),
+          fax_time: metadata.timestamp?.toISOString() || new Date().toISOString(),
         });
 
         result.filesSynced++;
-        logger.debug(`Synced fax`, { tenantId: tenant.id, filename });
+        logger.debug(`Synced fax via SFTP`, { tenantId: tenant.id, filename });
       } catch (error) {
         const err = handleError(error);
-        result.errors.push({
-          filename: filePath,
-          error: err.message,
-        });
+        result.errors.push({ filename, error: err.message });
         logger.error("Failed to sync fax file", {
           tenantId: tenant.id,
-          filePath,
+          filename,
           error: err.message,
         });
       }
@@ -195,5 +192,9 @@ export async function syncFaxes(tenant: TenantConfig): Promise<FaxesSyncResult> 
       tenantId: tenant.id,
     });
     throw err;
+  } finally {
+    if (sftp) {
+      await closeSftpClient(sftp);
+    }
   }
 }

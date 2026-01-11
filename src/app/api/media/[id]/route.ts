@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 interface MediaFile {
   id: string;
   storage_path: string;
-  original_filename: string | null;
+  file_name: string | null;
   mime_type: string | null;
   file_type: string;
   tenant_id: string;
@@ -19,7 +20,7 @@ export async function GET(
   try {
     const supabase = await createClient();
 
-    // Get media file info
+    // Get media file info (uses user session for RLS)
     const { data, error } = await supabase
       .from("media_files")
       .select("*")
@@ -27,6 +28,7 @@ export async function GET(
       .single();
 
     if (error || !data) {
+      console.error("Media not found:", id, error?.message);
       return NextResponse.json(
         { error: "Media not found" },
         { status: 404 }
@@ -35,13 +37,17 @@ export async function GET(
 
     const media = data as unknown as MediaFile;
 
+    // Use admin client for storage access (bypasses storage RLS)
+    const adminClient = createAdminClient();
+
     // Generate signed URL from Supabase Storage (valid for 1 hour)
-    const { data: signedUrlData, error: urlError } = await supabase
+    const { data: signedUrlData, error: urlError } = await adminClient
       .storage
-      .from("media")
+      .from("backupwiz-files")
       .createSignedUrl(media.storage_path, 3600);
 
     if (urlError || !signedUrlData?.signedUrl) {
+      console.error("Failed to generate signed URL:", media.storage_path, urlError?.message);
       return NextResponse.json(
         { error: "Failed to generate URL" },
         { status: 500 }
@@ -50,7 +56,7 @@ export async function GET(
 
     return NextResponse.json({
       url: signedUrlData.signedUrl,
-      filename: media.original_filename,
+      filename: media.file_name,
       mime_type: media.mime_type,
       file_type: media.file_type,
     });

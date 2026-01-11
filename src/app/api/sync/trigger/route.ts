@@ -1,19 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getTenantContext } from "@/lib/tenant";
 
 export async function POST(request: NextRequest) {
   try {
+    const context = await getTenantContext();
+
+    if (!context.isAuthenticated) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
     const supabase = createAdminClient();
 
-    // Update sync status to indicate a manual trigger was requested
-    // The actual sync service will pick this up and run
+    // Set trigger_requested_at for all sync types for this tenant
+    // The sync service will check this and run immediately if recent
     const { error } = await supabase
       .from("sync_status")
       .update({
-        status: "running",
-        last_sync_at: new Date().toISOString(),
+        trigger_requested_at: new Date().toISOString(),
       })
-      .eq("sync_type", "messages");
+      .eq("tenant_id", context.tenantId);
 
     if (error) {
       console.error("Error triggering sync:", error);
@@ -23,12 +29,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Note: In production, you might want to trigger the actual sync service
-    // via a webhook, message queue, or other mechanism
-
     return NextResponse.json({
       success: true,
-      message: "Sync triggered successfully",
+      message: "Sync triggered - the sync service will run shortly",
     });
   } catch (error) {
     console.error("Error in sync trigger API:", error);

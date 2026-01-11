@@ -28,6 +28,33 @@ export const appSettings = pgTable("app_settings", {
 });
 
 // ============================================
+// STORAGE PLANS
+// ============================================
+export const storagePlans = pgTable(
+  "storage_plans",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    name: varchar("name", { length: 100 }).notNull(),
+    description: text("description"),
+    storageLimitGb: integer("storage_limit_gb").notNull(), // 0 = unlimited
+    priceMonthly: varchar("price_monthly", { length: 20 }).notNull().default("0"),
+    priceYearly: varchar("price_yearly", { length: 20 }),
+    currency: varchar("currency", { length: 3 }).default("USD"),
+    features: jsonb("features").default([]),
+    isActive: boolean("is_active").default(true),
+    isDefault: boolean("is_default").default(false),
+    sortOrder: integer("sort_order").default(0),
+    stripePriceIdMonthly: varchar("stripe_price_id_monthly", { length: 255 }),
+    stripePriceIdYearly: varchar("stripe_price_id_yearly", { length: 255 }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    activeIdx: index("idx_storage_plans_active").on(table.isActive, table.sortOrder),
+  })
+);
+
+// ============================================
 // TENANTS (Each 3CX instance/customer)
 // ============================================
 export const tenants = pgTable(
@@ -92,6 +119,13 @@ export const tenants = pgTable(
     // Billing/Plan
     planType: varchar("plan_type", { length: 50 }).default("free"),
     planExpiresAt: timestamp("plan_expires_at", { withTimezone: true }),
+    storagePlanId: uuid("storage_plan_id").references(() => storagePlans.id),
+    billingStatus: varchar("billing_status", { length: 50 }).default("active"), // active, past_due, canceled, trial
+    stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+    stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+    trialEndsAt: timestamp("trial_ends_at", { withTimezone: true }),
+    billingCycle: varchar("billing_cycle", { length: 20 }).default("monthly"), // monthly, yearly
+    storageLastCalculatedAt: timestamp("storage_last_calculated_at", { withTimezone: true }),
 
     // Metadata
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -119,6 +153,11 @@ export const userProfiles = pgTable(
     isActive: boolean("is_active").default(true),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
     preferences: jsonb("preferences").default({}),
+    // 2FA fields
+    totpSecretEncrypted: text("totp_secret_encrypted"),
+    totpEnabled: boolean("totp_enabled").default(false),
+    totpBackupCodesEncrypted: text("totp_backup_codes_encrypted"),
+    totpVerifiedAt: timestamp("totp_verified_at", { withTimezone: true }),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   },
@@ -187,6 +226,7 @@ export const conversations = pgTable(
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     threecxConversationId: varchar("threecx_conversation_id", { length: 255 }).notNull(),
     conversationName: varchar("conversation_name", { length: 255 }),
+    channelType: varchar("channel_type", { length: 50 }).default("internal"), // internal, sms, facebook, whatsapp, livechat, etc.
     isExternal: boolean("is_external").default(false),
     isGroupChat: boolean("is_group_chat").default(false),
     participantCount: integer("participant_count").default(2),
@@ -260,17 +300,18 @@ export const mediaFiles = pgTable(
   "media_files",
   {
     id: uuid("id").primaryKey().defaultRandom(),
+    fileName: varchar("file_name", { length: 255 }).notNull(), // Required filename
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     messageId: uuid("message_id").references(() => messages.id, { onDelete: "set null" }),
     conversationId: uuid("conversation_id").references(() => conversations.id, { onDelete: "cascade" }),
-    originalFilename: varchar("original_filename", { length: 255 }),
-    storagePath: varchar("storage_path", { length: 500 }).notNull(),
-    mimeType: varchar("mime_type", { length: 100 }),
     fileSize: bigint("file_size", { mode: "number" }),
+    mimeType: varchar("mime_type", { length: 100 }),
+    storagePath: varchar("storage_path", { length: 500 }).notNull(),
+    thumbnailPath: varchar("thumbnail_path", { length: 500 }),
     width: integer("width"),
     height: integer("height"),
     durationSeconds: integer("duration_seconds"),
-    thumbnailPath: varchar("thumbnail_path", { length: 500 }),
+    metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (table) => ({
@@ -457,9 +498,11 @@ export const syncStatus = pgTable(
     syncType: varchar("sync_type", { length: 50 }).notNull(),
     status: varchar("status", { length: 50 }).notNull().default("idle"),
     lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+    lastSyncedMessageAt: timestamp("last_synced_message_at", { withTimezone: true }), // Tracks actual last message timestamp for incremental sync
     lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
     lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
     lastError: text("last_error"),
+    triggerRequestedAt: timestamp("trigger_requested_at", { withTimezone: true }), // Manual sync trigger timestamp
     itemsSynced: integer("items_synced").default(0),
     itemsFailed: integer("items_failed").default(0),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
@@ -562,6 +605,162 @@ export const userGroupChatPermissions = pgTable(
 );
 
 // ============================================
+// RETENTION POLICIES
+// ============================================
+export const retentionPolicies = pgTable(
+  "retention_policies",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    dataType: varchar("data_type", { length: 50 }).notNull(), // messages, media, recordings, voicemails, faxes, call_logs, meetings
+    retentionDays: integer("retention_days"), // NULL = keep forever (no deletion)
+    isEnabled: boolean("is_enabled").default(true),
+    lastCleanupAt: timestamp("last_cleanup_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("idx_retention_policies_tenant").on(table.tenantId),
+    enabledIdx: index("idx_retention_policies_enabled").on(table.isEnabled, table.dataType),
+    uniqueTenantDataType: uniqueIndex("retention_policies_tenant_data_type_key").on(table.tenantId, table.dataType),
+  })
+);
+
+// ============================================
+// SMTP SETTINGS (Global)
+// ============================================
+export const smtpSettings = pgTable("smtp_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  host: varchar("host", { length: 255 }).notNull(),
+  port: integer("port").notNull().default(587),
+  username: varchar("username", { length: 255 }),
+  passwordEncrypted: text("password_encrypted"),
+  fromEmail: varchar("from_email", { length: 255 }).notNull(),
+  fromName: varchar("from_name", { length: 255 }).default("3CX BackupWiz"),
+  encryption: varchar("encryption", { length: 20 }).default("tls"), // none, ssl, tls
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// ============================================
+// NOTIFICATION TEMPLATES
+// ============================================
+export const notificationTemplates = pgTable("notification_templates", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  name: varchar("name", { length: 100 }).notNull().unique(),
+  subject: varchar("subject", { length: 500 }).notNull(),
+  bodyHtml: text("body_html").notNull(),
+  bodyText: text("body_text"),
+  variables: jsonb("variables").default([]), // Available template variables
+  notificationType: varchar("notification_type", { length: 50 }).notNull(),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// ============================================
+// NOTIFICATION LOGS
+// ============================================
+export const notificationLogs = pgTable(
+  "notification_logs",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").references(() => tenants.id, { onDelete: "set null" }),
+    userId: uuid("user_id").references(() => userProfiles.id, { onDelete: "set null" }),
+    notificationType: varchar("notification_type", { length: 50 }).notNull(),
+    channel: varchar("channel", { length: 20 }).notNull(), // email, sms, push
+    recipient: varchar("recipient", { length: 255 }).notNull(),
+    subject: varchar("subject", { length: 500 }),
+    status: varchar("status", { length: 20 }).default("pending"), // pending, sent, failed, delivered
+    errorMessage: text("error_message"),
+    metadata: jsonb("metadata").default({}),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: index("idx_notification_logs_tenant").on(table.tenantId),
+    userIdx: index("idx_notification_logs_user").on(table.userId),
+    statusIdx: index("idx_notification_logs_status").on(table.status),
+    createdIdx: index("idx_notification_logs_created").on(table.createdAt),
+  })
+);
+
+// ============================================
+// USER NOTIFICATION PREFERENCES
+// ============================================
+export const userNotificationPreferences = pgTable(
+  "user_notification_preferences",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => userProfiles.id, { onDelete: "cascade" }),
+    notificationType: varchar("notification_type", { length: 50 }).notNull(),
+    emailEnabled: boolean("email_enabled").default(true),
+    smsEnabled: boolean("sms_enabled").default(false),
+    pushEnabled: boolean("push_enabled").default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    userIdx: index("idx_user_notification_prefs_user").on(table.userId),
+    uniqueUserType: uniqueIndex("user_notification_preferences_user_type_key").on(table.userId, table.notificationType),
+  })
+);
+
+// ============================================
+// SMS SETTINGS (Wiretap Integration)
+// ============================================
+export const smsSettings = pgTable("sms_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  provider: varchar("provider", { length: 50 }).default("wiretap"),
+  apiKeyEncrypted: text("api_key_encrypted"),
+  apiSecretEncrypted: text("api_secret_encrypted"),
+  fromNumber: varchar("from_number", { length: 20 }),
+  webhookUrl: text("webhook_url"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// ============================================
+// PUSH NOTIFICATION SETTINGS
+// ============================================
+export const pushSettings = pgTable("push_settings", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  provider: varchar("provider", { length: 50 }).default("firebase"), // firebase or apns
+  firebaseProjectId: varchar("firebase_project_id", { length: 255 }),
+  firebasePrivateKeyEncrypted: text("firebase_private_key_encrypted"),
+  firebaseClientEmail: varchar("firebase_client_email", { length: 255 }),
+  apnsKeyId: varchar("apns_key_id", { length: 20 }),
+  apnsTeamId: varchar("apns_team_id", { length: 20 }),
+  apnsPrivateKeyEncrypted: text("apns_private_key_encrypted"),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+});
+
+// ============================================
+// USER PUSH TOKENS (Mobile Devices)
+// ============================================
+export const userPushTokens = pgTable(
+  "user_push_tokens",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => userProfiles.id, { onDelete: "cascade" }),
+    token: text("token").notNull(),
+    platform: varchar("platform", { length: 20 }).notNull(), // ios, android, web
+    deviceName: varchar("device_name", { length: 255 }),
+    isActive: boolean("is_active").default(true),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }).defaultNow(),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    userIdx: index("idx_user_push_tokens_user").on(table.userId),
+    uniqueUserToken: uniqueIndex("user_push_tokens_user_token_key").on(table.userId, table.token),
+  })
+);
+
+// ============================================
 // RELATIONS
 // ============================================
 export const tenantsRelations = relations(tenants, ({ many }) => ({
@@ -577,6 +776,7 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
   meetingRecordings: many(meetingRecordings),
   syncStatus: many(syncStatus),
   syncLogs: many(syncLogs),
+  retentionPolicies: many(retentionPolicies),
 }));
 
 export const userProfilesRelations = relations(userProfiles, ({ many }) => ({
@@ -660,3 +860,14 @@ export type CallLog = typeof callLogs.$inferSelect;
 export type MeetingRecording = typeof meetingRecordings.$inferSelect;
 export type UserExtensionPermission = typeof userExtensionPermissions.$inferSelect;
 export type UserGroupChatPermission = typeof userGroupChatPermissions.$inferSelect;
+export type RetentionPolicy = typeof retentionPolicies.$inferSelect;
+export type NewRetentionPolicy = typeof retentionPolicies.$inferInsert;
+export type StoragePlan = typeof storagePlans.$inferSelect;
+export type NewStoragePlan = typeof storagePlans.$inferInsert;
+export type SmtpSettings = typeof smtpSettings.$inferSelect;
+export type NotificationTemplate = typeof notificationTemplates.$inferSelect;
+export type NotificationLog = typeof notificationLogs.$inferSelect;
+export type UserNotificationPreference = typeof userNotificationPreferences.$inferSelect;
+export type SmsSettings = typeof smsSettings.$inferSelect;
+export type PushSettings = typeof pushSettings.$inferSelect;
+export type UserPushToken = typeof userPushTokens.$inferSelect;

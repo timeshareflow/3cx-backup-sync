@@ -3,6 +3,9 @@ import { handleError } from "../utils/errors";
 import { syncMessages, MessageSyncResult } from "./messages";
 import { syncMedia, syncRecordings, syncVoicemails, MediaSyncResult } from "./media";
 import { syncExtensions, ExtensionSyncResult } from "./extensions";
+import { syncFaxes, FaxesSyncResult } from "./faxes";
+import { syncMeetings, MeetingsSyncResult } from "./meetings";
+import { syncCdr, CdrSyncResult } from "./cdr";
 import { createSyncLog, updateSyncLog } from "../storage/supabase";
 import { TenantConfig, getActiveTenants, getTenantPool, testTenantConnection } from "../tenant";
 
@@ -11,6 +14,9 @@ export interface SyncResult {
   media: MediaSyncResult;
   recordings: MediaSyncResult;
   voicemails: MediaSyncResult;
+  faxes: FaxesSyncResult;
+  meetings: MeetingsSyncResult;
+  cdr: CdrSyncResult;
   extensions: ExtensionSyncResult;
   duration: number;
 }
@@ -55,6 +61,9 @@ export async function runTenantSync(
     media: { filesSynced: 0, filesSkipped: 0, errors: [] },
     recordings: { filesSynced: 0, filesSkipped: 0, errors: [] },
     voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },
     extensions: { extensionsSynced: 0, errors: [] },
     duration: 0,
   };
@@ -69,6 +78,15 @@ export async function runTenantSync(
     // Sync messages (database data - works remotely)
     if (tenant.backup_chats) {
       result.messages = await syncMessages(batchSize, pool, tenant.id);
+    }
+
+    // Sync CDR (call detail records from database)
+    if (tenant.backup_cdr) {
+      try {
+        result.cdr = await syncCdr(pool, tenant.id);
+      } catch (err) {
+        logger.warn("CDR sync failed, continuing", { error: (err as Error).message });
+      }
     }
 
     // Sync media files via SFTP (only if not skipped and tenant has SFTP configured)
@@ -90,6 +108,18 @@ export async function runTenantSync(
       } catch (err) {
         logger.warn("Voicemails sync failed, continuing", { error: (err as Error).message });
       }
+
+      try {
+        result.faxes = await syncFaxes(tenant);
+      } catch (err) {
+        logger.warn("Faxes sync failed, continuing", { error: (err as Error).message });
+      }
+
+      try {
+        result.meetings = await syncMeetings(tenant);
+      } catch (err) {
+        logger.warn("Meetings sync failed, continuing", { error: (err as Error).message });
+      }
     }
 
     // Sync extensions
@@ -104,12 +134,15 @@ export async function runTenantSync(
       completed_at: new Date().toISOString(),
       status: "success",
       messages_synced: result.messages.messagesSynced,
-      media_synced: result.media.filesSynced + result.recordings.filesSynced + result.voicemails.filesSynced,
+      media_synced: result.media.filesSynced + result.recordings.filesSynced + result.voicemails.filesSynced + result.faxes.filesSynced + result.meetings.filesSynced,
       errors_count:
         result.messages.errors.length +
         result.media.errors.length +
         result.recordings.errors.length +
         result.voicemails.errors.length +
+        result.faxes.errors.length +
+        result.meetings.errors.length +
+        result.cdr.errors.length +
         result.extensions.errors.length,
     });
 
@@ -119,6 +152,9 @@ export async function runTenantSync(
       mediaSynced: result.media.filesSynced,
       recordingsSynced: result.recordings.filesSynced,
       voicemailsSynced: result.voicemails.filesSynced,
+      faxesSynced: result.faxes.filesSynced,
+      meetingsSynced: result.meetings.filesSynced,
+      cdrSynced: result.cdr.recordsSynced,
       extensionsSynced: result.extensions.extensionsSynced,
       duration: `${result.duration}ms`,
     });
@@ -176,6 +212,9 @@ export async function runMultiTenantSync(options?: {
       media: { filesSynced: 0, filesSkipped: 0, errors: [] },
       recordings: { filesSynced: 0, filesSkipped: 0, errors: [] },
       voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },
       extensions: { extensionsSynced: 0, errors: [] },
       duration: 0,
     };
@@ -196,6 +235,9 @@ export async function runMultiTenantSync(options?: {
       tenantResult.media = syncResult.media;
       tenantResult.recordings = syncResult.recordings;
       tenantResult.voicemails = syncResult.voicemails;
+      tenantResult.faxes = syncResult.faxes;
+      tenantResult.meetings = syncResult.meetings;
+      tenantResult.cdr = syncResult.cdr;
       tenantResult.extensions = syncResult.extensions;
       tenantResult.duration = syncResult.duration;
       tenantResult.success = true;

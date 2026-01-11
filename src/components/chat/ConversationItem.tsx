@@ -85,10 +85,23 @@ export function ConversationCard({ conversation }: ConversationItemProps) {
 
   const initial = displayName.charAt(0).toUpperCase();
 
+  // Different styling for group chats vs regular conversations
+  const borderClass = conversation.is_group_chat
+    ? "border-purple-200 hover:border-purple-400"
+    : conversation.is_external
+    ? "border-amber-200 hover:border-amber-400"
+    : "border-slate-200 hover:border-teal-300";
+
+  const bgClass = conversation.is_group_chat
+    ? "from-purple-50 to-violet-50"
+    : conversation.is_external
+    ? "from-amber-50 to-orange-50"
+    : "from-slate-50 to-white";
+
   return (
     <Link
       href={`/conversations/${conversation.id}`}
-      className="block p-3 bg-gradient-to-br from-slate-50 to-white rounded-xl border border-slate-200 hover:border-teal-300 hover:shadow-md transition-all group"
+      className={`block p-3 bg-gradient-to-br ${bgClass} rounded-xl border ${borderClass} hover:shadow-md transition-all group`}
     >
       <div className="flex flex-col items-center text-center">
         {/* Avatar */}
@@ -111,8 +124,8 @@ export function ConversationCard({ conversation }: ConversationItemProps) {
           {displayName}
         </p>
 
-        {/* Extension ID if different from name */}
-        {primaryParticipant?.external_id && primaryParticipant.external_name && (
+        {/* Extension ID if different from name - hide for group chats */}
+        {!conversation.is_group_chat && primaryParticipant?.external_id && primaryParticipant.external_name && (
           <p className="text-xs text-slate-500 truncate w-full">
             Ext. {primaryParticipant.external_id}
           </p>

@@ -10,7 +10,22 @@ export interface SearchFilters {
   sender: string;
   hasMedia: boolean | null;
   conversationId: string;
+  channelType: string;
 }
+
+// Channel types that 3CX supports
+export const CHANNEL_TYPES = [
+  { value: "", label: "All Channels" },
+  { value: "internal", label: "Internal Chat" },
+  { value: "sms", label: "SMS" },
+  { value: "mms", label: "MMS" },
+  { value: "whatsapp", label: "WhatsApp" },
+  { value: "facebook", label: "Facebook" },
+  { value: "livechat", label: "Live Chat" },
+  { value: "telegram", label: "Telegram" },
+  { value: "teams", label: "Microsoft Teams" },
+  { value: "external", label: "Other External" },
+];
 
 interface SearchFiltersProps {
   filters: SearchFilters;
@@ -31,6 +46,7 @@ export function SearchFiltersPanel({
     filters.sender,
     filters.hasMedia !== null,
     filters.conversationId,
+    filters.channelType,
   ].filter(Boolean).length;
 
   const clearFilters = () => {
@@ -40,6 +56,7 @@ export function SearchFiltersPanel({
       sender: "",
       hasMedia: null,
       conversationId: "",
+      channelType: "",
     });
   };
 
@@ -78,6 +95,26 @@ export function SearchFiltersPanel({
               onFiltersChange({ ...filters, endDate: date })
             }
           />
+
+          {/* Channel Type Filter */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Channel
+            </label>
+            <select
+              value={filters.channelType}
+              onChange={(e) =>
+                onFiltersChange({ ...filters, channelType: e.target.value })
+              }
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            >
+              {CHANNEL_TYPES.map((channel) => (
+                <option key={channel.value} value={channel.value}>
+                  {channel.label}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* Sender Filter */}
           <div>

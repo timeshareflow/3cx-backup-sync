@@ -1,11 +1,15 @@
 import { StatsOverview } from "@/components/admin/StatsOverview";
 import { SyncStatusCard } from "@/components/admin/SyncStatusCard";
+import { StorageMonitor } from "@/components/storage/StorageMonitor";
 import Link from "next/link";
 import { MessageSquare, Search, Users, Settings, LayoutDashboard } from "lucide-react";
 
 export default function Home() {
   return (
     <div className="space-y-6 p-6 max-w-7xl mx-auto">
+      {/* Storage Warning Banner */}
+      <StorageMonitor variant="banner" />
+
       {/* Header */}
       <div className="flex items-center gap-4">
         <div className="p-3 bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl shadow-lg shadow-teal-500/25">
@@ -21,7 +25,10 @@ export default function Home() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <SyncStatusCard />
+        <StorageMonitor variant="full" />
+      </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-200 p-6">
           <h2 className="text-lg font-bold text-slate-800 mb-4">Quick Actions</h2>
           <div className="grid grid-cols-2 gap-4">

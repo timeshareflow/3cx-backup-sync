@@ -13,6 +13,9 @@ import {
   UserCog,
   Shield,
   LogOut,
+  Image,
+  BarChart3,
+  CreditCard,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -26,7 +29,9 @@ interface NavItem {
 const navigation: NavItem[] = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Conversations", href: "/conversations", icon: MessageSquare },
+  { name: "Media", href: "/media", icon: Image },
   { name: "Search", href: "/search", icon: Search },
+  { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Extensions", href: "/extensions", icon: Users },
 ];
 
@@ -34,6 +39,7 @@ const adminNavigation: NavItem[] = [
   { name: "3CX Setup", href: "/setup", icon: Settings, requiredRoles: ["admin"] },
   { name: "Sync Status", href: "/admin/sync-status", icon: Activity, requiredRoles: ["super_admin", "admin"] },
   { name: "User Management", href: "/admin/users", icon: UserCog, requiredRoles: ["super_admin", "admin"] },
+  { name: "Billing", href: "/admin/billing", icon: CreditCard, requiredRoles: ["super_admin", "admin"] },
   { name: "Tenant Management", href: "/admin/tenants", icon: Building2, requiredRoles: ["super_admin"] },
   { name: "Settings", href: "/admin/settings", icon: Settings, requiredRoles: ["super_admin", "admin"] },
   { name: "Super Admin", href: "/admin/super", icon: Shield, requiredRoles: ["super_admin"] },
