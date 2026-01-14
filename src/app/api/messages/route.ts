@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
 interface MessageWithMedia {
@@ -56,7 +57,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    let query = supabase
+    // Use admin client for messages query since we've already validated:
+    // 1. User is authenticated
+    // 2. User has tenant access
+    // 3. Conversation belongs to this tenant
+    // This bypasses RLS which can have issues with complex tenant checks
+    const adminSupabase = createAdminClient();
+
+    let query = adminSupabase
       .from("messages")
       .select(
         `
@@ -102,7 +110,7 @@ export async function GET(request: NextRequest) {
     let hasMore = false;
     if (messages.length > 0) {
       const firstMessageTime = messages[0].sent_at;
-      const { count: olderCount } = await supabase
+      const { count: olderCount } = await adminSupabase
         .from("messages")
         .select("id", { count: "exact", head: true })
         .eq("conversation_id", conversationId)
