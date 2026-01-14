@@ -4,6 +4,7 @@ import { handleError } from "../utils/errors";
 import {
   getNewMessages,
   getConversations,
+  getAllLiveConversations,
 } from "../threecx/queries";
 import {
   upsertConversation,
@@ -98,6 +99,59 @@ function detectMediaInMessage(message: string | null): {
   return { hasMedia: false, messageType: "text" };
 }
 
+// Sync all conversations from live table (including empty ones)
+async function syncAllConversations(
+  pool: Pool | undefined,
+  tenantId: string | undefined
+): Promise<number> {
+  let conversationsCreated = 0;
+
+  try {
+    // Get ALL conversations from live table, including empty group chats
+    const liveConversations = await getAllLiveConversations(pool);
+
+    for (const conv of liveConversations) {
+      try {
+        // Check if conversation already exists in Supabase
+        const existingId = await getConversationId(conv.conversation_id, tenantId);
+
+        if (!existingId) {
+          // Create the conversation - participants will be synced when messages come in
+          await upsertConversation({
+            threecx_conversation_id: conv.conversation_id,
+            conversation_name: conv.chat_name || null,
+            channel_type: "internal", // Default, will be updated when messages sync
+            is_external: conv.is_external,
+            is_group_chat: conv.chat_name !== null, // Named conversations are typically group chats
+            tenant_id: tenantId,
+          });
+
+          conversationsCreated++;
+
+          logger.debug(`Created conversation from live table: ${conv.conversation_id}`, {
+            name: conv.chat_name,
+            messageCount: conv.message_count,
+          });
+        }
+      } catch (error) {
+        logger.warn(`Failed to sync conversation ${conv.conversation_id}`, {
+          error: (error as Error).message,
+        });
+      }
+    }
+
+    if (conversationsCreated > 0) {
+      logger.info(`Created ${conversationsCreated} new conversations from live table`);
+    }
+  } catch (error) {
+    logger.warn("Failed to sync live conversations", {
+      error: (error as Error).message,
+    });
+  }
+
+  return conversationsCreated;
+}
+
 export async function syncMessages(
   batchSize: number = 100,
   pool?: Pool,
@@ -111,6 +165,11 @@ export async function syncMessages(
 
   try {
     await updateSyncStatus("messages", "running", { tenantId });
+
+    // First, sync ALL conversations from live table (including empty group chats)
+    // This ensures new group chats are visible even before their first message
+    const emptyConversationsCreated = await syncAllConversations(pool, tenantId);
+    result.conversationsCreated += emptyConversationsCreated;
 
     // Get last synced timestamp
     let lastSynced = await getLastSyncedTimestamp("messages", tenantId);
@@ -221,7 +280,10 @@ export async function syncMessages(
             result.messagesSynced++;
           }
 
-          lastTimestamp = msg.time_sent.toISOString();
+          // Store the timestamp with a 1ms buffer to avoid re-fetching the same message
+          // due to microsecond precision differences between PostgreSQL and JavaScript
+          const msgTimestamp = new Date(msg.time_sent.getTime() + 1);
+          lastTimestamp = msgTimestamp.toISOString();
         } catch (error) {
           const err = handleError(error);
           result.errors.push({
@@ -238,10 +300,10 @@ export async function syncMessages(
 
       totalProcessed += messages.length;
 
-      // Update the cursor for next batch - use the last message's timestamp
+      // Update the cursor for next batch - use the last message's timestamp + 1ms buffer
       if (messages.length > 0) {
         const lastMsg = messages[messages.length - 1];
-        lastSynced = lastMsg.time_sent;
+        lastSynced = new Date(lastMsg.time_sent.getTime() + 1);
       }
 
       // If we got fewer messages than batchSize, we've reached the end

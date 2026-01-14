@@ -391,6 +391,41 @@ export async function getFileMappings(
   }, pool);
 }
 
+// Get ALL conversations from the live chat_conversation table (including those with 0 messages)
+export async function getAllLiveConversations(
+  pool?: Pool
+): Promise<Array<{
+  conversation_id: string;
+  chat_name: string | null;
+  is_external: boolean;
+  message_count: number;
+}>> {
+  return withClient(async (client) => {
+    // Query directly from chat_conversation table to get ALL conversations,
+    // including empty group chats that have no messages yet.
+    // Note: We only query columns that exist in the base table, not the views.
+    // Participants will be synced when messages are synced.
+    const query = `
+      SELECT
+        c.id::text as conversation_id,
+        c.public_name as chat_name,
+        c.is_external,
+        COUNT(m.id_message) as message_count
+      FROM chat_conversation c
+      LEFT JOIN chat_message m ON m.fkid_chat_conversation = c.id
+      GROUP BY c.id, c.public_name, c.is_external
+      ORDER BY c.id
+    `;
+
+    const result = await client.query(query);
+    logger.info(`Fetched ${result.rows.length} live conversations from 3CX (including empty ones)`);
+    return result.rows.map((row) => ({
+      ...row,
+      message_count: parseInt(row.message_count, 10),
+    }));
+  }, pool);
+}
+
 // Get all file mappings for recent messages (for bulk sync)
 export async function getAllFileMappings(
   limit: number = 1000,
