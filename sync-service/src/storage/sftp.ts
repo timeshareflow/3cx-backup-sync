@@ -105,12 +105,27 @@ export async function listRemoteFilesRecursive(
   }
 }
 
+// Timeout wrapper for async operations
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs}ms`)), timeoutMs)
+    ),
+  ]);
+}
+
 export async function downloadFile(
   sftp: SftpClient,
-  remotePath: string
+  remotePath: string,
+  timeoutMs: number = 120000 // 2 minute default timeout per file
 ): Promise<Buffer> {
   try {
-    const buffer = await sftp.get(remotePath);
+    const buffer = await withTimeout(
+      sftp.get(remotePath),
+      timeoutMs,
+      `Download ${remotePath}`
+    );
     if (Buffer.isBuffer(buffer)) {
       return buffer;
     }

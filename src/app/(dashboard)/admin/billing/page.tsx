@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -46,15 +46,35 @@ interface BillingStatus {
   plan: StoragePlan | null;
 }
 
-export default function BillingPage() {
+// Separate component that uses useSearchParams
+function BillingMessages() {
   const searchParams = useSearchParams();
+  const success = searchParams.get("success");
+  const canceled = searchParams.get("canceled");
+
+  return (
+    <>
+      {success && (
+        <div className="p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3">
+          <Check className="h-5 w-5 text-green-600" />
+          <span className="text-green-800">Payment successful! Your plan has been updated.</span>
+        </div>
+      )}
+      {canceled && (
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3">
+          <AlertTriangle className="h-5 w-5 text-amber-600" />
+          <span className="text-amber-800">Checkout was canceled. No changes were made.</span>
+        </div>
+      )}
+    </>
+  );
+}
+
+export default function BillingPage() {
   const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
   const [availablePlans, setAvailablePlans] = useState<StoragePlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
-
-  const success = searchParams.get("success");
-  const canceled = searchParams.get("canceled");
 
   useEffect(() => {
     fetchData();
@@ -148,18 +168,9 @@ export default function BillingPage() {
       </div>
 
       {/* Success/Cancel Messages */}
-      {success && (
-        <div className="p-4 bg-green-50 border border-green-200 rounded-xl flex items-center gap-3">
-          <Check className="h-5 w-5 text-green-600" />
-          <span className="text-green-800">Payment successful! Your plan has been updated.</span>
-        </div>
-      )}
-      {canceled && (
-        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center gap-3">
-          <AlertTriangle className="h-5 w-5 text-amber-600" />
-          <span className="text-amber-800">Checkout was canceled. No changes were made.</span>
-        </div>
-      )}
+      <Suspense fallback={null}>
+        <BillingMessages />
+      </Suspense>
 
       {/* Current Plan & Storage */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

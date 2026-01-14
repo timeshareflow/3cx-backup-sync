@@ -2,19 +2,30 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2024-06-20" as Stripe.LatestApiVersion,
-});
+// Lazy initialization to avoid build-time errors when env vars are not set
+function getStripeClient(): Stripe | null {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) return null;
+  return new Stripe(key, {
+    apiVersion: "2024-06-20" as Stripe.LatestApiVersion,
+  });
+}
 
-const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET || "";
-
-// Create admin client for webhook handling
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || "",
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ""
-);
+function getSupabaseAdmin() {
+  return createClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL || "",
+    process.env.SUPABASE_SERVICE_ROLE_KEY || ""
+  );
+}
 
 export async function POST(request: NextRequest) {
+  const stripe = getStripeClient();
+  const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!stripe || !webhookSecret) {
+    return NextResponse.json({ error: "Stripe not configured" }, { status: 500 });
+  }
+
   const body = await request.text();
   const signature = request.headers.get("stripe-signature");
 
@@ -89,7 +100,7 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   }
 
   // Update tenant with subscription info
-  await supabaseAdmin
+  await getSupabaseAdmin()
     .from("tenants")
     .update({
       storage_plan_id: planId,
@@ -108,7 +119,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
 
   if (!tenantId) {
     // Try to find tenant by subscription ID
-    const { data: tenant } = await supabaseAdmin
+    const { data: tenant } = await getSupabaseAdmin()
       .from("tenants")
       .select("id")
       .eq("stripe_subscription_id", subscription.id)
@@ -140,7 +151,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
       billingStatus = subscription.status;
   }
 
-  await supabaseAdmin
+  await getSupabaseAdmin()
     .from("tenants")
     .update({
       billing_status: billingStatus,
@@ -153,7 +164,7 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   // Find tenant by subscription ID
-  const { data: tenant } = await supabaseAdmin
+  const { data: tenant } = await getSupabaseAdmin()
     .from("tenants")
     .select("id")
     .eq("stripe_subscription_id", subscription.id)
@@ -165,13 +176,13 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   }
 
   // Get default free plan
-  const { data: freePlan } = await supabaseAdmin
+  const { data: freePlan } = await getSupabaseAdmin()
     .from("storage_plans")
     .select("id")
     .eq("is_default", true)
     .single();
 
-  await supabaseAdmin
+  await getSupabaseAdmin()
     .from("tenants")
     .update({
       billing_status: "canceled",
@@ -189,7 +200,7 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
   const subscriptionId = (invoice as unknown as { subscription?: string }).subscription;
   if (!subscriptionId) return;
 
-  await supabaseAdmin
+  await getSupabaseAdmin()
     .from("tenants")
     .update({
       billing_status: "active",
@@ -205,7 +216,7 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   const subscriptionId = (invoice as unknown as { subscription?: string }).subscription;
   if (!subscriptionId) return;
 
-  await supabaseAdmin
+  await getSupabaseAdmin()
     .from("tenants")
     .update({
       billing_status: "past_due",

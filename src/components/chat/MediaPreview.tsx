@@ -381,7 +381,7 @@ function MediaViewer({
           <video
             src={url}
             controls
-            autoPlay
+            playsInline
             className="max-h-[85vh] max-w-[90vw] rounded-lg shadow-2xl"
           >
             Your browser does not support video playback.

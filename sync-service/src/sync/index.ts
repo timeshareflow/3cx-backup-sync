@@ -9,6 +9,19 @@ import { syncCdr, CdrSyncResult } from "./cdr";
 import { createSyncLog, updateSyncLog } from "../storage/supabase";
 import { TenantConfig, getActiveTenants, getTenantPool, testTenantConnection } from "../tenant";
 
+// Global timeout for entire tenant sync operation (10 minutes)
+const TENANT_SYNC_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Timeout wrapper for async operations
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${operation} timed out after ${timeoutMs / 1000}s`)), timeoutMs)
+    ),
+  ]);
+}
+
 export interface SyncResult {
   messages: MessageSyncResult;
   media: MediaSyncResult;
@@ -220,16 +233,24 @@ export async function runMultiTenantSync(options?: {
     };
 
     try {
-      // Test remote connection first
-      const connected = await testTenantConnection(tenant);
+      // Test remote connection first (with 30s timeout)
+      const connected = await withTimeout(
+        testTenantConnection(tenant),
+        30000,
+        `Connection test for ${tenant.name}`
+      );
       if (!connected) {
         tenantResult.error = `Failed to connect to 3CX database at ${tenant.threecx_host}`;
         results.push(tenantResult);
         continue;
       }
 
-      // Run sync for this tenant
-      const syncResult = await runTenantSync(tenant, options);
+      // Run sync for this tenant (with global timeout)
+      const syncResult = await withTimeout(
+        runTenantSync(tenant, options),
+        TENANT_SYNC_TIMEOUT_MS,
+        `Sync for tenant ${tenant.name}`
+      );
 
       tenantResult.messages = syncResult.messages;
       tenantResult.media = syncResult.media;

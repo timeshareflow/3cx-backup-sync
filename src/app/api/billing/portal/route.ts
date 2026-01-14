@@ -3,12 +3,22 @@ import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenant";
 import Stripe from "stripe";
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY || "", {
-  apiVersion: "2024-06-20" as Stripe.LatestApiVersion,
-});
+// Lazy initialization to avoid build-time errors
+function getStripeClient(): Stripe | null {
+  const key = process.env.STRIPE_SECRET_KEY;
+  if (!key) return null;
+  return new Stripe(key, {
+    apiVersion: "2024-06-20" as Stripe.LatestApiVersion,
+  });
+}
 
 export async function POST(request: NextRequest) {
   try {
+    const stripe = getStripeClient();
+    if (!stripe) {
+      return NextResponse.json({ error: "Stripe not configured" }, { status: 500 });
+    }
+
     const context = await getTenantContext();
 
     if (!context.isAuthenticated) {

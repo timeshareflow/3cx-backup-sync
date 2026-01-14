@@ -75,10 +75,29 @@ export default function MediaGalleryPage() {
     }
   };
 
-  const closeViewer = () => {
+  const closeViewer = useCallback(() => {
     setSelectedMedia(null);
     setMediaUrl(null);
-  };
+  }, []);
+
+  // Handle Escape key to close viewer
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && selectedMedia) {
+        closeViewer();
+      }
+    };
+
+    if (selectedMedia) {
+      document.addEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = "hidden";
+    }
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      document.body.style.overflow = "";
+    };
+  }, [selectedMedia, closeViewer]);
 
   const getFileType = (mimeType: string | null): "image" | "video" | "audio" | "document" => {
     if (!mimeType) return "document";
@@ -228,11 +247,20 @@ export default function MediaGalleryPage() {
       {/* Media Viewer Modal */}
       {selectedMedia && (
         <div
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center"
+          className="fixed inset-0 z-50 bg-black/95 flex items-center justify-center"
           onClick={closeViewer}
         >
+          {/* Close button - Fixed position, always visible */}
+          <button
+            onClick={closeViewer}
+            className="absolute top-4 right-4 z-20 p-3 bg-white/10 hover:bg-white/20 backdrop-blur-sm text-white rounded-full transition-colors border border-white/20"
+            title="Close (Esc)"
+          >
+            <X className="h-6 w-6" />
+          </button>
+
           {/* Header */}
-          <div className="absolute top-0 left-0 right-0 p-4 flex items-center justify-between bg-gradient-to-b from-black/50 to-transparent">
+          <div className="absolute top-0 left-0 right-20 p-4 flex items-center justify-between bg-gradient-to-b from-black/70 to-transparent">
             <div>
               <p className="text-white font-medium">{selectedMedia.file_name}</p>
               <p className="text-white/60 text-sm">{formatFileSize(selectedMedia.file_size)}</p>
@@ -243,18 +271,14 @@ export default function MediaGalleryPage() {
                   href={mediaUrl}
                   target="_blank"
                   rel="noopener noreferrer"
+                  download={selectedMedia.file_name}
                   onClick={(e) => e.stopPropagation()}
-                  className="p-2 text-white hover:bg-white/20 rounded-lg"
+                  className="flex items-center gap-2 px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg backdrop-blur-sm border border-white/20"
                 >
-                  <Download className="h-5 w-5" />
+                  <Download className="h-4 w-4" />
+                  Download
                 </a>
               )}
-              <button
-                onClick={closeViewer}
-                className="p-2 text-white hover:bg-white/20 rounded-lg"
-              >
-                <X className="h-5 w-5" />
-              </button>
             </div>
           </div>
 
@@ -275,12 +299,15 @@ export default function MediaGalleryPage() {
               <video
                 src={mediaUrl}
                 controls
-                autoPlay
+                controlsList="nodownload"
                 className="max-w-full max-h-[80vh] rounded-lg"
-              />
+                playsInline
+              >
+                Your browser does not support video playback.
+              </video>
             ) : getFileType(selectedMedia.mime_type) === "audio" ? (
               <div className="bg-white rounded-xl p-8">
-                <audio src={mediaUrl} controls autoPlay className="w-96" />
+                <audio src={mediaUrl} controls className="w-96" />
               </div>
             ) : (
               <div className="bg-white rounded-xl p-8 text-center">
@@ -299,6 +326,13 @@ export default function MediaGalleryPage() {
                 </a>
               </div>
             )}
+          </div>
+
+          {/* Bottom hint */}
+          <div className="absolute bottom-4 left-0 right-0 flex justify-center">
+            <span className="text-white/50 text-sm bg-black/30 px-4 py-2 rounded-full backdrop-blur-sm">
+              Press Esc or click outside to close
+            </span>
           </div>
         </div>
       )}
