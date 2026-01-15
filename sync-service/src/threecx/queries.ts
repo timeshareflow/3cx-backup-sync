@@ -401,21 +401,54 @@ export async function getAllLiveConversations(
   message_count: number;
 }>> {
   return withClient(async (client) => {
-    // Query directly from chat_conversation table to get ALL conversations,
-    // including empty group chats that have no messages yet.
-    // Note: We only query columns that exist in the base table, not the views.
-    // Participants will be synced when messages are synced.
-    const query = `
-      SELECT
-        c.id::text as conversation_id,
-        c.public_name as chat_name,
-        c.is_external,
-        COUNT(m.id_message) as message_count
-      FROM chat_conversation c
-      LEFT JOIN chat_message m ON m.fkid_chat_conversation = c.id
-      GROUP BY c.id, c.public_name, c.is_external
-      ORDER BY c.id
-    `;
+    // Check if chat_history_view exists to get generated names
+    const viewCheck = await client.query(`
+      SELECT table_name
+      FROM information_schema.views
+      WHERE table_schema = 'public'
+      AND table_name = 'chat_history_view'
+    `);
+    const hasHistoryView = viewCheck.rows.length > 0;
+
+    let query: string;
+
+    if (hasHistoryView) {
+      // Use chat_history_view to get generated names for conversations
+      // The view generates a chat_name from participants when public_name is null/empty
+      // NULLIF handles empty strings by converting them to NULL for COALESCE
+      query = `
+        SELECT
+          c.id::text as conversation_id,
+          COALESCE(NULLIF(c.public_name, ''), h.chat_name) as chat_name,
+          c.is_external,
+          COUNT(m.id_message) as message_count
+        FROM chat_conversation c
+        LEFT JOIN chat_message m ON m.fkid_chat_conversation = c.id
+        LEFT JOIN LATERAL (
+          SELECT DISTINCT chat_name
+          FROM chat_history_view
+          WHERE conversation_id = c.id
+          AND chat_name IS NOT NULL
+          AND chat_name != ''
+          LIMIT 1
+        ) h ON true
+        GROUP BY c.id, c.public_name, c.is_external, h.chat_name
+        ORDER BY c.id
+      `;
+    } else {
+      // Fallback: just use public_name from chat_conversation
+      query = `
+        SELECT
+          c.id::text as conversation_id,
+          NULLIF(c.public_name, '') as chat_name,
+          c.is_external,
+          COUNT(m.id_message) as message_count
+        FROM chat_conversation c
+        LEFT JOIN chat_message m ON m.fkid_chat_conversation = c.id
+        GROUP BY c.id, c.public_name, c.is_external
+        ORDER BY c.id
+      `;
+    }
 
     const result = await client.query(query);
     logger.info(`Fetched ${result.rows.length} live conversations from 3CX (including empty ones)`);

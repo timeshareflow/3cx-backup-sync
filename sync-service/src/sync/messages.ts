@@ -103,8 +103,9 @@ function detectMediaInMessage(message: string | null): {
 async function syncAllConversations(
   pool: Pool | undefined,
   tenantId: string | undefined
-): Promise<number> {
+): Promise<{ created: number; updated: number }> {
   let conversationsCreated = 0;
+  let conversationsUpdated = 0;
 
   try {
     // Get ALL conversations from live table, including empty group chats
@@ -132,6 +133,21 @@ async function syncAllConversations(
             name: conv.chat_name,
             messageCount: conv.message_count,
           });
+        } else if (conv.chat_name) {
+          // Update existing conversation if we now have a name (fills in "unknown" names)
+          await upsertConversation({
+            threecx_conversation_id: conv.conversation_id,
+            conversation_name: conv.chat_name,
+            channel_type: "internal",
+            is_external: conv.is_external,
+            is_group_chat: true,
+            tenant_id: tenantId,
+          });
+          conversationsUpdated++;
+
+          logger.debug(`Updated conversation name: ${conv.conversation_id}`, {
+            name: conv.chat_name,
+          });
         }
       } catch (error) {
         logger.warn(`Failed to sync conversation ${conv.conversation_id}`, {
@@ -140,8 +156,8 @@ async function syncAllConversations(
       }
     }
 
-    if (conversationsCreated > 0) {
-      logger.info(`Created ${conversationsCreated} new conversations from live table`);
+    if (conversationsCreated > 0 || conversationsUpdated > 0) {
+      logger.info(`Conversations from live table: ${conversationsCreated} created, ${conversationsUpdated} updated`);
     }
   } catch (error) {
     logger.warn("Failed to sync live conversations", {
@@ -149,7 +165,7 @@ async function syncAllConversations(
     });
   }
 
-  return conversationsCreated;
+  return { created: conversationsCreated, updated: conversationsUpdated };
 }
 
 export async function syncMessages(
@@ -168,8 +184,8 @@ export async function syncMessages(
 
     // First, sync ALL conversations from live table (including empty group chats)
     // This ensures new group chats are visible even before their first message
-    const emptyConversationsCreated = await syncAllConversations(pool, tenantId);
-    result.conversationsCreated += emptyConversationsCreated;
+    const conversationSync = await syncAllConversations(pool, tenantId);
+    result.conversationsCreated += conversationSync.created;
 
     // Get last synced timestamp
     let lastSynced = await getLastSyncedTimestamp("messages", tenantId);
