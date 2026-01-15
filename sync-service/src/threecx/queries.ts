@@ -399,6 +399,7 @@ export async function getAllLiveConversations(
   chat_name: string | null;
   is_external: boolean;
   message_count: number;
+  is_group_chat: boolean;
 }>> {
   return withClient(async (client) => {
     // Check if chat_history_view exists to get generated names
@@ -416,12 +417,19 @@ export async function getAllLiveConversations(
       // Use chat_history_view to get generated names for conversations
       // The view generates a chat_name from participants when public_name is null/empty
       // NULLIF handles empty strings by converting them to NULL for COALESCE
+      // Determine is_group_chat by: public_name is set OR more than 2 participants in party column
+      // For 1-on-1 chats with no messages (no chat_history_view entry), generate name from extensions
       query = `
         SELECT
           c.id::text as conversation_id,
-          COALESCE(NULLIF(c.public_name, ''), h.chat_name) as chat_name,
+          COALESCE(
+            NULLIF(c.public_name, ''),
+            h.chat_name,
+            ext_names.generated_name
+          ) as chat_name,
           c.is_external,
-          COUNT(m.id_message) as message_count
+          COUNT(m.id_message) as message_count,
+          (NULLIF(c.public_name, '') IS NOT NULL OR array_length(string_to_array(c.party, ':'), 1) > 2) as is_group_chat
         FROM chat_conversation c
         LEFT JOIN chat_message m ON m.fkid_chat_conversation = c.id
         LEFT JOIN LATERAL (
@@ -432,7 +440,22 @@ export async function getAllLiveConversations(
           AND chat_name != ''
           LIMIT 1
         ) h ON true
-        GROUP BY c.id, c.public_name, c.is_external, h.chat_name
+        LEFT JOIN LATERAL (
+          -- Generate name from extension numbers for 1-on-1 chats without history
+          SELECT string_agg(
+            COALESCE(
+              NULLIF(TRIM(COALESCE(u.firstname, '') || ' ' || COALESCE(u.lastname, '')), ''),
+              uv.dn
+            ) || ' (' || uv.dn || ')',
+            ', '
+            ORDER BY uv.dn
+          ) as generated_name
+          FROM unnest(string_to_array(c.party, ':')) as ext_num
+          LEFT JOIN users_view uv ON uv.dn = ext_num
+          LEFT JOIN users u ON u.iduser = uv.id
+          WHERE ext_num != '3CX'  -- Skip system identifier
+        ) ext_names ON h.chat_name IS NULL AND NULLIF(c.public_name, '') IS NULL
+        GROUP BY c.id, c.public_name, c.is_external, c.party, h.chat_name, ext_names.generated_name
         ORDER BY c.id
       `;
     } else {
@@ -442,10 +465,11 @@ export async function getAllLiveConversations(
           c.id::text as conversation_id,
           NULLIF(c.public_name, '') as chat_name,
           c.is_external,
-          COUNT(m.id_message) as message_count
+          COUNT(m.id_message) as message_count,
+          (NULLIF(c.public_name, '') IS NOT NULL OR array_length(string_to_array(c.party, ':'), 1) > 2) as is_group_chat
         FROM chat_conversation c
         LEFT JOIN chat_message m ON m.fkid_chat_conversation = c.id
-        GROUP BY c.id, c.public_name, c.is_external
+        GROUP BY c.id, c.public_name, c.is_external, c.party
         ORDER BY c.id
       `;
     }

@@ -123,7 +123,7 @@ async function syncAllConversations(
             conversation_name: conv.chat_name || null,
             channel_type: "internal", // Default, will be updated when messages sync
             is_external: conv.is_external,
-            is_group_chat: conv.chat_name !== null, // Named conversations are typically group chats
+            is_group_chat: conv.is_group_chat, // Use is_group_chat from 3CX data
             tenant_id: tenantId,
           });
 
@@ -132,21 +132,23 @@ async function syncAllConversations(
           logger.debug(`Created conversation from live table: ${conv.conversation_id}`, {
             name: conv.chat_name,
             messageCount: conv.message_count,
+            isGroupChat: conv.is_group_chat,
           });
-        } else if (conv.chat_name) {
-          // Update existing conversation if we now have a name (fills in "unknown" names)
+        } else {
+          // Update existing conversation with latest data (name and is_group_chat)
           await upsertConversation({
             threecx_conversation_id: conv.conversation_id,
-            conversation_name: conv.chat_name,
+            conversation_name: conv.chat_name || null,
             channel_type: "internal",
             is_external: conv.is_external,
-            is_group_chat: true,
+            is_group_chat: conv.is_group_chat,
             tenant_id: tenantId,
           });
           conversationsUpdated++;
 
-          logger.debug(`Updated conversation name: ${conv.conversation_id}`, {
+          logger.debug(`Updated conversation: ${conv.conversation_id}`, {
             name: conv.chat_name,
+            isGroupChat: conv.is_group_chat,
           });
         }
       } catch (error) {
