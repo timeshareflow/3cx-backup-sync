@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenant";
 import { format } from "date-fns";
+import { withRateLimit } from "@/lib/api-utils";
+import { rateLimitConfigs } from "@/lib/rate-limit";
 
 interface ExportMessage {
   id: string;
@@ -25,6 +27,10 @@ interface ExportConversation {
 }
 
 export async function GET(request: NextRequest) {
+  // Rate limit: 5 exports per minute to prevent abuse (exports are resource-intensive)
+  const rateLimited = withRateLimit(request, rateLimitConfigs.export);
+  if (rateLimited) return rateLimited;
+
   const searchParams = request.nextUrl.searchParams;
   const exportType = searchParams.get("type") || "conversation"; // conversation, messages, recordings, voicemails, faxes, call_logs, all
   const conversationId = searchParams.get("conversation_id");

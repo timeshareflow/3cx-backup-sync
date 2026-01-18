@@ -1,10 +1,24 @@
 import { createClient } from "@/lib/supabase/server";
 import { NextResponse } from "next/server";
+import { withRateLimit, parseJsonBody } from "@/lib/api-utils";
+import { rateLimitConfigs } from "@/lib/rate-limit";
+
+interface InviteRequest {
+  email: string;
+  role: string;
+}
 
 export async function POST(request: Request) {
+  // Rate limit: 50 admin operations per minute
+  const rateLimited = withRateLimit(request, rateLimitConfigs.admin);
+  if (rateLimited) return rateLimited;
+
   try {
+    const parsed = await parseJsonBody<InviteRequest>(request);
+    if ("error" in parsed) return parsed.error;
+
+    const { email, role } = parsed.data;
     const supabase = await createClient();
-    const { email, role } = await request.json();
 
     // Check if user is admin or super_admin
     const { data: { user } } = await supabase.auth.getUser();

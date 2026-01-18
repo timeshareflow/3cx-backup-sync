@@ -1,8 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
+import { withRateLimit } from "@/lib/api-utils";
+import { rateLimitConfigs } from "@/lib/rate-limit";
 
 export async function GET(request: NextRequest) {
+  // Rate limit: 30 searches per minute to prevent abuse
+  const rateLimited = withRateLimit(request, rateLimitConfigs.search);
+  if (rateLimited) return rateLimited;
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q");
   const page = parseInt(searchParams.get("page") || "1");

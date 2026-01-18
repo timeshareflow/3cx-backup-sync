@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
+import { parseJsonBody } from "@/lib/api-utils";
 
 export async function GET() {
   try {
@@ -97,10 +98,35 @@ export async function GET() {
   }
 }
 
+interface TenantConfigUpdate {
+  threecx_host?: string;
+  ssh_port?: number | string;
+  ssh_user?: string;
+  ssh_password?: string;
+  threecx_db_password?: string;
+  threecx_chat_files_path?: string;
+  threecx_recordings_path?: string;
+  threecx_voicemail_path?: string;
+  threecx_fax_path?: string;
+  threecx_meetings_path?: string;
+  backup_chats?: boolean;
+  backup_chat_media?: boolean;
+  backup_recordings?: boolean;
+  backup_voicemails?: boolean;
+  backup_faxes?: boolean;
+  backup_cdr?: boolean;
+  backup_meetings?: boolean;
+  sync_enabled?: boolean;
+  sync_interval_seconds?: number;
+}
+
 export async function POST(request: Request) {
   try {
+    const parsed = await parseJsonBody<TenantConfigUpdate>(request);
+    if ("error" in parsed) return parsed.error;
+
+    const body = parsed.data;
     const supabase = await createClient();
-    const body = await request.json();
 
     // Get current user
     const { data: { user } } = await supabase.auth.getUser();
@@ -140,7 +166,7 @@ export async function POST(request: Request) {
 
     // SSH credentials - write to BOTH new and legacy columns
     if (body.ssh_port !== undefined) {
-      const port = parseInt(body.ssh_port) || 22;
+      const port = typeof body.ssh_port === "number" ? body.ssh_port : parseInt(String(body.ssh_port)) || 22;
       updateData.ssh_port = port;
       updateData.sftp_port = port;  // Keep legacy in sync
     }

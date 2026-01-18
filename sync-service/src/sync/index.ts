@@ -1,5 +1,6 @@
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
+import { canExecute, recordSuccess, recordFailure, getAllCircuitStates, CircuitState } from "../utils/circuit-breaker";
 import { syncMessages, MessageSyncResult } from "./messages";
 import { syncMedia, syncRecordings, syncVoicemails, MediaSyncResult } from "./media";
 import { syncExtensions, ExtensionSyncResult } from "./extensions";
@@ -39,6 +40,8 @@ export interface TenantSyncResult extends SyncResult {
   tenantName: string;
   success: boolean;
   error?: string;
+  circuitState?: CircuitState;
+  skippedByCircuitBreaker?: boolean;
 }
 
 export interface MultiTenantSyncResult {
@@ -46,6 +49,8 @@ export interface MultiTenantSyncResult {
   totalDuration: number;
   successCount: number;
   failureCount: number;
+  skippedCount: number;
+  circuitStates: Record<string, { state: CircuitState; failures: number }>;
 }
 
 // Run sync for a single tenant
@@ -210,12 +215,14 @@ export async function runMultiTenantSync(options?: {
       totalDuration: Date.now() - startTime,
       successCount: 0,
       failureCount: 0,
+      skippedCount: 0,
+      circuitStates: {},
     };
   }
 
   logger.info(`Found ${tenants.length} active tenants to sync`);
 
-  // Sync each tenant
+  // Sync each tenant with circuit breaker protection
   for (const tenant of tenants) {
     const tenantResult: TenantSyncResult = {
       tenantId: tenant.id,
@@ -232,6 +239,22 @@ export async function runMultiTenantSync(options?: {
       duration: 0,
     };
 
+    // Check circuit breaker before attempting sync
+    const circuitCheck = canExecute(tenant.id);
+    tenantResult.circuitState = circuitCheck.state;
+
+    if (!circuitCheck.allowed) {
+      tenantResult.skippedByCircuitBreaker = true;
+      tenantResult.error = circuitCheck.reason || "Circuit breaker open";
+      logger.info(`Skipping sync for tenant ${tenant.name} - circuit breaker open`, {
+        tenantId: tenant.id,
+        state: circuitCheck.state,
+        reason: circuitCheck.reason,
+      });
+      results.push(tenantResult);
+      continue;
+    }
+
     try {
       // Test remote connection first (with 30s timeout)
       const connected = await withTimeout(
@@ -240,7 +263,9 @@ export async function runMultiTenantSync(options?: {
         `Connection test for ${tenant.name}`
       );
       if (!connected) {
-        tenantResult.error = `Failed to connect to 3CX database at ${tenant.threecx_host}`;
+        const errorMsg = `Failed to connect to 3CX database at ${tenant.threecx_host}`;
+        tenantResult.error = errorMsg;
+        recordFailure(tenant.id, errorMsg);
         results.push(tenantResult);
         continue;
       }
@@ -262,9 +287,16 @@ export async function runMultiTenantSync(options?: {
       tenantResult.extensions = syncResult.extensions;
       tenantResult.duration = syncResult.duration;
       tenantResult.success = true;
+
+      // Record success with circuit breaker
+      recordSuccess(tenant.id);
     } catch (error) {
       const err = error as Error;
       tenantResult.error = err.message;
+
+      // Record failure with circuit breaker
+      recordFailure(tenant.id, err.message);
+
       logger.error(`Sync failed for tenant: ${tenant.name}`, {
         tenantId: tenant.id,
         error: err.message,
@@ -275,13 +307,23 @@ export async function runMultiTenantSync(options?: {
   }
 
   const successCount = results.filter((r) => r.success).length;
-  const failureCount = results.filter((r) => !r.success).length;
+  const failureCount = results.filter((r) => !r.success && !r.skippedByCircuitBreaker).length;
+  const skippedCount = results.filter((r) => r.skippedByCircuitBreaker).length;
+
+  // Get all circuit breaker states for monitoring
+  const allStates = getAllCircuitStates();
+  const circuitStates: Record<string, { state: CircuitState; failures: number }> = {};
+  for (const [tenantId, info] of Object.entries(allStates)) {
+    circuitStates[tenantId] = { state: info.state, failures: info.failures };
+  }
 
   logger.info("=== Multi-tenant sync completed ===", {
     totalTenants: tenants.length,
     successCount,
     failureCount,
+    skippedCount,
     totalDuration: `${Date.now() - startTime}ms`,
+    circuitBreakers: skippedCount > 0 ? circuitStates : undefined,
   });
 
   return {
@@ -289,5 +331,7 @@ export async function runMultiTenantSync(options?: {
     totalDuration: Date.now() - startTime,
     successCount,
     failureCount,
+    skippedCount,
+    circuitStates,
   };
 }

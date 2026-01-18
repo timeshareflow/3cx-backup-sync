@@ -1,6 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
+import { parseJsonBody } from "@/lib/api-utils";
 
 export async function GET() {
   try {
@@ -51,11 +52,22 @@ export async function GET() {
   }
 }
 
+interface CreateTenantRequest {
+  name: string;
+  slug: string;
+  admin_email: string;
+  admin_password: string;
+  admin_name: string;
+}
+
 export async function POST(request: Request) {
   try {
+    const parsed = await parseJsonBody<CreateTenantRequest>(request);
+    if ("error" in parsed) return parsed.error;
+
+    const body = parsed.data;
     const supabase = await createClient();
     const adminClient = createAdminClient();
-    const body = await request.json();
 
     // Check if user is super_admin
     const { data: { user } } = await supabase.auth.getUser();

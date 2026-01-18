@@ -3,10 +3,16 @@
 import { useState, useEffect, useMemo } from "react";
 import { ConversationCard } from "./ConversationItem";
 import { Spinner } from "@/components/ui/Spinner";
-import { ArrowUpDown, Clock, MessageSquare, User } from "lucide-react";
+import { ArrowUpDown, Clock, MessageSquare, User, Users, Globe, UserCircle } from "lucide-react";
 import type { ConversationWithParticipants } from "@/types";
 
 type SortOption = "recent" | "name" | "messages" | "oldest";
+
+interface GroupedConversations {
+  external: ConversationWithParticipants[];
+  group: ConversationWithParticipants[];
+  direct: ConversationWithParticipants[];
+}
 
 interface ConversationListProps {
   initialConversations?: ConversationWithParticipants[];
@@ -54,8 +60,8 @@ export function ConversationList({ initialConversations }: ConversationListProps
     }
   };
 
-  const sortedConversations = useMemo(() => {
-    const sorted = [...conversations];
+  const sortConversations = (convs: ConversationWithParticipants[]) => {
+    const sorted = [...convs];
     switch (sortBy) {
       case "recent":
         return sorted.sort((a, b) => {
@@ -80,6 +86,28 @@ export function ConversationList({ initialConversations }: ConversationListProps
       default:
         return sorted;
     }
+  };
+
+  const groupedConversations = useMemo((): GroupedConversations => {
+    const external: ConversationWithParticipants[] = [];
+    const group: ConversationWithParticipants[] = [];
+    const direct: ConversationWithParticipants[] = [];
+
+    for (const conv of conversations) {
+      if (conv.is_external) {
+        external.push(conv);
+      } else if (conv.is_group_chat) {
+        group.push(conv);
+      } else {
+        direct.push(conv);
+      }
+    }
+
+    return {
+      external: sortConversations(external),
+      group: sortConversations(group),
+      direct: sortConversations(direct),
+    };
   }, [conversations, sortBy]);
 
   const loadMore = () => {
@@ -178,12 +206,71 @@ export function ConversationList({ initialConversations }: ConversationListProps
         </span>
       </div>
 
-      {/* Grid Layout */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
-        {sortedConversations.map((conversation) => (
-          <ConversationCard key={conversation.id} conversation={conversation} />
-        ))}
-      </div>
+      {/* Group Chats Section */}
+      {groupedConversations.group.length > 0 && (
+        <div className="mb-6">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="p-1.5 bg-purple-100 rounded-lg">
+              <Users className="h-4 w-4 text-purple-600" />
+            </div>
+            <h2 className="text-sm font-semibold text-slate-700">Group Chats</h2>
+            <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+              {groupedConversations.group.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {groupedConversations.group.map((conversation) => (
+              <ConversationCard key={conversation.id} conversation={conversation} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Direct Messages Section */}
+      {groupedConversations.direct.length > 0 && (
+        <div className="mb-6">
+          {groupedConversations.group.length > 0 && (
+            <div className="border-t border-slate-200 my-4" />
+          )}
+          <div className="flex items-center gap-2 mb-3">
+            <div className="p-1.5 bg-teal-100 rounded-lg">
+              <UserCircle className="h-4 w-4 text-teal-600" />
+            </div>
+            <h2 className="text-sm font-semibold text-slate-700">Direct Messages</h2>
+            <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+              {groupedConversations.direct.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {groupedConversations.direct.map((conversation) => (
+              <ConversationCard key={conversation.id} conversation={conversation} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* External Chats Section */}
+      {groupedConversations.external.length > 0 && (
+        <div className="mb-6">
+          {(groupedConversations.group.length > 0 || groupedConversations.direct.length > 0) && (
+            <div className="border-t border-slate-200 my-4" />
+          )}
+          <div className="flex items-center gap-2 mb-3">
+            <div className="p-1.5 bg-amber-100 rounded-lg">
+              <Globe className="h-4 w-4 text-amber-600" />
+            </div>
+            <h2 className="text-sm font-semibold text-slate-700">External Chats</h2>
+            <span className="text-xs text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+              {groupedConversations.external.length}
+            </span>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+            {groupedConversations.external.map((conversation) => (
+              <ConversationCard key={conversation.id} conversation={conversation} />
+            ))}
+          </div>
+        </div>
+      )}
 
       {hasMore && (
         <div className="p-4 text-center mt-4">

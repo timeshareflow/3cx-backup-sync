@@ -2,6 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { getTenantContext } from "@/lib/tenant";
 import Stripe from "stripe";
+import { withRateLimit, parseJsonBody } from "@/lib/api-utils";
+import { rateLimitConfigs } from "@/lib/rate-limit";
+
+interface CheckoutRequest {
+  plan_id: string;
+  billing_cycle?: "monthly" | "yearly";
+}
 
 // Lazy initialization to avoid build-time errors
 function getStripeClient(): Stripe | null {
@@ -13,6 +20,10 @@ function getStripeClient(): Stripe | null {
 }
 
 export async function POST(request: NextRequest) {
+  // Rate limit: 10 checkout attempts per minute
+  const rateLimited = withRateLimit(request, rateLimitConfigs.auth);
+  if (rateLimited) return rateLimited;
+
   try {
     const stripe = getStripeClient();
     if (!stripe) {
@@ -34,8 +45,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const body = await request.json();
-    const { plan_id, billing_cycle = "monthly" } = body;
+    const parsed = await parseJsonBody<CheckoutRequest>(request);
+    if ("error" in parsed) return parsed.error;
+
+    const { plan_id, billing_cycle = "monthly" } = parsed.data;
 
     if (!plan_id) {
       return NextResponse.json({ error: "Plan ID is required" }, { status: 400 });

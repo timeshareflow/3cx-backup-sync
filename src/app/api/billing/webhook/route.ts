@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
+import { withRateLimit } from "@/lib/api-utils";
+import { rateLimitConfigs } from "@/lib/rate-limit";
 
 // Lazy initialization to avoid build-time errors when env vars are not set
 function getStripeClient(): Stripe | null {
@@ -19,6 +21,10 @@ function getSupabaseAdmin() {
 }
 
 export async function POST(request: NextRequest) {
+  // Rate limit: 100 webhook calls per minute (Stripe may send bursts)
+  const rateLimited = withRateLimit(request, rateLimitConfigs.webhook);
+  if (rateLimited) return rateLimited;
+
   const stripe = getStripeClient();
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 

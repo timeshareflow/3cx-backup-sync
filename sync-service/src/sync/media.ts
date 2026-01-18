@@ -92,6 +92,14 @@ export async function syncMedia(
 
     for (const file of files) {
       try {
+        // Log file info for debugging
+        logger.debug("Processing media file", {
+          tenantId,
+          filename: file.filename,
+          relativePath: file.relativePath,
+          fullPath: file.fullPath,
+        });
+
         // Download file from remote server using full path
         const buffer = await downloadFile(sftp, file.fullPath);
 

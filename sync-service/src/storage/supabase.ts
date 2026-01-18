@@ -711,14 +711,34 @@ export async function insertMediaFileNew(media: {
 
   // Build insert data
   // NOTE: Database has file_name (NOT NULL) - derive from original_filename or storage_path
-  const fileName = media.original_filename || media.storage_path.split("/").pop() || "unknown";
+  // Be extra defensive about null/undefined/empty values
+  let fileName: string = "unknown";
+
+  if (media.original_filename && typeof media.original_filename === "string" && media.original_filename.trim() !== "") {
+    fileName = media.original_filename.trim();
+  } else if (media.stored_filename && typeof media.stored_filename === "string" && media.stored_filename.trim() !== "") {
+    fileName = media.stored_filename.trim();
+  } else if (media.storage_path && typeof media.storage_path === "string") {
+    const pathParts = media.storage_path.split("/");
+    const lastPart = pathParts[pathParts.length - 1];
+    if (lastPart && lastPart.trim() !== "") {
+      fileName = lastPart.trim();
+    }
+  }
+
+  logger.debug("Preparing media file insert", {
+    original_filename: media.original_filename,
+    stored_filename: media.stored_filename,
+    resolved_fileName: fileName,
+    storage_path: media.storage_path,
+  });
 
   const insertData: Record<string, unknown> = {
     tenant_id: media.tenant_id,
     storage_path: media.storage_path,
     mime_type: media.mime_type,
     file_size: media.file_size,
-    file_name: fileName,  // Required NOT NULL column in database
+    file_name: fileName,  // Required NOT NULL column in database - never null
   };
 
   // Optional fields

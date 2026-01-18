@@ -1,46 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import crypto from "crypto";
+import { encrypt, decrypt } from "@/lib/encryption";
 import { verifySync } from "otplib";
-
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "default-encryption-key-change-in-prod";
-
-function decrypt(encryptedText: string): string {
-  try {
-    const algorithm = "aes-256-cbc";
-    const key = crypto.scryptSync(ENCRYPTION_KEY, "salt", 32);
-    const [ivHex, encrypted] = encryptedText.split(":");
-    const iv = Buffer.from(ivHex, "hex");
-    const decipher = crypto.createDecipheriv(algorithm, key, iv);
-    let decrypted = decipher.update(encrypted, "hex", "utf8");
-    decrypted += decipher.final("utf8");
-    return decrypted;
-  } catch {
-    return "";
-  }
-}
-
-function encrypt(text: string): string {
-  const algorithm = "aes-256-cbc";
-  const key = crypto.scryptSync(ENCRYPTION_KEY, "salt", 32);
-  const iv = crypto.randomBytes(16);
-  const cipher = crypto.createCipheriv(algorithm, key, iv);
-  let encrypted = cipher.update(text, "utf8", "hex");
-  encrypted += cipher.final("hex");
-  return iv.toString("hex") + ":" + encrypted;
-}
+import { withRateLimit, parseJsonBody, errorResponse, handleApiError } from "@/lib/api-utils";
+import { rateLimitConfigs } from "@/lib/rate-limit";
 
 // POST - Verify 2FA code during login
 export async function POST(request: NextRequest) {
+  // Rate limit: 10 requests per minute to prevent brute force
+  const rateLimited = withRateLimit(request, rateLimitConfigs.auth);
+  if (rateLimited) return rateLimited;
+
   try {
-    const body = await request.json();
-    const { userId, code, isBackupCode } = body;
+    const parsed = await parseJsonBody<{ userId: string; code: string; isBackupCode?: boolean }>(request);
+    if ("error" in parsed) return parsed.error;
+
+    const { userId, code, isBackupCode } = parsed.data;
 
     if (!userId || !code) {
-      return NextResponse.json(
-        { error: "User ID and code are required" },
-        { status: 400 }
-      );
+      return errorResponse("User ID and code are required", 400);
     }
 
     const supabase = await createClient();
@@ -161,10 +139,6 @@ export async function POST(request: NextRequest) {
       message: "2FA verification successful",
     });
   } catch (error) {
-    console.error("Error in 2FA verify API:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return handleApiError(error, "2FA verify");
   }
 }
