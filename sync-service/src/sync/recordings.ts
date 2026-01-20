@@ -1,106 +1,75 @@
-import * as fs from "fs";
-import * as path from "path";
+import { Pool } from "pg";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import {
-  uploadFile,
+  uploadBuffer,
   generateStoragePath,
   fileExists,
-  getFileInfo,
 } from "../storage/supabase-storage";
-import { insertCallRecording, updateSyncStatus } from "../storage/supabase";
-import { TenantConfig } from "../storage/supabase";
+import { insertCallRecording, updateSyncStatus, getLastSyncedTimestamp } from "../storage/supabase";
+import { TenantConfig } from "../tenant";
+import { getRecordings } from "../threecx/queries";
 
 export interface RecordingsSyncResult {
   filesSynced: number;
   filesSkipped: number;
-  errors: Array<{ filename: string; error: string }>;
+  errors: Array<{ recordingId: string; error: string }>;
 }
 
-// Parse recording filename to extract metadata
-// 3CX typically names recordings like: ext_100_20240115_143022_12345.wav
-function parseRecordingFilename(filename: string): {
-  extension?: string;
-  timestamp?: Date;
-  callId?: string;
-} {
-  const result: { extension?: string; timestamp?: Date; callId?: string } = {};
-
-  // Try to match common 3CX recording patterns
-  const patterns = [
-    // ext_XXX_YYYYMMDD_HHMMSS_ID.wav
-    /^ext_(\d+)_(\d{8})_(\d{6})_(\w+)\.\w+$/,
-    // XXX_YYYYMMDD_HHMMSS.wav
-    /^(\d+)_(\d{8})_(\d{6})\.\w+$/,
-    // Generic with timestamp
-    /(\d{8})_(\d{6})/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = filename.match(pattern);
-    if (match) {
-      if (match[1] && match[1].length <= 4) {
-        result.extension = match[1];
-      }
-      if (match[2] && match[3]) {
-        const dateStr = match[2];
-        const timeStr = match[3];
-        const year = parseInt(dateStr.substring(0, 4));
-        const month = parseInt(dateStr.substring(4, 6)) - 1;
-        const day = parseInt(dateStr.substring(6, 8));
-        const hour = parseInt(timeStr.substring(0, 2));
-        const minute = parseInt(timeStr.substring(2, 4));
-        const second = parseInt(timeStr.substring(4, 6));
-        result.timestamp = new Date(year, month, day, hour, minute, second);
-      }
-      if (match[4]) {
-        result.callId = match[4];
-      }
-      break;
-    }
-  }
-
-  return result;
-}
-
-// Get list of recording files from 3CX directory
-function getRecordingFiles(recordingsPath: string): string[] {
+// Download a recording file from 3CX
+async function downloadRecording(
+  recordingUrl: string,
+  threecxHost: string
+): Promise<{ buffer: Buffer; contentType: string; filename: string } | null> {
   try {
-    if (!fs.existsSync(recordingsPath)) {
-      logger.warn("Recordings directory does not exist", { path: recordingsPath });
-      return [];
+    // Build full URL - recording_url may be relative or absolute
+    let fullUrl: string;
+    if (recordingUrl.startsWith("http://") || recordingUrl.startsWith("https://")) {
+      fullUrl = recordingUrl;
+    } else {
+      // Remove leading slash if present and build URL
+      const cleanPath = recordingUrl.startsWith("/") ? recordingUrl.slice(1) : recordingUrl;
+      fullUrl = `https://${threecxHost}/${cleanPath}`;
     }
 
-    const files: string[] = [];
+    logger.debug("Downloading recording", { url: fullUrl });
 
-    // Recursively find all audio files
-    function scanDir(dir: string) {
-      const entries = fs.readdirSync(dir, { withFileTypes: true });
-      for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-          scanDir(fullPath);
-        } else if (entry.isFile()) {
-          const ext = path.extname(entry.name).toLowerCase();
-          if ([".wav", ".mp3", ".ogg", ".m4a"].includes(ext)) {
-            files.push(fullPath);
-          }
-        }
-      }
+    const response = await fetch(fullUrl, {
+      headers: {
+        "Accept": "audio/*,*/*",
+      },
+    });
+
+    if (!response.ok) {
+      logger.warn("Failed to download recording", {
+        url: fullUrl,
+        status: response.status,
+        statusText: response.statusText
+      });
+      return null;
     }
 
-    scanDir(recordingsPath);
-    logger.debug(`Found ${files.length} recording files`);
-    return files;
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get("content-type") || "audio/wav";
+
+    // Extract filename from URL or use a default
+    const urlPath = new URL(fullUrl).pathname;
+    const filename = urlPath.split("/").pop() || "recording.wav";
+
+    return { buffer, contentType, filename };
   } catch (error) {
-    logger.error("Failed to read recordings directory", {
+    logger.error("Error downloading recording", {
+      url: recordingUrl,
       error: (error as Error).message,
     });
-    return [];
+    return null;
   }
 }
 
-export async function syncRecordings(tenant: TenantConfig): Promise<RecordingsSyncResult> {
+export async function syncRecordings(
+  tenant: TenantConfig,
+  pool: Pool
+): Promise<RecordingsSyncResult> {
   const result: RecordingsSyncResult = {
     filesSynced: 0,
     filesSkipped: 0,
@@ -112,29 +81,46 @@ export async function syncRecordings(tenant: TenantConfig): Promise<RecordingsSy
     return result;
   }
 
+  if (!tenant.threecx_host) {
+    logger.info("No 3CX host configured for tenant", { tenantId: tenant.id });
+    return result;
+  }
+
+  const threecxHost = tenant.threecx_host;
+
   try {
     await updateSyncStatus("recordings", "running", { tenantId: tenant.id });
 
-    const files = getRecordingFiles(tenant.threecx_recordings_path);
+    // Get last sync timestamp to only fetch new records
+    const lastSync = await getLastSyncedTimestamp("recordings", tenant.id);
+    const since = lastSync ? new Date(lastSync) : null;
 
-    if (files.length === 0) {
-      logger.info("No recording files to sync", { tenantId: tenant.id });
+    logger.info("Fetching recordings from 3CX database", {
+      tenantId: tenant.id,
+      since: since?.toISOString() || "beginning",
+    });
+
+    // Fetch recordings from 3CX database
+    const recordings = await getRecordings(since, 500, pool);
+
+    if (recordings.length === 0) {
+      logger.info("No new recordings to sync", { tenantId: tenant.id });
       await updateSyncStatus("recordings", "success", { recordsSynced: 0, tenantId: tenant.id });
       return result;
     }
 
-    logger.info(`Processing ${files.length} recording files`, { tenantId: tenant.id });
+    logger.info(`Processing ${recordings.length} recordings`, { tenantId: tenant.id });
 
-    for (const filePath of files) {
+    for (const recording of recordings) {
       try {
-        const filename = path.basename(filePath);
-        const stat = fs.statSync(filePath);
-
-        // Get file info
-        const { mimeType } = getFileInfo(filename);
-        const metadata = parseRecordingFilename(filename);
+        if (!recording.recording_url) {
+          logger.debug("Recording has no URL, skipping", { recordingId: recording.recording_id });
+          result.filesSkipped++;
+          continue;
+        }
 
         // Generate storage path
+        const filename = recording.recording_url.split("/").pop() || `recording_${recording.recording_id}.wav`;
         const storagePath = generateStoragePath(tenant.id, "recordings", filename);
 
         // Check if already uploaded
@@ -144,33 +130,63 @@ export async function syncRecordings(tenant: TenantConfig): Promise<RecordingsSy
           continue;
         }
 
+        // Download the recording
+        const downloadResult = await downloadRecording(recording.recording_url, threecxHost);
+        if (!downloadResult) {
+          result.errors.push({
+            recordingId: recording.recording_id,
+            error: "Failed to download recording",
+          });
+          continue;
+        }
+
         // Upload to Supabase Storage
-        const uploadResult = await uploadFile(filePath, storagePath, mimeType);
+        const uploadResult = await uploadBuffer(
+          downloadResult.buffer,
+          storagePath,
+          downloadResult.contentType
+        );
+
+        // Calculate duration
+        const durationSeconds = recording.duration_seconds ||
+          (recording.start_time && recording.end_time
+            ? Math.floor((new Date(recording.end_time).getTime() - new Date(recording.start_time).getTime()) / 1000)
+            : null);
 
         // Record in database
         await insertCallRecording({
           tenant_id: tenant.id,
-          threecx_recording_id: filename,
-          extension: metadata.extension,
-          original_filename: filename,
+          threecx_recording_id: recording.recording_id,
+          extension: recording.extension_number || undefined,
+          caller_number: recording.caller_number || undefined,
+          callee_number: recording.callee_number || undefined,
+          original_filename: downloadResult.filename,
           file_size: uploadResult.size,
           storage_path: uploadResult.path,
-          mime_type: mimeType,
-          recorded_at: metadata.timestamp?.toISOString() || new Date(stat.mtime).toISOString(),
-          call_started_at: metadata.timestamp?.toISOString(),
+          mime_type: downloadResult.contentType,
+          duration_seconds: durationSeconds || undefined,
+          transcription: recording.transcription || undefined,
+          recorded_at: recording.start_time?.toISOString() || new Date().toISOString(),
+          call_started_at: recording.start_time?.toISOString(),
+          call_ended_at: recording.end_time?.toISOString(),
         });
 
         result.filesSynced++;
-        logger.debug(`Synced recording`, { tenantId: tenant.id, filename });
+        logger.debug(`Synced recording`, { tenantId: tenant.id, recordingId: recording.recording_id });
       } catch (error) {
         const err = handleError(error);
+        // Skip duplicates silently
+        if (err.message.includes("duplicate") || err.message.includes("23505")) {
+          result.filesSkipped++;
+          continue;
+        }
         result.errors.push({
-          filename: filePath,
+          recordingId: recording.recording_id,
           error: err.message,
         });
-        logger.error("Failed to sync recording file", {
+        logger.error("Failed to sync recording", {
           tenantId: tenant.id,
-          filePath,
+          recordingId: recording.recording_id,
           error: err.message,
         });
       }

@@ -1,11 +1,25 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertCircle, Activity } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertCircle, Activity, ChevronRight } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils/date";
 import type { SyncStatus } from "@/types";
 
+// Map sync types to their navigation URLs
+const syncTypeRoutes: Record<string, string> = {
+  messages: "/conversations",
+  media: "/media",
+  extensions: "/extensions",
+  recordings: "/recordings",
+  voicemails: "/voicemails",
+  faxes: "/faxes",
+  cdr: "/call-logs",
+  meetings: "/meetings",
+};
+
 export function SyncStatusCard() {
+  const router = useRouter();
   const [syncStatuses, setSyncStatuses] = useState<SyncStatus[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -90,34 +104,49 @@ export function SyncStatusCard() {
         </div>
       ) : (
         <div className="space-y-3">
-          {syncStatuses.map((sync) => (
-            <div
-              key={sync.id}
-              className="flex items-center justify-between p-4 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200"
-            >
-              <div className="flex items-center gap-3">
-                {getStatusIcon(sync.status)}
-                <div>
-                  <p className="font-semibold text-slate-800 capitalize">
-                    {sync.sync_type}
-                  </p>
-                  <p className="text-sm text-slate-500">
-                    {sync.last_success_at
-                      ? `Last sync: ${formatRelativeTime(sync.last_success_at)}`
-                      : "Never synced"}
-                  </p>
+          {syncStatuses.map((sync) => {
+            const route = syncTypeRoutes[sync.sync_type];
+            const isClickable = !!route;
+
+            return (
+              <div
+                key={sync.id}
+                onClick={() => isClickable && router.push(route)}
+                className={`flex items-center justify-between p-4 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200 transition-all duration-200 ${
+                  isClickable
+                    ? "cursor-pointer hover:border-teal-300 hover:shadow-md hover:shadow-teal-100/50 group"
+                    : ""
+                }`}
+              >
+                <div className="flex items-center gap-3">
+                  {getStatusIcon(sync.status)}
+                  <div>
+                    <p className={`font-semibold text-slate-800 capitalize ${isClickable ? "group-hover:text-teal-700" : ""}`}>
+                      {sync.sync_type}
+                    </p>
+                    <p className="text-sm text-slate-500">
+                      {sync.last_success_at
+                        ? `Last sync: ${formatRelativeTime(sync.last_success_at)}`
+                        : "Never synced"}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="text-right">
+                    {getStatusBadge(sync.status)}
+                    {sync.items_synced > 0 && (
+                      <p className="text-xs text-slate-500 mt-2 font-medium">
+                        {sync.items_synced.toLocaleString()} records
+                      </p>
+                    )}
+                  </div>
+                  {isClickable && (
+                    <ChevronRight className="h-5 w-5 text-slate-400 group-hover:text-teal-500 transition-colors" />
+                  )}
                 </div>
               </div>
-              <div className="text-right">
-                {getStatusBadge(sync.status)}
-                {sync.items_synced > 0 && (
-                  <p className="text-xs text-slate-500 mt-2 font-medium">
-                    {sync.items_synced.toLocaleString()} records
-                  </p>
-                )}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 

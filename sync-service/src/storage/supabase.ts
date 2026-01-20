@@ -459,6 +459,7 @@ export async function insertCallRecording(recording: {
   storage_path: string;
   mime_type?: string;
   duration_seconds?: number;
+  transcription?: string;
   call_started_at?: string;
   call_ended_at?: string;
   recorded_at: string;

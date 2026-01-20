@@ -2,7 +2,8 @@ import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import { canExecute, recordSuccess, recordFailure, getAllCircuitStates, CircuitState } from "../utils/circuit-breaker";
 import { syncMessages, MessageSyncResult } from "./messages";
-import { syncMedia, syncRecordings, syncVoicemails, MediaSyncResult } from "./media";
+import { syncMedia, syncVoicemails, MediaSyncResult } from "./media";
+import { syncRecordings, RecordingsSyncResult } from "./recordings";
 import { syncExtensions, ExtensionSyncResult } from "./extensions";
 import { syncFaxes, FaxesSyncResult } from "./faxes";
 import { syncMeetings, MeetingsSyncResult } from "./meetings";
@@ -26,7 +27,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, operation: strin
 export interface SyncResult {
   messages: MessageSyncResult;
   media: MediaSyncResult;
-  recordings: MediaSyncResult;
+  recordings: RecordingsSyncResult;
   voicemails: MediaSyncResult;
   faxes: FaxesSyncResult;
   meetings: MeetingsSyncResult;
@@ -77,7 +78,7 @@ export async function runTenantSync(
   const result: SyncResult = {
     messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
     media: { filesSynced: 0, filesSkipped: 0, errors: [] },
-    recordings: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    recordings: { filesSynced: 0, filesSkipped: 0, errors: [] as Array<{ recordingId: string; error: string }> },
     voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
     faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
     meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
@@ -116,7 +117,7 @@ export async function runTenantSync(
       }
 
       try {
-        result.recordings = await syncRecordings(tenant);
+        result.recordings = await syncRecordings(tenant, pool);
       } catch (err) {
         logger.warn("Recordings sync failed, continuing", { error: (err as Error).message });
       }
@@ -230,7 +231,7 @@ export async function runMultiTenantSync(options?: {
       success: false,
       messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
       media: { filesSynced: 0, filesSkipped: 0, errors: [] },
-      recordings: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      recordings: { filesSynced: 0, filesSkipped: 0, errors: [] as Array<{ recordingId: string; error: string }> },
       voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
       faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
       meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },

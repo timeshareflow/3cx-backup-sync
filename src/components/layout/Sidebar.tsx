@@ -16,6 +16,11 @@ import {
   Image,
   BarChart3,
   CreditCard,
+  Phone,
+  Voicemail,
+  FileText,
+  Video,
+  PhoneCall,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -33,6 +38,14 @@ const navigation: NavItem[] = [
   { name: "Search", href: "/search", icon: Search },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
   { name: "Extensions", href: "/extensions", icon: Users },
+];
+
+const communicationsNavigation: NavItem[] = [
+  { name: "Call Recordings", href: "/recordings", icon: Phone },
+  { name: "Voicemails", href: "/voicemails", icon: Voicemail },
+  { name: "Faxes", href: "/faxes", icon: FileText },
+  { name: "Call Logs", href: "/call-logs", icon: PhoneCall },
+  { name: "Meetings", href: "/meetings", icon: Video },
 ];
 
 const adminNavigation: NavItem[] = [
@@ -81,6 +94,33 @@ export function Sidebar() {
             Main Menu
           </div>
           {navigation.map((item) => {
+            const isActive =
+              pathname === item.href ||
+              (item.href !== "/" && pathname.startsWith(item.href));
+
+            return (
+              <Link
+                key={item.name}
+                href={item.href}
+                className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200 ${
+                  isActive
+                    ? "bg-gradient-to-r from-teal-500/20 to-cyan-500/20 text-teal-400 border border-teal-500/30"
+                    : "text-slate-300 hover:bg-slate-800 hover:text-white"
+                }`}
+              >
+                <item.icon className={`h-5 w-5 ${isActive ? "text-teal-400" : ""}`} />
+                {item.name}
+              </Link>
+            );
+          })}
+        </div>
+
+        {/* Communications Navigation */}
+        <div className="pt-4">
+          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider px-3 mb-3">
+            Communications
+          </div>
+          {communicationsNavigation.map((item) => {
             const isActive =
               pathname === item.href ||
               (item.href !== "/" && pathname.startsWith(item.href));

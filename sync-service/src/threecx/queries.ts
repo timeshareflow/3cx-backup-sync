@@ -513,6 +513,103 @@ export async function getAllFileMappings(
 }
 
 // ============================================
+// RECORDINGS
+// ============================================
+
+export interface ThreeCXRecording {
+  recording_id: string;
+  call_participants_id: string | null;
+  recording_url: string;
+  start_time: Date | null;
+  end_time: Date | null;
+  duration_seconds: number | null;
+  transcription: string | null;
+  extension_number: string | null;
+  caller_number: string | null;
+  callee_number: string | null;
+}
+
+// Get recordings from 3CX database
+export async function getRecordings(
+  since: Date | null,
+  limit: number = 500,
+  pool?: Pool
+): Promise<ThreeCXRecording[]> {
+  return withClient(async (client) => {
+    // Check if recordings table exists
+    const schemaCheck = await client.query(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      AND table_name = 'recordings'
+    `);
+
+    if (schemaCheck.rows.length === 0) {
+      logger.warn("No recordings table found in 3CX database");
+      return [];
+    }
+
+    // First check what columns exist in the recordings table
+    const columnsCheck = await client.query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'recordings'
+    `);
+    const columnNames = columnsCheck.rows.map((r) => r.column_name);
+
+    // Build query based on available columns
+    const hasParticipantId = columnNames.includes("cl_participants_id");
+    const hasStartTime = columnNames.includes("start_time");
+    const hasEndTime = columnNames.includes("end_time");
+    const hasTranscription = columnNames.includes("transcription");
+
+    const timeColumn = hasStartTime ? "start_time" : "id_recording";
+    const orderClause = hasStartTime ? "start_time ASC" : "id_recording ASC";
+
+    const query = since && hasStartTime
+      ? `
+        SELECT
+          id_recording::text as recording_id,
+          ${hasParticipantId ? "cl_participants_id::text" : "NULL"} as call_participants_id,
+          recording_url,
+          ${hasStartTime ? "start_time" : "NULL"} as start_time,
+          ${hasEndTime ? "end_time" : "NULL"} as end_time,
+          ${hasStartTime && hasEndTime ? "EXTRACT(EPOCH FROM (end_time - start_time))::int" : "NULL"} as duration_seconds,
+          ${hasTranscription ? "transcription" : "NULL"} as transcription,
+          NULL as extension_number,
+          NULL as caller_number,
+          NULL as callee_number
+        FROM recordings
+        WHERE ${timeColumn} > $1
+        ORDER BY ${orderClause}
+        LIMIT $2
+      `
+      : `
+        SELECT
+          id_recording::text as recording_id,
+          ${hasParticipantId ? "cl_participants_id::text" : "NULL"} as call_participants_id,
+          recording_url,
+          ${hasStartTime ? "start_time" : "NULL"} as start_time,
+          ${hasEndTime ? "end_time" : "NULL"} as end_time,
+          ${hasStartTime && hasEndTime ? "EXTRACT(EPOCH FROM (end_time - start_time))::int" : "NULL"} as duration_seconds,
+          ${hasTranscription ? "transcription" : "NULL"} as transcription,
+          NULL as extension_number,
+          NULL as caller_number,
+          NULL as callee_number
+        FROM recordings
+        ORDER BY ${orderClause}
+        LIMIT $1
+      `;
+
+    const params = since && hasStartTime ? [since, limit] : [limit];
+    const result = await client.query(query, params);
+
+    logger.info(`Fetched ${result.rows.length} recordings from 3CX database`);
+    return result.rows;
+  }, pool);
+}
+
+// ============================================
 // CALL DETAIL RECORDS (CDR)
 // ============================================
 
@@ -543,14 +640,14 @@ export async function getCallRecords(
 ): Promise<ThreeCXCallRecord[]> {
   return withClient(async (client) => {
     // 3CX stores call logs in different tables depending on version
-    // Try cl (call log) table first, then fallback to cdr table
+    // Try cl (call log) table first, then callhistory3, then fallback to cdr table
 
     // Check which tables exist
     const schemaCheck = await client.query(`
       SELECT table_name
       FROM information_schema.tables
       WHERE table_schema = 'public'
-      AND table_name IN ('cl', 'cdr', 'callhistory', 'call_history')
+      AND table_name IN ('cl', 'callhistory3', 'cdr', 'callhistory', 'call_history')
     `);
     const availableTables = schemaCheck.rows.map((r) => r.table_name);
 
@@ -631,6 +728,72 @@ export async function getCallRecords(
                 COALESCE(has_rec, false) as has_recording
               FROM cl
               ORDER BY start_time ASC
+              LIMIT $1
+            `;
+          params = since ? [since, limit] : [limit];
+        } else if (tableName === "callhistory3") {
+          // 3CX Hosted / V20+ callhistory3 table schema
+          // Columns: idcallhistory3, callid, starttime, answertime, endtime, duration,
+          //          is_answ, is_fail, is_compl, is_fromoutside, mediatype,
+          //          from_no, to_no, callerid, dialednumber, group_no, line_no
+          query = since
+            ? `
+              SELECT
+                idcallhistory3::text as call_id,
+                from_no as caller_number,
+                callerid as caller_name,
+                to_no as callee_number,
+                dialednumber as callee_name,
+                COALESCE(group_no, line_no) as extension_number,
+                CASE
+                  WHEN is_fromoutside = true THEN 'inbound'
+                  ELSE 'outbound'
+                END as direction,
+                mediatype::text as call_type,
+                CASE
+                  WHEN is_answ = true THEN 'answered'
+                  WHEN is_fail = true THEN 'failed'
+                  ELSE 'missed'
+                END as status,
+                NULL::integer as ring_duration,
+                EXTRACT(EPOCH FROM (endtime - answertime))::integer as talk_duration,
+                EXTRACT(EPOCH FROM duration)::integer as total_duration,
+                starttime as call_started_at,
+                CASE WHEN is_answ = true THEN answertime ELSE NULL END as call_answered_at,
+                endtime as call_ended_at,
+                false as has_recording
+              FROM callhistory3
+              WHERE starttime > $1
+              ORDER BY starttime ASC
+              LIMIT $2
+            `
+            : `
+              SELECT
+                idcallhistory3::text as call_id,
+                from_no as caller_number,
+                callerid as caller_name,
+                to_no as callee_number,
+                dialednumber as callee_name,
+                COALESCE(group_no, line_no) as extension_number,
+                CASE
+                  WHEN is_fromoutside = true THEN 'inbound'
+                  ELSE 'outbound'
+                END as direction,
+                mediatype::text as call_type,
+                CASE
+                  WHEN is_answ = true THEN 'answered'
+                  WHEN is_fail = true THEN 'failed'
+                  ELSE 'missed'
+                END as status,
+                NULL::integer as ring_duration,
+                EXTRACT(EPOCH FROM (endtime - answertime))::integer as talk_duration,
+                EXTRACT(EPOCH FROM duration)::integer as total_duration,
+                starttime as call_started_at,
+                CASE WHEN is_answ = true THEN answertime ELSE NULL END as call_answered_at,
+                endtime as call_ended_at,
+                false as has_recording
+              FROM callhistory3
+              ORDER BY starttime ASC
               LIMIT $1
             `;
           params = since ? [since, limit] : [limit];
