@@ -4,7 +4,11 @@
       "Bash(npm install:*)",
       "Bash(for file in \"src/app/\\(auth\\)/auth/reset-password/page.tsx\" \"src/app/\\(auth\\)/forgot-password/page.tsx\" \"src/app/\\(auth\\)/signup/page.tsx\" \"src/app/\\(auth\\)/unauthorized/page.tsx\" \"src/app/\\(dashboard\\)/admin/sync-status/page.tsx\" \"src/app/\\(dashboard\\)/conversations/page.tsx\" \"src/app/\\(dashboard\\)/conversations/[id]/page.tsx\" \"src/app/\\(dashboard\\)/page.tsx\" \"src/app/\\(dashboard\\)/search/page.tsx\")",
       "Bash(do sed -i 's/Chat Archiver/BackupWiz/g' \"$file\")",
-      "Bash(done)"
+      "Bash(done)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(npm run build:*)"
     ]
   }
 }
