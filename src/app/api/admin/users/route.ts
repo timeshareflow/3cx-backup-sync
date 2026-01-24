@@ -10,22 +10,78 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (context.role !== "super_admin" && context.role !== "admin") {
+    const supabase = createAdminClient();
+
+    // Check user's role - both global and tenant-specific
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("role")
+      .eq("id", context.userId)
+      .single();
+
+    const isSuperAdmin = profile?.role === "super_admin";
+
+    // Check tenant role if not super admin
+    let isTenantAdmin = false;
+    if (!isSuperAdmin && context.tenantId) {
+      const { data: tenantRole } = await supabase
+        .from("user_tenants")
+        .select("role")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+      isTenantAdmin = tenantRole?.role === "admin";
+    }
+
+    if (!isSuperAdmin && !isTenantAdmin) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // Use admin client to bypass RLS after validating user access
-    const supabase = createAdminClient();
+    // Super admins see all users (for platform management)
+    if (isSuperAdmin) {
+      const { data: users, error } = await supabase
+        .from("user_profiles")
+        .select("*")
+        .order("created_at", { ascending: false });
 
-    // Fetch all users
-    const { data: users, error } = await supabase
-      .from("user_profiles")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      throw error;
+      if (error) throw error;
+      return NextResponse.json({ data: users });
     }
+
+    // Tenant admins only see users in their tenant (excluding super_admins)
+    if (!context.tenantId) {
+      return NextResponse.json({ data: [] });
+    }
+
+    // Get users that belong to this tenant
+    const { data: tenantUsers, error: tenantError } = await supabase
+      .from("user_tenants")
+      .select(`
+        user_id,
+        role,
+        user:user_profiles (
+          id,
+          email,
+          full_name,
+          role,
+          is_protected,
+          is_active,
+          created_at,
+          updated_at
+        )
+      `)
+      .eq("tenant_id", context.tenantId);
+
+    if (tenantError) throw tenantError;
+
+    // Transform and filter out super_admins
+    const users = (tenantUsers || [])
+      .map(tu => ({
+        ...tu.user,
+        tenant_role: tu.role, // Include their role in this tenant
+      }))
+      .filter(u => u && u.role !== "super_admin") // Exclude platform super admins
+      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
     return NextResponse.json({ data: users });
   } catch (error) {
