@@ -29,13 +29,14 @@ interface UserProfile {
   email: string;
   full_name: string | null;
   role: "super_admin" | "admin" | "user";
+  tenant_role?: "admin" | "user"; // Role within the current tenant
   is_protected: boolean;
   created_at: string;
   updated_at: string;
 }
 
 export default function UserManagementPage() {
-  const { profile, isLoading: authLoading } = useAuth();
+  const { profile, currentTenant, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -49,8 +50,13 @@ export default function UserManagementPage() {
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
   const [permissionsUser, setPermissionsUser] = useState<UserProfile | null>(null);
 
+  // Check if current user has admin access (either global or tenant-level)
+  const isSuperAdmin = profile?.role === "super_admin";
+  const isTenantAdmin = currentTenant?.role === "admin";
+  const hasAdminAccess = isSuperAdmin || isTenantAdmin;
+
   useEffect(() => {
-    if (!authLoading && profile?.role !== "super_admin" && profile?.role !== "admin") {
+    if (!authLoading && !hasAdminAccess) {
       router.push("/unauthorized");
       return;
     }
@@ -58,7 +64,7 @@ export default function UserManagementPage() {
     if (profile) {
       fetchUsers();
     }
-  }, [profile, authLoading, router]);
+  }, [profile, authLoading, router, hasAdminAccess]);
 
   const fetchUsers = async () => {
     try {
@@ -125,6 +131,11 @@ export default function UserManagementPage() {
     } catch (error) {
       console.error("Failed to delete user:", error);
     }
+  };
+
+  // Get effective role (tenant role takes precedence for display in tenant context)
+  const getEffectiveRole = (user: UserProfile) => {
+    return user.tenant_role || user.role;
   };
 
   const getRoleIcon = (role: string) => {
@@ -212,82 +223,86 @@ export default function UserManagementPage() {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
-            {filteredUsers.map((user) => (
-              <tr key={user.id} className="hover:bg-slate-50 transition-colors">
-                <td className="px-6 py-4">
-                  <div className="flex items-center gap-3">
-                    <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-teal-100 to-cyan-100 flex items-center justify-center shadow-sm">
-                      {getRoleIcon(user.role)}
-                    </div>
-                    <div>
-                      <div className="font-semibold text-slate-800">
-                        {user.full_name || "No name"}
-                        {user.is_protected && (
-                          <span className="ml-2 text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">(Protected)</span>
-                        )}
+            {filteredUsers.map((user) => {
+              const effectiveRole = getEffectiveRole(user);
+              return (
+                <tr key={user.id} className="hover:bg-slate-50 transition-colors">
+                  <td className="px-6 py-4">
+                    <div className="flex items-center gap-3">
+                      <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-teal-100 to-cyan-100 flex items-center justify-center shadow-sm">
+                        {getRoleIcon(effectiveRole)}
                       </div>
-                      <div className="text-sm text-slate-500 flex items-center gap-1">
-                        <Mail className="h-3 w-3" />
-                        {user.email}
+                      <div>
+                        <div className="font-semibold text-slate-800">
+                          {user.full_name || "No name"}
+                          {user.is_protected && (
+                            <span className="ml-2 text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">(Protected)</span>
+                          )}
+                        </div>
+                        <div className="text-sm text-slate-500 flex items-center gap-1">
+                          <Mail className="h-3 w-3" />
+                          {user.email}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                </td>
-                <td className="px-6 py-4">
-                  <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold capitalize ${getRoleBadgeColor(user.role)}`}>
-                    {user.role.replace("_", " ")}
-                  </span>
-                </td>
-                <td className="px-6 py-4">
-                  <div className="text-sm text-slate-500 flex items-center gap-1.5">
-                    <Calendar className="h-4 w-4 text-slate-400" />
-                    {formatRelativeTime(user.created_at)}
-                  </div>
-                </td>
-                <td className="px-6 py-4 text-right">
-                  <div className="flex items-center justify-end gap-2">
-                    {/* Permissions button - visible to admins for non-admin users */}
-                    {user.role === "user" && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          setPermissionsUser(user);
-                          setShowPermissionsModal(true);
-                        }}
-                        className="hover:bg-purple-50 hover:text-purple-600"
-                        title="Manage Permissions"
-                      >
-                        <Key className="h-4 w-4" />
-                      </Button>
-                    )}
-                    {!user.is_protected && profile?.role === "super_admin" && (
-                      <>
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold capitalize ${getRoleBadgeColor(effectiveRole)}`}>
+                      {effectiveRole.replace("_", " ")}
+                    </span>
+                  </td>
+                  <td className="px-6 py-4">
+                    <div className="text-sm text-slate-500 flex items-center gap-1.5">
+                      <Calendar className="h-4 w-4 text-slate-400" />
+                      {formatRelativeTime(user.created_at)}
+                    </div>
+                  </td>
+                  <td className="px-6 py-4 text-right">
+                    <div className="flex items-center justify-end gap-2">
+                      {/* Permissions button - visible for non-admin users in this tenant */}
+                      {effectiveRole === "user" && (
                         <Button
                           variant="ghost"
                           size="sm"
                           onClick={() => {
-                            setSelectedUser(user);
-                            setShowEditModal(true);
+                            setPermissionsUser(user);
+                            setShowPermissionsModal(true);
                           }}
-                          className="hover:bg-teal-50 hover:text-teal-600"
+                          className="hover:bg-purple-50 hover:text-purple-600"
+                          title="Manage Permissions"
                         >
-                          <Edit className="h-4 w-4" />
+                          <Key className="h-4 w-4" />
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDeleteUser(user.id)}
-                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </>
-                    )}
-                  </div>
-                </td>
-              </tr>
-            ))}
+                      )}
+                      {/* Edit/Delete only for super admins */}
+                      {!user.is_protected && isSuperAdmin && (
+                        <>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => {
+                              setSelectedUser(user);
+                              setShowEditModal(true);
+                            }}
+                            className="hover:bg-teal-50 hover:text-teal-600"
+                          >
+                            <Edit className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleDeleteUser(user.id)}
+                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-4 w-4" />
+                          </Button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
             {filteredUsers.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-6 py-12 text-center">
