@@ -52,8 +52,17 @@ export async function GET(request: NextRequest) {
 
     if (error) {
       console.error("Error fetching voicemails:", error);
+      if (error.code === "42P01") {
+        return NextResponse.json({
+          data: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          has_more: false,
+        });
+      }
       return NextResponse.json(
-        { error: "Failed to fetch voicemails" },
+        { error: `Failed to fetch voicemails: ${error.message}` },
         { status: 500 }
       );
     }

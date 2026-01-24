@@ -52,8 +52,17 @@ export async function GET(request: NextRequest) {
 
     if (error) {
       console.error("Error fetching faxes:", error);
+      if (error.code === "42P01") {
+        return NextResponse.json({
+          data: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          has_more: false,
+        });
+      }
       return NextResponse.json(
-        { error: "Failed to fetch faxes" },
+        { error: `Failed to fetch faxes: ${error.message}` },
         { status: 500 }
       );
     }
