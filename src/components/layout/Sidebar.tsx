@@ -60,14 +60,18 @@ const adminNavigation: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { profile, signOut } = useAuth();
+  const { profile, currentTenant, signOut } = useAuth();
 
-  const userRole = profile?.role;
+  // Check both global role (from profile) and tenant-specific role
+  const globalRole = profile?.role;
+  const tenantRole = currentTenant?.role;
 
   const canAccess = (item: NavItem) => {
     if (!item.requiredRoles) return true;
-    if (!userRole) return false;
-    return item.requiredRoles.includes(userRole);
+    // Check if either the global role or tenant role grants access
+    if (globalRole && item.requiredRoles.includes(globalRole)) return true;
+    if (tenantRole && item.requiredRoles.includes(tenantRole)) return true;
+    return false;
   };
 
   const visibleAdminItems = adminNavigation.filter(canAccess);
@@ -183,7 +187,7 @@ export function Sidebar() {
               <p className="text-sm font-medium text-white truncate max-w-[120px]">
                 {profile?.full_name || profile?.email?.split("@")[0] || "User"}
               </p>
-              <p className="text-xs text-slate-400 capitalize">{profile?.role || "User"}</p>
+              <p className="text-xs text-slate-400 capitalize">{tenantRole || globalRole || "User"}</p>
             </div>
           </div>
         </div>
