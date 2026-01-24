@@ -1,4 +1,4 @@
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { NextResponse } from "next/server";
 import { getTenantContext } from "@/lib/tenant";
 
@@ -25,7 +25,7 @@ export async function GET(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "No tenant context" }, { status: 403 });
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     // Check if current user is admin or super_admin
     const { data: currentProfile } = await supabase
@@ -100,7 +100,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "No tenant context" }, { status: 403 });
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     // Check if current user is admin or super_admin
     const { data: currentProfile } = await supabase
