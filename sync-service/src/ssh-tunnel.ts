@@ -1,6 +1,10 @@
 import { Client, ConnectConfig } from "ssh2";
 import * as net from "net";
+import * as dns from "dns";
+import { promisify } from "util";
 import { logger } from "./utils/logger";
+
+const dnsLookup = promisify(dns.lookup);
 
 export interface SshTunnelConfig {
   sshHost: string;
@@ -10,6 +14,15 @@ export interface SshTunnelConfig {
   remoteHost: string;  // Usually 127.0.0.1 (PostgreSQL on the remote server)
   remotePort: number;  // Usually 5432 (PostgreSQL port)
 }
+
+// Connection retry configuration
+const SSH_CONFIG = {
+  maxRetries: 3,
+  retryDelayMs: 5000,
+  readyTimeout: 60000,  // 60 seconds (increased from 30)
+  keepaliveInterval: 10000,
+  keepaliveCountMax: 5,
+};
 
 export interface SshTunnel {
   localPort: number;
@@ -38,25 +51,48 @@ function getAvailablePort(): Promise<number> {
   });
 }
 
-export async function createSshTunnel(
-  tenantId: string,
-  config: SshTunnelConfig
-): Promise<SshTunnel> {
-  // Return existing tunnel if already established
-  const existing = activeTunnels.get(tenantId);
-  if (existing) {
-    logger.debug(`Using existing SSH tunnel for tenant`, { tenantId });
-    return existing;
+// Test if a host is reachable via DNS
+async function testDnsResolution(host: string): Promise<{ resolved: boolean; ip?: string; error?: string }> {
+  try {
+    const result = await dnsLookup(host);
+    return { resolved: true, ip: result.address };
+  } catch (error) {
+    return { resolved: false, error: (error as Error).message };
   }
+}
 
-  logger.info(`Creating SSH tunnel for tenant`, {
-    tenantId,
-    sshHost: config.sshHost,
-    remotePort: config.remotePort,
+// Test basic TCP connectivity
+async function testTcpConnection(host: string, port: number, timeoutMs: number = 10000): Promise<{ connected: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const socket = new net.Socket();
+    const timeout = setTimeout(() => {
+      socket.destroy();
+      resolve({ connected: false, error: `TCP connection timed out after ${timeoutMs}ms` });
+    }, timeoutMs);
+
+    socket.on("connect", () => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve({ connected: true });
+    });
+
+    socket.on("error", (err) => {
+      clearTimeout(timeout);
+      socket.destroy();
+      resolve({ connected: false, error: err.message });
+    });
+
+    socket.connect(port, host);
   });
+}
 
-  return new Promise(async (resolve, reject) => {
-    const localPort = await getAvailablePort();
+// Attempt a single SSH connection
+async function attemptSshConnection(
+  config: SshTunnelConfig,
+  localPort: number,
+  tenantId: string
+): Promise<SshTunnel> {
+  return new Promise((resolve, reject) => {
     const sshClient = new Client();
 
     const sshConfig: ConnectConfig = {
@@ -64,8 +100,9 @@ export async function createSshTunnel(
       port: config.sshPort,
       username: config.sshUsername,
       password: config.sshPassword,
-      readyTimeout: 30000,
-      keepaliveInterval: 10000,
+      readyTimeout: SSH_CONFIG.readyTimeout,
+      keepaliveInterval: SSH_CONFIG.keepaliveInterval,
+      keepaliveCountMax: SSH_CONFIG.keepaliveCountMax,
     };
 
     // Create local TCP server that forwards to remote via SSH
@@ -86,7 +123,14 @@ export async function createSshTunnel(
       );
     });
 
+    const connectionTimeout = setTimeout(() => {
+      sshClient.end();
+      server.close();
+      reject(new Error(`SSH connection timed out after ${SSH_CONFIG.readyTimeout}ms`));
+    }, SSH_CONFIG.readyTimeout + 5000);
+
     sshClient.on("ready", () => {
+      clearTimeout(connectionTimeout);
       logger.info(`SSH connection established for tenant`, { tenantId });
 
       server.listen(localPort, "127.0.0.1", () => {
@@ -114,6 +158,7 @@ export async function createSshTunnel(
     });
 
     sshClient.on("error", (err) => {
+      clearTimeout(connectionTimeout);
       logger.error(`SSH connection error for tenant`, { tenantId, error: err.message });
       server.close();
       reject(err);
@@ -126,6 +171,74 @@ export async function createSshTunnel(
 
     sshClient.connect(sshConfig);
   });
+}
+
+export async function createSshTunnel(
+  tenantId: string,
+  config: SshTunnelConfig
+): Promise<SshTunnel> {
+  // Return existing tunnel if already established
+  const existing = activeTunnels.get(tenantId);
+  if (existing) {
+    logger.debug(`Using existing SSH tunnel for tenant`, { tenantId });
+    return existing;
+  }
+
+  logger.info(`Creating SSH tunnel for tenant`, {
+    tenantId,
+    sshHost: config.sshHost,
+    sshPort: config.sshPort,
+    remotePort: config.remotePort,
+  });
+
+  // Step 1: Test DNS resolution
+  const dnsResult = await testDnsResolution(config.sshHost);
+  if (!dnsResult.resolved) {
+    const error = `DNS resolution failed for ${config.sshHost}: ${dnsResult.error}`;
+    logger.error(error, { tenantId });
+    throw new Error(error);
+  }
+  logger.info(`DNS resolved ${config.sshHost} to ${dnsResult.ip}`, { tenantId });
+
+  // Step 2: Test TCP connectivity
+  const tcpResult = await testTcpConnection(config.sshHost, config.sshPort, 15000);
+  if (!tcpResult.connected) {
+    const error = `Cannot reach ${config.sshHost}:${config.sshPort} - ${tcpResult.error}. Check firewall settings on the 3CX server.`;
+    logger.error(error, { tenantId });
+    throw new Error(error);
+  }
+  logger.info(`TCP connection to ${config.sshHost}:${config.sshPort} successful`, { tenantId });
+
+  // Step 3: Attempt SSH connection with retries
+  const localPort = await getAvailablePort();
+  let lastError: Error | null = null;
+
+  for (let attempt = 1; attempt <= SSH_CONFIG.maxRetries; attempt++) {
+    try {
+      logger.info(`SSH connection attempt ${attempt}/${SSH_CONFIG.maxRetries}`, {
+        tenantId,
+        sshHost: config.sshHost,
+      });
+
+      const tunnel = await attemptSshConnection(config, localPort, tenantId);
+      return tunnel;
+    } catch (error) {
+      lastError = error as Error;
+      logger.warn(`SSH connection attempt ${attempt} failed`, {
+        tenantId,
+        error: lastError.message,
+        retriesLeft: SSH_CONFIG.maxRetries - attempt,
+      });
+
+      if (attempt < SSH_CONFIG.maxRetries) {
+        await new Promise((res) => setTimeout(res, SSH_CONFIG.retryDelayMs));
+      }
+    }
+  }
+
+  const finalError = `SSH connection failed after ${SSH_CONFIG.maxRetries} attempts: ${lastError?.message}`;
+  logger.error(finalError, { tenantId, sshHost: config.sshHost });
+  throw new Error(finalError);
 }
 
 export function getExistingTunnel(tenantId: string): SshTunnel | undefined {
