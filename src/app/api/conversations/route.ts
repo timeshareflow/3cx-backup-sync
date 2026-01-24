@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
 interface ConversationWithParticipants {
@@ -36,7 +36,8 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    const supabase = await createClient();
+    // Use admin client to bypass RLS after validating user access
+    const supabase = createAdminClient();
 
     // Check if user is admin or super_admin (bypass permission filtering)
     const { data: profile } = await supabase

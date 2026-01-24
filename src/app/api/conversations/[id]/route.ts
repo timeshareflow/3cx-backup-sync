@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
 export async function GET(
@@ -19,7 +19,8 @@ export async function GET(
       return NextResponse.json({ error: "No tenant access" }, { status: 403 });
     }
 
-    const supabase = await createClient();
+    // Use admin client to bypass RLS after validating user access
+    const supabase = createAdminClient();
 
     // Get conversation with participants, filtered by tenant
     const { data: conversation, error } = await supabase
