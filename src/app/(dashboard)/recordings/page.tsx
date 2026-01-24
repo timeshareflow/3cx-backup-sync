@@ -50,9 +50,11 @@ export default function RecordingsPage() {
       }
 
       const response = await fetch(`/api/recordings?${params}`);
-      if (!response.ok) throw new Error("Failed to fetch recordings");
-
       const data = await response.json();
+
+      if (!response.ok) {
+        throw new Error(data.error || "Failed to fetch recordings");
+      }
 
       if (append) {
         setRecordings((prev) => [...prev, ...data.data]);

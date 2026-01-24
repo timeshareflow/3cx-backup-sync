@@ -52,8 +52,20 @@ export async function GET(request: NextRequest) {
 
     if (error) {
       console.error("Error fetching recordings:", error);
+      // Check for common errors
+      if (error.code === "42P01") {
+        // Table doesn't exist - return empty data instead of error
+        return NextResponse.json({
+          data: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          has_more: false,
+          message: "Call recordings table not yet created. Run migrations first.",
+        });
+      }
       return NextResponse.json(
-        { error: "Failed to fetch recordings" },
+        { error: `Failed to fetch recordings: ${error.message}` },
         { status: 500 }
       );
     }
