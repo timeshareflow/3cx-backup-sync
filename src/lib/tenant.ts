@@ -1,4 +1,5 @@
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { cookies } from "next/headers";
 
 export interface TenantContext {
@@ -9,9 +10,10 @@ export interface TenantContext {
 }
 
 export async function getTenantContext(): Promise<TenantContext> {
-  const supabase = await createClient();
+  // Use regular client for auth (needs cookies for session)
+  const authClient = await createClient();
 
-  const { data: { user } } = await supabase.auth.getUser();
+  const { data: { user } } = await authClient.auth.getUser();
 
   if (!user) {
     return {
@@ -21,6 +23,9 @@ export async function getTenantContext(): Promise<TenantContext> {
       isAuthenticated: false,
     };
   }
+
+  // Use admin client for database queries to bypass RLS
+  const supabase = createAdminClient();
 
   // Get user profile and role
   const { data: profile } = await supabase
