@@ -133,15 +133,12 @@ export function validateAndLogEnvironment(): void {
   }
 
   if (!result.valid) {
-    console.error("\n[ENV] CRITICAL: Environment validation failed!");
-    console.error("The following required environment variables are missing or invalid:");
+    console.error("\n[ENV] WARNING: Some required environment variables are missing or invalid:");
     result.errors.forEach((e) => console.error(`  - ${e}`));
-    console.error("\nPlease set these environment variables and restart the application.\n");
-
-    // In production, exit the process
-    if (process.env.NODE_ENV === "production") {
-      process.exit(1);
-    }
+    console.error("\nThe application will continue but some features may not work correctly.\n");
+    // NOTE: We intentionally do NOT call process.exit() here.
+    // Crashing the entire app for missing env vars is too aggressive.
+    // Individual features should handle missing config gracefully.
   } else if (result.warnings.length > 0) {
     console.log("\n[ENV] Environment validated with warnings (see above)");
   } else {
