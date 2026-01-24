@@ -75,13 +75,16 @@ export async function GET() {
     if (tenantError) throw tenantError;
 
     // Transform and filter out super_admins
-    const users = (tenantUsers || [])
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const users = ((tenantUsers || []) as any[])
+      .filter(tu => tu.user && tu.user.role !== "super_admin") // Exclude platform super admins
       .map(tu => ({
         ...tu.user,
         tenant_role: tu.role, // Include their role in this tenant
       }))
-      .filter(u => u && u.role !== "super_admin") // Exclude platform super admins
-      .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+      .sort((a: { created_at: string }, b: { created_at: string }) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
 
     return NextResponse.json({ data: users });
   } catch (error) {
