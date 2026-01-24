@@ -36,11 +36,11 @@ const ENV_VARS: EnvVarConfig[] = [
     validationMessage: "Must be a valid JWT (100+ characters)",
   },
 
-  // Security (required)
+  // Security (optional - encryption features will be disabled if not set)
   {
     name: "ENCRYPTION_KEY",
-    required: true,
-    description: "AES encryption key for sensitive data",
+    required: false,
+    description: "AES encryption key for sensitive data (optional)",
     validator: (v) => v.length >= 32,
     validationMessage: "Must be at least 32 characters. Generate with: openssl rand -base64 32",
   },
