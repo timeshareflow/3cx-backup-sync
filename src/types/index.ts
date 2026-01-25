@@ -72,11 +72,12 @@ export interface Extension {
 
 export interface SyncStatus {
   id: string;
-  sync_type: "messages" | "media" | "extensions";
+  sync_type: "messages" | "media" | "extensions" | "recordings" | "voicemails" | "faxes" | "meetings" | "cdr";
   last_sync_at: string | null;
   last_success_at: string | null;
   last_error_at: string | null;
   last_error: string | null;
+  notes: string | null;
   items_synced: number;
   status: "idle" | "running" | "success" | "error";
   created_at: string;

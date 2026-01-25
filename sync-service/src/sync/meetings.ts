@@ -170,8 +170,9 @@ export async function syncMeetings(tenant: TenantConfig): Promise<MeetingsSyncRe
     }
 
     if (files.length === 0 || !meetingsPath) {
+      const notes = `No meeting recordings found. Checked: ${pathsToTry.join(", ")}`;
       logger.info("No meeting recording files found on remote server", { tenantId: tenant.id, pathsTried: pathsToTry });
-      await updateSyncStatus("meetings", "success", { recordsSynced: 0, tenantId: tenant.id });
+      await updateSyncStatus("meetings", "success", { recordsSynced: 0, notes, tenantId: tenant.id });
       return result;
     }
 

@@ -83,8 +83,9 @@ export async function syncMedia(
     }
 
     if (files.length === 0 || !chatFilesPath) {
+      const notes = `No chat media files found. Checked: ${pathsToTry.join(", ")}`;
       logger.info("No media files found on remote server", { tenantId, pathsTried: pathsToTry });
-      await updateSyncStatus("media", "success", { recordsSynced: 0, tenantId });
+      await updateSyncStatus("media", "success", { recordsSynced: 0, notes, tenantId });
       return result;
     }
 

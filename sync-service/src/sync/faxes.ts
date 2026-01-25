@@ -122,8 +122,9 @@ export async function syncFaxes(tenant: TenantConfig): Promise<FaxesSyncResult> 
     }
 
     if (files.length === 0 || !faxPath) {
+      const notes = `No fax files found. Checked: ${pathsToTry.join(", ")}`;
       logger.info("No fax files found on remote server", { tenantId: tenant.id, pathsTried: pathsToTry });
-      await updateSyncStatus("faxes", "success", { recordsSynced: 0, tenantId: tenant.id });
+      await updateSyncStatus("faxes", "success", { recordsSynced: 0, notes, tenantId: tenant.id });
       return result;
     }
 

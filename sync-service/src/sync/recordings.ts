@@ -1,3 +1,4 @@
+import * as path from "path";
 import { Pool } from "pg";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
@@ -5,9 +6,11 @@ import {
   uploadBuffer,
   generateStoragePath,
   fileExists,
+  detectFileType,
 } from "../storage/supabase-storage";
+import { createSftpClient, downloadFile, closeSftpClient } from "../storage/sftp";
 import { insertCallRecording, updateSyncStatus, getLastSyncedTimestamp } from "../storage/supabase";
-import { TenantConfig } from "../tenant";
+import { TenantConfig, getTenantSftpConfig } from "../tenant";
 import { getRecordings } from "../threecx/queries";
 
 export interface RecordingsSyncResult {
@@ -16,54 +19,49 @@ export interface RecordingsSyncResult {
   errors: Array<{ recordingId: string; error: string }>;
 }
 
-// Download a recording file from 3CX
-async function downloadRecording(
-  recordingUrl: string,
-  threecxHost: string
-): Promise<{ buffer: Buffer; contentType: string; filename: string } | null> {
-  try {
-    // Build full URL - recording_url may be relative or absolute
-    let fullUrl: string;
-    if (recordingUrl.startsWith("http://") || recordingUrl.startsWith("https://")) {
-      fullUrl = recordingUrl;
-    } else {
-      // Remove leading slash if present and build URL
-      const cleanPath = recordingUrl.startsWith("/") ? recordingUrl.slice(1) : recordingUrl;
-      fullUrl = `https://${threecxHost}/${cleanPath}`;
+// Default recordings base path on 3CX servers
+const DEFAULT_RECORDINGS_BASE = "/var/lib/3cxpbx/Instance1/Data/Recordings";
+
+// Convert a recording URL to a filesystem path for SFTP download
+function urlToFilesystemPath(recordingUrl: string, basePath: string): string {
+  // Remove URL scheme if present
+  let urlPath = recordingUrl;
+  if (urlPath.startsWith("http://") || urlPath.startsWith("https://")) {
+    try {
+      const url = new URL(urlPath);
+      urlPath = url.pathname;
+    } catch {
+      // If parsing fails, just use as-is
     }
-
-    logger.debug("Downloading recording", { url: fullUrl });
-
-    const response = await fetch(fullUrl, {
-      headers: {
-        "Accept": "audio/*,*/*",
-      },
-    });
-
-    if (!response.ok) {
-      logger.warn("Failed to download recording", {
-        url: fullUrl,
-        status: response.status,
-        statusText: response.statusText
-      });
-      return null;
-    }
-
-    const buffer = Buffer.from(await response.arrayBuffer());
-    const contentType = response.headers.get("content-type") || "audio/wav";
-
-    // Extract filename from URL or use a default
-    const urlPath = new URL(fullUrl).pathname;
-    const filename = urlPath.split("/").pop() || "recording.wav";
-
-    return { buffer, contentType, filename };
-  } catch (error) {
-    logger.error("Error downloading recording", {
-      url: recordingUrl,
-      error: (error as Error).message,
-    });
-    return null;
   }
+
+  // If it's already an absolute path starting with basePath, use it
+  if (urlPath.startsWith(basePath)) {
+    return urlPath;
+  }
+
+  // If it starts with a slash, it might be a relative URL path like /100/recording.wav
+  if (urlPath.startsWith("/")) {
+    // Try to construct the full path
+    // URL patterns like /100/Recordings/file.wav -> basePath/100/file.wav
+    // Or /recordings/100/file.wav -> basePath/100/file.wav
+    const parts = urlPath.split("/").filter(Boolean);
+
+    // Look for extension number pattern (3-4 digit number)
+    const extIndex = parts.findIndex(p => /^\d{3,4}$/.test(p));
+    if (extIndex !== -1) {
+      // Get the extension number and everything after it
+      const relevantParts = parts.slice(extIndex);
+      return path.posix.join(basePath, ...relevantParts);
+    }
+
+    // If we can't find an extension pattern, just append the filename to base
+    const filename = parts[parts.length - 1];
+    return path.posix.join(basePath, filename);
+  }
+
+  // Otherwise append the path to base
+  return path.posix.join(basePath, urlPath);
 }
 
 export async function syncRecordings(
@@ -81,13 +79,16 @@ export async function syncRecordings(
     return result;
   }
 
-  if (!tenant.threecx_host) {
-    logger.info("No 3CX host configured for tenant", { tenantId: tenant.id });
+  // Get SFTP config for downloading recordings
+  const sftpConfig = getTenantSftpConfig(tenant);
+  if (!sftpConfig) {
+    logger.info("No SFTP credentials configured - skipping recordings sync", { tenantId: tenant.id });
     return result;
   }
 
-  const threecxHost = tenant.threecx_host;
+  const recordingsBasePath = tenant.threecx_recordings_path || DEFAULT_RECORDINGS_BASE;
 
+  let sftp;
   try {
     await updateSyncStatus("recordings", "running", { tenantId: tenant.id });
 
@@ -104,12 +105,20 @@ export async function syncRecordings(
     const recordings = await getRecordings(since, 500, pool);
 
     if (recordings.length === 0) {
+      const notes = since ? "No new recordings since last sync" : "No recordings found in 3CX database";
       logger.info("No new recordings to sync", { tenantId: tenant.id });
-      await updateSyncStatus("recordings", "success", { recordsSynced: 0, tenantId: tenant.id });
+      await updateSyncStatus("recordings", "success", { recordsSynced: 0, notes, tenantId: tenant.id });
       return result;
     }
 
     logger.info(`Processing ${recordings.length} recordings`, { tenantId: tenant.id });
+
+    // Connect to SFTP
+    logger.info("Connecting to 3CX server via SFTP for recordings", {
+      tenantId: tenant.id,
+      host: sftpConfig.host,
+    });
+    sftp = await createSftpClient(sftpConfig);
 
     for (const recording of recordings) {
       try {
@@ -119,8 +128,11 @@ export async function syncRecordings(
           continue;
         }
 
+        // Convert URL to filesystem path
+        const remotePath = urlToFilesystemPath(recording.recording_url, recordingsBasePath);
+        const filename = path.posix.basename(remotePath) || `recording_${recording.recording_id}.wav`;
+
         // Generate storage path
-        const filename = recording.recording_url.split("/").pop() || `recording_${recording.recording_id}.wav`;
         const storagePath = generateStoragePath(tenant.id, "recordings", filename);
 
         // Check if already uploaded
@@ -130,22 +142,54 @@ export async function syncRecordings(
           continue;
         }
 
-        // Download the recording
-        const downloadResult = await downloadRecording(recording.recording_url, threecxHost);
-        if (!downloadResult) {
-          result.errors.push({
-            recordingId: recording.recording_id,
-            error: "Failed to download recording",
-          });
-          continue;
+        // Download the recording via SFTP
+        logger.debug("Downloading recording via SFTP", {
+          tenantId: tenant.id,
+          recordingId: recording.recording_id,
+          remotePath,
+        });
+
+        let buffer: Buffer;
+        try {
+          buffer = await downloadFile(sftp, remotePath);
+        } catch (downloadError) {
+          // Try alternate path patterns if the first one fails
+          const altPaths = [
+            // Try with Recordings subfolder
+            path.posix.join(recordingsBasePath, recording.extension_number || "", "Recordings", filename),
+            // Try directly under extension
+            path.posix.join(recordingsBasePath, recording.extension_number || "", filename),
+            // Try just the filename in base path
+            path.posix.join(recordingsBasePath, filename),
+          ];
+
+          let downloaded = false;
+          for (const altPath of altPaths) {
+            if (altPath === remotePath) continue; // Skip if same as original
+            try {
+              logger.debug("Trying alternate path", { altPath });
+              buffer = await downloadFile(sftp, altPath);
+              downloaded = true;
+              break;
+            } catch {
+              // Continue to next path
+            }
+          }
+
+          if (!downloaded) {
+            result.errors.push({
+              recordingId: recording.recording_id,
+              error: `Failed to download: file not found at ${remotePath}`,
+            });
+            continue;
+          }
         }
 
+        // Detect content type
+        const { mimeType } = detectFileType(buffer!);
+
         // Upload to Supabase Storage
-        const uploadResult = await uploadBuffer(
-          downloadResult.buffer,
-          storagePath,
-          downloadResult.contentType
-        );
+        const uploadResult = await uploadBuffer(buffer!, storagePath, mimeType);
 
         // Calculate duration
         const durationSeconds = recording.duration_seconds ||
@@ -160,10 +204,10 @@ export async function syncRecordings(
           extension: recording.extension_number || undefined,
           caller_number: recording.caller_number || undefined,
           callee_number: recording.callee_number || undefined,
-          original_filename: downloadResult.filename,
+          original_filename: filename,
           file_size: uploadResult.size,
           storage_path: uploadResult.path,
-          mime_type: downloadResult.contentType,
+          mime_type: mimeType,
           duration_seconds: durationSeconds || undefined,
           transcription: recording.transcription || undefined,
           recorded_at: recording.start_time?.toISOString() || new Date().toISOString(),
@@ -172,7 +216,7 @@ export async function syncRecordings(
         });
 
         result.filesSynced++;
-        logger.debug(`Synced recording`, { tenantId: tenant.id, recordingId: recording.recording_id });
+        logger.debug(`Synced recording via SFTP`, { tenantId: tenant.id, recordingId: recording.recording_id });
       } catch (error) {
         const err = handleError(error);
         // Skip duplicates silently
@@ -192,8 +236,15 @@ export async function syncRecordings(
       }
     }
 
+    // Build notes with summary
+    let notes = `Synced ${result.filesSynced}, skipped ${result.filesSkipped}`;
+    if (result.errors.length > 0) {
+      notes += `, ${result.errors.length} failed`;
+    }
+
     await updateSyncStatus("recordings", "success", {
       recordsSynced: result.filesSynced,
+      notes,
       tenantId: tenant.id,
     });
 
@@ -213,5 +264,9 @@ export async function syncRecordings(
       tenantId: tenant.id,
     });
     throw err;
+  } finally {
+    if (sftp) {
+      await closeSftpClient(sftp);
+    }
   }
 }

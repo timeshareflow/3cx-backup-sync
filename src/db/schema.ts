@@ -506,6 +506,7 @@ export const syncStatus = pgTable(
     lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
     lastErrorAt: timestamp("last_error_at", { withTimezone: true }),
     lastError: text("last_error"),
+    notes: text("notes"), // Detailed notes about the sync result
     triggerRequestedAt: timestamp("trigger_requested_at", { withTimezone: true }), // Manual sync trigger timestamp
     itemsSynced: integer("items_synced").default(0),
     itemsFailed: integer("items_failed").default(0),

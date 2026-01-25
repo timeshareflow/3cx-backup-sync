@@ -118,9 +118,9 @@ export function SyncStatusCard() {
                     : ""
                 }`}
               >
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-1 min-w-0">
                   {getStatusIcon(sync.status)}
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <p className={`font-semibold text-slate-800 capitalize ${isClickable ? "group-hover:text-teal-700" : ""}`}>
                       {sync.sync_type}
                     </p>
@@ -129,9 +129,14 @@ export function SyncStatusCard() {
                         ? `Last sync: ${formatRelativeTime(sync.last_success_at)}`
                         : "Never synced"}
                     </p>
+                    {sync.notes && sync.items_synced === 0 && (
+                      <p className="text-xs text-amber-600 mt-1 truncate" title={sync.notes}>
+                        {sync.notes}
+                      </p>
+                    )}
                   </div>
                 </div>
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-shrink-0">
                   <div className="text-right">
                     {getStatusBadge(sync.status)}
                     {sync.items_synced > 0 && (

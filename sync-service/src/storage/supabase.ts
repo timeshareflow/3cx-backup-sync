@@ -289,6 +289,7 @@ export async function updateSyncStatus(
     lastSyncedMessageId?: string;
     recordsSynced?: number;
     errorMessage?: string;
+    notes?: string;
     tenantId?: string;
   }
 ): Promise<void> {
@@ -324,6 +325,11 @@ export async function updateSyncStatus(
 
   if (details?.recordsSynced !== undefined) {
     record.items_synced = details.recordsSynced;
+  }
+
+  // Add notes for detailed status information
+  if (details?.notes !== undefined) {
+    record.notes = details.notes;
   }
 
   // Use upsert to create record if it doesn't exist
