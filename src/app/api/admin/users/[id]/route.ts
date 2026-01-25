@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
+import { getTenantContext } from "@/lib/tenant";
 import { NextResponse } from "next/server";
 
 interface RouteParams {
@@ -8,21 +9,38 @@ interface RouteParams {
 export async function DELETE(request: Request, { params }: RouteParams) {
   try {
     const { id } = await params;
-    const supabase = await createClient();
+    const context = await getTenantContext();
 
-    // Check if user is super_admin
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) {
+    if (!context.isAuthenticated || !context.userId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    const supabase = createAdminClient();
+
+    // Get current user's profile and tenant role
     const { data: profile } = await supabase
       .from("user_profiles")
       .select("role")
-      .eq("id", user.id)
+      .eq("id", context.userId)
       .single();
 
-    if (profile?.role !== "super_admin") {
+    const isSuperAdmin = profile?.role === "super_admin";
+
+    // Check tenant role if not super admin
+    let currentUserTenantRole: string | null = null;
+    if (!isSuperAdmin && context.tenantId) {
+      const { data: tenantRole } = await supabase
+        .from("user_tenants")
+        .select("role")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+      currentUserTenantRole = tenantRole?.role || null;
+    }
+
+    const isTenantAdmin = currentUserTenantRole === "admin";
+
+    if (!isSuperAdmin && !isTenantAdmin) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -37,14 +55,55 @@ export async function DELETE(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Cannot delete protected user" }, { status: 403 });
     }
 
-    // Delete user profile (auth user deletion requires admin API)
-    const { error } = await supabase
-      .from("user_profiles")
-      .delete()
-      .eq("id", id);
+    // Check target user's tenant role if not super admin
+    if (!isSuperAdmin && context.tenantId) {
+      const { data: targetTenantRole } = await supabase
+        .from("user_tenants")
+        .select("role")
+        .eq("user_id", id)
+        .eq("tenant_id", context.tenantId)
+        .single();
 
-    if (error) {
-      throw error;
+      // Prevent tenant admins from deleting other admins
+      if (targetTenantRole?.role === "admin") {
+        return NextResponse.json({ error: "Cannot delete another admin" }, { status: 403 });
+      }
+    }
+
+    if (isSuperAdmin) {
+      // Super admin can fully delete users
+      const { error } = await supabase
+        .from("user_profiles")
+        .delete()
+        .eq("id", id);
+
+      if (error) {
+        throw error;
+      }
+    } else if (context.tenantId) {
+      // Tenant admins can only remove users from their tenant
+      const { error } = await supabase
+        .from("user_tenants")
+        .delete()
+        .eq("user_id", id)
+        .eq("tenant_id", context.tenantId);
+
+      if (error) {
+        throw error;
+      }
+
+      // Also delete related permissions
+      await supabase
+        .from("user_extension_permissions")
+        .delete()
+        .eq("user_id", id)
+        .eq("tenant_id", context.tenantId);
+
+      await supabase
+        .from("user_group_chat_permissions")
+        .delete()
+        .eq("user_id", id)
+        .eq("tenant_id", context.tenantId);
     }
 
     return NextResponse.json({ success: true });

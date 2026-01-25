@@ -6,7 +6,7 @@ import { rateLimitConfigs } from "@/lib/rate-limit";
 
 interface InviteRequest {
   email: string;
-  role: "admin" | "user";
+  role: "admin" | "manager" | "user";
   temporaryPassword?: string;
 }
 

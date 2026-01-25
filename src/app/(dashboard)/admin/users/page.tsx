@@ -14,6 +14,7 @@ import {
   Search,
   Shield,
   ShieldCheck,
+  ShieldAlert,
   User,
   Trash2,
   Edit,
@@ -28,8 +29,8 @@ interface UserProfile {
   id: string;
   email: string;
   full_name: string | null;
-  role: "super_admin" | "admin" | "user";
-  tenant_role?: "admin" | "user"; // Role within the current tenant
+  role: "super_admin" | "admin" | "manager" | "user";
+  tenant_role?: "admin" | "manager" | "user"; // Role within the current tenant
   is_protected: boolean;
   created_at: string;
   updated_at: string;
@@ -45,7 +46,7 @@ export default function UserManagementPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<"admin" | "user">("user");
+  const [inviteRole, setInviteRole] = useState<"admin" | "manager" | "user">("user");
   const [useTemporaryPassword, setUseTemporaryPassword] = useState(false);
   const [temporaryPassword, setTemporaryPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -153,6 +154,8 @@ export default function UserManagementPage() {
         return <ShieldCheck className="h-4 w-4 text-teal-600" />;
       case "admin":
         return <Shield className="h-4 w-4 text-blue-600" />;
+      case "manager":
+        return <ShieldAlert className="h-4 w-4 text-purple-600" />;
       default:
         return <User className="h-4 w-4 text-slate-600" />;
     }
@@ -164,6 +167,8 @@ export default function UserManagementPage() {
         return "bg-gradient-to-r from-teal-100 to-cyan-100 text-teal-800 border border-teal-200";
       case "admin":
         return "bg-blue-100 text-blue-800 border border-blue-200";
+      case "manager":
+        return "bg-purple-100 text-purple-800 border border-purple-200";
       default:
         return "bg-slate-100 text-slate-700 border border-slate-200";
     }
@@ -283,29 +288,34 @@ export default function UserManagementPage() {
                           <Key className="h-4 w-4" />
                         </Button>
                       )}
-                      {/* Edit/Delete only for super admins */}
-                      {!user.is_protected && isSuperAdmin && (
-                        <>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => {
-                              setSelectedUser(user);
-                              setShowEditModal(true);
-                            }}
-                            className="hover:bg-teal-50 hover:text-teal-600"
-                          >
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleDeleteUser(user.id)}
-                            className="text-red-600 hover:text-red-700 hover:bg-red-50"
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </>
+                      {/* Edit button - visible to admins for non-protected users */}
+                      {!user.is_protected && hasAdminAccess && effectiveRole !== "super_admin" && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setSelectedUser(user);
+                            setShowEditModal(true);
+                          }}
+                          className="hover:bg-teal-50 hover:text-teal-600"
+                          title="Edit Role"
+                        >
+                          <Edit className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {/* Delete button - only super_admin can delete admins, admins can delete managers/users */}
+                      {!user.is_protected &&
+                       effectiveRole !== "super_admin" &&
+                       (isSuperAdmin || (isTenantAdmin && effectiveRole !== "admin")) && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleDeleteUser(user.id)}
+                          className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                          title="Delete User"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
                       )}
                     </div>
                   </td>
@@ -357,11 +367,12 @@ export default function UserManagementPage() {
             </label>
             <select
               value={inviteRole}
-              onChange={(e) => setInviteRole(e.target.value as "admin" | "user")}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              onChange={(e) => setInviteRole(e.target.value as "admin" | "manager" | "user")}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
             >
-              <option value="user">User</option>
-              <option value="admin">Admin</option>
+              <option value="user">User - Basic access to permitted content</option>
+              <option value="manager">Manager - Can manage users and permissions</option>
+              <option value="admin">Admin - Full access, cannot be deleted by managers</option>
             </select>
           </div>
           <div className="border-t border-gray-200 pt-4">
@@ -434,13 +445,14 @@ export default function UserManagementPage() {
                 Role
               </label>
               <select
-                value={selectedUser.role}
+                value={selectedUser.tenant_role || selectedUser.role}
                 onChange={(e) =>
-                  setSelectedUser({ ...selectedUser, role: e.target.value as any })
+                  setSelectedUser({ ...selectedUser, tenant_role: e.target.value as any })
                 }
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="user">User</option>
+                <option value="manager">Manager</option>
                 <option value="admin">Admin</option>
                 {profile?.role === "super_admin" && (
                   <option value="super_admin">Super Admin</option>
@@ -458,7 +470,7 @@ export default function UserManagementPage() {
                 Cancel
               </Button>
               <Button
-                onClick={() => handleUpdateRole(selectedUser.id, selectedUser.role)}
+                onClick={() => handleUpdateRole(selectedUser.id, selectedUser.tenant_role || selectedUser.role)}
               >
                 Save Changes
               </Button>
