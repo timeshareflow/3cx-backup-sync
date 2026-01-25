@@ -6,6 +6,7 @@ import { rateLimitConfigs } from "@/lib/rate-limit";
 
 interface InviteRequest {
   email: string;
+  fullName?: string;
   role: "admin" | "manager" | "user";
   temporaryPassword?: string;
 }
@@ -19,7 +20,7 @@ export async function POST(request: Request) {
     const parsed = await parseJsonBody<InviteRequest>(request);
     if ("error" in parsed) return parsed.error;
 
-    const { email, role, temporaryPassword } = parsed.data;
+    const { email, fullName, role, temporaryPassword } = parsed.data;
     const context = await getTenantContext();
 
     if (!context.isAuthenticated || !context.userId) {
@@ -177,6 +178,7 @@ export async function POST(request: Request) {
       .insert({
         id: newUserId,
         email: email.toLowerCase(),
+        full_name: fullName || null,
         role: "user", // Global role is always user, tenant role is in user_tenants
       });
 

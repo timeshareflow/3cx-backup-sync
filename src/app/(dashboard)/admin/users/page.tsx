@@ -46,6 +46,7 @@ export default function UserManagementPage() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "manager" | "user">("user");
   const [useTemporaryPassword, setUseTemporaryPassword] = useState(false);
   const [temporaryPassword, setTemporaryPassword] = useState("");
@@ -93,6 +94,7 @@ export default function UserManagementPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           email: inviteEmail,
+          fullName: inviteName || undefined,
           role: inviteRole,
           temporaryPassword: useTemporaryPassword ? temporaryPassword : undefined,
         }),
@@ -100,6 +102,7 @@ export default function UserManagementPage() {
       if (response.ok) {
         setShowInviteModal(false);
         setInviteEmail("");
+        setInviteName("");
         setInviteRole("user");
         setUseTemporaryPassword(false);
         setTemporaryPassword("");
@@ -126,6 +129,40 @@ export default function UserManagementPage() {
       }
     } catch (error) {
       console.error("Failed to update user role:", error);
+    }
+  };
+
+  const handleUpdateUser = async (user: UserProfile) => {
+    try {
+      // Update profile (name, email)
+      const profileResponse = await fetch(`/api/admin/users/${user.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          full_name: user.full_name,
+          email: user.email,
+        }),
+      });
+
+      if (!profileResponse.ok) {
+        console.error("Failed to update user profile");
+        return;
+      }
+
+      // Update role
+      const roleResponse = await fetch(`/api/admin/users/${user.id}/role`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ role: user.tenant_role || user.role }),
+      });
+
+      if (roleResponse.ok) {
+        fetchUsers();
+        setShowEditModal(false);
+        setSelectedUser(null);
+      }
+    } catch (error) {
+      console.error("Failed to update user:", error);
     }
   };
 
@@ -343,6 +380,7 @@ export default function UserManagementPage() {
         onClose={() => {
           setShowInviteModal(false);
           setInviteEmail("");
+          setInviteName("");
           setInviteRole("user");
           setUseTemporaryPassword(false);
           setTemporaryPassword("");
@@ -350,6 +388,17 @@ export default function UserManagementPage() {
         title="Invite User"
       >
         <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Full Name
+            </label>
+            <Input
+              type="text"
+              placeholder="John Doe"
+              value={inviteName}
+              onChange={(e) => setInviteName(e.target.value)}
+            />
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Email Address
@@ -408,6 +457,7 @@ export default function UserManagementPage() {
             <Button variant="outline" onClick={() => {
               setShowInviteModal(false);
               setInviteEmail("");
+              setInviteName("");
               setInviteRole("user");
               setUseTemporaryPassword(false);
               setTemporaryPassword("");
@@ -432,13 +482,35 @@ export default function UserManagementPage() {
           setShowEditModal(false);
           setSelectedUser(null);
         }}
-        title="Edit User Role"
+        title="Edit User"
       >
         {selectedUser && (
           <div className="space-y-4">
-            <div className="p-4 bg-gray-50 rounded-lg">
-              <div className="font-medium">{selectedUser.full_name || "No name"}</div>
-              <div className="text-sm text-gray-500">{selectedUser.email}</div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Full Name
+              </label>
+              <Input
+                type="text"
+                value={selectedUser.full_name || ""}
+                onChange={(e) =>
+                  setSelectedUser({ ...selectedUser, full_name: e.target.value || null })
+                }
+                placeholder="Enter full name"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Email
+              </label>
+              <Input
+                type="email"
+                value={selectedUser.email}
+                onChange={(e) =>
+                  setSelectedUser({ ...selectedUser, email: e.target.value })
+                }
+                placeholder="user@example.com"
+              />
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -470,7 +542,7 @@ export default function UserManagementPage() {
                 Cancel
               </Button>
               <Button
-                onClick={() => handleUpdateRole(selectedUser.id, selectedUser.tenant_role || selectedUser.role)}
+                onClick={() => handleUpdateUser(selectedUser)}
               >
                 Save Changes
               </Button>
