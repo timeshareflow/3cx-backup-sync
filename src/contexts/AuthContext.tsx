@@ -30,9 +30,11 @@ interface AuthContextType {
   currentTenant: Tenant | null;
   session: Session | null;
   isLoading: boolean;
+  passwordChangeRequired: boolean;
   setCurrentTenant: (tenant: Tenant) => void;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
+  clearPasswordChangeRequired: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -44,6 +46,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [currentTenant, setCurrentTenant] = useState<Tenant | null>(null);
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
 
   const supabase = createClient();
 
@@ -95,6 +98,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setUser(initialSession?.user ?? null);
 
       if (initialSession?.user) {
+        // Check if password change is required
+        const needsPasswordChange = initialSession.user.user_metadata?.password_change_required === true;
+        setPasswordChangeRequired(needsPasswordChange);
         fetchProfile(initialSession.user.id);
       }
       setIsLoading(false);
@@ -107,11 +113,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(newSession?.user ?? null);
 
         if (event === "SIGNED_IN" && newSession?.user) {
+          // Check if password change is required
+          const needsPasswordChange = newSession.user.user_metadata?.password_change_required === true;
+          setPasswordChangeRequired(needsPasswordChange);
           await fetchProfile(newSession.user.id);
         } else if (event === "SIGNED_OUT") {
           setProfile(null);
           setTenants([]);
           setCurrentTenant(null);
+          setPasswordChangeRequired(false);
         }
       }
     );
@@ -130,7 +140,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setProfile(null);
     setTenants([]);
     setCurrentTenant(null);
+    setPasswordChangeRequired(false);
     localStorage.removeItem("currentTenantId");
+  };
+
+  const clearPasswordChangeRequired = async () => {
+    // Update user metadata to remove password_change_required flag
+    const { error } = await supabase.auth.updateUser({
+      data: { password_change_required: false }
+    });
+    if (!error) {
+      setPasswordChangeRequired(false);
+    }
   };
 
   return (
@@ -142,9 +163,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         currentTenant,
         session,
         isLoading,
+        passwordChangeRequired,
         setCurrentTenant: handleSetCurrentTenant,
         signOut,
         refreshProfile,
+        clearPasswordChangeRequired,
       }}
     >
       {children}

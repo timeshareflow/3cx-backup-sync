@@ -46,6 +46,8 @@ export default function UserManagementPage() {
   const [selectedUser, setSelectedUser] = useState<UserProfile | null>(null);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<"admin" | "user">("user");
+  const [useTemporaryPassword, setUseTemporaryPassword] = useState(false);
+  const [temporaryPassword, setTemporaryPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
   const [permissionsUser, setPermissionsUser] = useState<UserProfile | null>(null);
@@ -82,17 +84,24 @@ export default function UserManagementPage() {
 
   const handleInviteUser = async () => {
     if (!inviteEmail) return;
+    if (useTemporaryPassword && !temporaryPassword) return;
     setIsSubmitting(true);
     try {
       const response = await fetch("/api/admin/users/invite", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: inviteEmail, role: inviteRole }),
+        body: JSON.stringify({
+          email: inviteEmail,
+          role: inviteRole,
+          temporaryPassword: useTemporaryPassword ? temporaryPassword : undefined,
+        }),
       });
       if (response.ok) {
         setShowInviteModal(false);
         setInviteEmail("");
         setInviteRole("user");
+        setUseTemporaryPassword(false);
+        setTemporaryPassword("");
         fetchUsers();
       }
     } catch (error) {
@@ -259,8 +268,8 @@ export default function UserManagementPage() {
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
-                      {/* Permissions button - visible for non-admin users in this tenant */}
-                      {effectiveRole === "user" && (
+                      {/* Permissions button - visible for all non-super_admin users */}
+                      {effectiveRole !== "super_admin" && (
                         <Button
                           variant="ghost"
                           size="sm"
@@ -321,7 +330,13 @@ export default function UserManagementPage() {
       {/* Invite User Modal */}
       <Modal
         isOpen={showInviteModal}
-        onClose={() => setShowInviteModal(false)}
+        onClose={() => {
+          setShowInviteModal(false);
+          setInviteEmail("");
+          setInviteRole("user");
+          setUseTemporaryPassword(false);
+          setTemporaryPassword("");
+        }}
         title="Invite User"
       >
         <div className="space-y-4">
@@ -349,12 +364,51 @@ export default function UserManagementPage() {
               <option value="admin">Admin</option>
             </select>
           </div>
+          <div className="border-t border-gray-200 pt-4">
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={useTemporaryPassword}
+                onChange={(e) => setUseTemporaryPassword(e.target.checked)}
+                className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">
+                Set temporary password (user must change on first login)
+              </span>
+            </label>
+            {useTemporaryPassword && (
+              <div className="mt-3">
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Temporary Password
+                </label>
+                <Input
+                  type="text"
+                  placeholder="Enter temporary password"
+                  value={temporaryPassword}
+                  onChange={(e) => setTemporaryPassword(e.target.value)}
+                />
+                <p className="mt-1 text-xs text-gray-500">
+                  User will be required to change this password on first login.
+                </p>
+              </div>
+            )}
+          </div>
           <div className="flex justify-end gap-2 pt-4">
-            <Button variant="outline" onClick={() => setShowInviteModal(false)}>
+            <Button variant="outline" onClick={() => {
+              setShowInviteModal(false);
+              setInviteEmail("");
+              setInviteRole("user");
+              setUseTemporaryPassword(false);
+              setTemporaryPassword("");
+            }}>
               Cancel
             </Button>
-            <Button onClick={handleInviteUser} isLoading={isSubmitting}>
-              Send Invitation
+            <Button
+              onClick={handleInviteUser}
+              isLoading={isSubmitting}
+              disabled={!inviteEmail || (useTemporaryPassword && !temporaryPassword)}
+            >
+              {useTemporaryPassword ? "Create User" : "Send Invitation"}
             </Button>
           </div>
         </div>
