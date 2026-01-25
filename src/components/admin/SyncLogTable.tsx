@@ -116,13 +116,13 @@ export function SyncLogTable() {
                     </div>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500">
-                    {log.messages_synced.toLocaleString()}
+                    {(log.messages_synced ?? 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-500">
-                    {log.media_synced.toLocaleString()}
+                    {(log.media_synced ?? 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-3 text-sm">
-                    {log.errors_count > 0 ? (
+                    {(log.errors_count ?? 0) > 0 ? (
                       <span className="text-red-600">{log.errors_count}</span>
                     ) : (
                       <span className="text-gray-400">0</span>
