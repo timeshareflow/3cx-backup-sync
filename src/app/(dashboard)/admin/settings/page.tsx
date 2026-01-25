@@ -2,8 +2,10 @@
 
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/Button";
-import { Settings, Download, Trash2, Bell, Clock, Shield, Archive, Infinity } from "lucide-react";
+import { Input } from "@/components/ui/Input";
+import { Settings, Download, Trash2, Bell, Clock, Shield, Archive, Infinity, User } from "lucide-react";
 import { TwoFactorSetup } from "@/components/auth/TwoFactorSetup";
+import { createClient } from "@/lib/supabase/client";
 
 interface RetentionPolicy {
   data_type: string;
@@ -14,15 +16,88 @@ interface RetentionPolicy {
   last_cleanup_at: string | null;
 }
 
+interface UserProfile {
+  id: string;
+  email: string;
+  full_name: string | null;
+}
+
 export default function SettingsPage() {
   const [policies, setPolicies] = useState<RetentionPolicy[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [saveMessage, setSaveMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Profile state
+  const [profile, setProfile] = useState<UserProfile | null>(null);
+  const [profileLoading, setProfileLoading] = useState(true);
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileMessage, setProfileMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   useEffect(() => {
     fetchPolicies();
+    fetchProfile();
   }, []);
+
+  async function fetchProfile() {
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (user) {
+        const { data: profileData } = await supabase
+          .from("user_profiles")
+          .select("id, email, full_name")
+          .eq("id", user.id)
+          .single();
+
+        if (profileData) {
+          setProfile(profileData);
+        } else {
+          // Fallback to auth user data
+          setProfile({
+            id: user.id,
+            email: user.email || "",
+            full_name: user.user_metadata?.full_name || null,
+          });
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch profile:", error);
+    } finally {
+      setProfileLoading(false);
+    }
+  }
+
+  async function saveProfile() {
+    if (!profile) return;
+
+    setProfileSaving(true);
+    setProfileMessage(null);
+
+    try {
+      const response = await fetch(`/api/admin/users/${profile.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          full_name: profile.full_name,
+          email: profile.email,
+        }),
+      });
+
+      if (response.ok) {
+        setProfileMessage({ type: "success", text: "Profile updated successfully" });
+      } else {
+        const data = await response.json();
+        setProfileMessage({ type: "error", text: data.error || "Failed to update profile" });
+      }
+    } catch (error) {
+      setProfileMessage({ type: "error", text: "Failed to update profile" });
+    } finally {
+      setProfileSaving(false);
+      setTimeout(() => setProfileMessage(null), 3000);
+    }
+  }
 
   async function fetchPolicies() {
     try {
@@ -80,6 +155,67 @@ export default function SettingsPage() {
         <div>
           <h1 className="text-3xl font-bold text-slate-800">Settings</h1>
           <p className="text-slate-500 mt-1">Manage your backup preferences</p>
+        </div>
+      </div>
+
+      {/* Profile Section */}
+      <div className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold text-slate-800">Your Profile</h2>
+          {profileMessage && (
+            <div
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                profileMessage.type === "success"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-red-100 text-red-700"
+              }`}
+            >
+              {profileMessage.text}
+            </div>
+          )}
+        </div>
+        <div className="bg-white rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-200 p-6">
+          {profileLoading ? (
+            <div className="space-y-4">
+              <div className="h-12 bg-slate-100 rounded-xl animate-pulse" />
+              <div className="h-12 bg-slate-100 rounded-xl animate-pulse" />
+            </div>
+          ) : profile ? (
+            <div className="space-y-4">
+              <div className="flex items-center gap-4 p-4 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200">
+                <div className="p-3 bg-teal-100 rounded-full">
+                  <User className="h-6 w-6 text-teal-600" />
+                </div>
+                <div className="flex-1 grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-slate-600 mb-1">Full Name</label>
+                    <Input
+                      type="text"
+                      value={profile.full_name || ""}
+                      onChange={(e) => setProfile({ ...profile, full_name: e.target.value || null })}
+                      placeholder="Your full name"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-slate-600 mb-1">Email</label>
+                    <Input
+                      type="email"
+                      value={profile.email}
+                      onChange={(e) => setProfile({ ...profile, email: e.target.value })}
+                      placeholder="your@email.com"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="flex justify-end">
+                <Button onClick={saveProfile} disabled={profileSaving}>
+                  {profileSaving ? "Saving..." : "Save Profile"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <p className="text-slate-500">Unable to load profile</p>
+          )}
         </div>
       </div>
 

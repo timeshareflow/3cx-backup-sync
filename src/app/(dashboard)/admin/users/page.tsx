@@ -145,7 +145,8 @@ export default function UserManagementPage() {
       });
 
       if (!profileResponse.ok) {
-        console.error("Failed to update user profile");
+        const errorData = await profileResponse.json().catch(() => ({}));
+        alert(errorData.error || "Failed to update user profile");
         return;
       }
 
@@ -156,13 +157,18 @@ export default function UserManagementPage() {
         body: JSON.stringify({ role: user.tenant_role || user.role }),
       });
 
-      if (roleResponse.ok) {
-        fetchUsers();
-        setShowEditModal(false);
-        setSelectedUser(null);
+      if (!roleResponse.ok) {
+        const errorData = await roleResponse.json().catch(() => ({}));
+        alert(errorData.error || "Failed to update user role");
+        return;
       }
+
+      fetchUsers();
+      setShowEditModal(false);
+      setSelectedUser(null);
     } catch (error) {
       console.error("Failed to update user:", error);
+      alert("An error occurred while updating the user");
     }
   };
 
