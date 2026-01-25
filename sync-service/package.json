@@ -9,7 +9,14 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts"
+    "dev": "ts-node src/index.ts",
+    "pm2:start": "pm2 start ecosystem.config.js",
+    "pm2:stop": "pm2 stop 3cx-sync-service",
+    "pm2:restart": "pm2 restart 3cx-sync-service",
+    "pm2:logs": "pm2 logs 3cx-sync-service",
+    "pm2:status": "pm2 status",
+    "pm2:startup": "pm2 startup",
+    "pm2:save": "pm2 save"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.47.10",
@@ -26,6 +33,7 @@
     "@types/pg": "^8.11.10",
     "@types/ssh2": "^1.15.1",
     "@types/ssh2-sftp-client": "^9.0.4",
+    "pm2": "^6.0.14",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
   }
