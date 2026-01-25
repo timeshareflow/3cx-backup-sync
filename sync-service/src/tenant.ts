@@ -63,6 +63,8 @@ export interface TenantConfig {
   backup_meetings: boolean;
   is_active: boolean;
   sync_enabled: boolean;
+  has_active_users?: boolean;
+  last_user_activity_at?: string | null;
 }
 
 // Normalize tenant data: use new columns, fall back to legacy columns
@@ -100,6 +102,9 @@ function normalizeTenant(raw: RawTenantData): TenantConfig {
 // Cache for tenant database pools
 const tenantPools: Map<string, Pool> = new Map();
 
+// Active user threshold - 5 minutes
+const ACTIVE_USER_THRESHOLD_MS = 5 * 60 * 1000;
+
 export async function getActiveTenants(): Promise<TenantConfig[]> {
   const supabase = getSupabaseClient();
 
@@ -113,7 +118,7 @@ export async function getActiveTenants(): Promise<TenantConfig[]> {
       sftp_port, sftp_user, sftp_password, threecx_password,
       threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
       backup_chats, backup_chat_media, backup_recordings, backup_voicemails, backup_faxes, backup_cdr, backup_meetings,
-      is_active, sync_enabled
+      is_active, sync_enabled, last_user_activity_at
     `)
     .eq("is_active", true)
     .eq("sync_enabled", true)
@@ -124,8 +129,34 @@ export async function getActiveTenants(): Promise<TenantConfig[]> {
     throw new Error(`Failed to fetch tenants: ${error.message}`);
   }
 
-  // Normalize each tenant (apply fallback logic)
-  return (tenants || []).map(normalizeTenant);
+  const now = Date.now();
+
+  // Normalize each tenant (apply fallback logic) and add activity status
+  return (tenants || []).map((raw) => {
+    const tenant = normalizeTenant(raw as RawTenantData);
+    const lastActivity = raw.last_user_activity_at
+      ? new Date(raw.last_user_activity_at).getTime()
+      : 0;
+    const hasActiveUsers = now - lastActivity < ACTIVE_USER_THRESHOLD_MS;
+
+    return {
+      ...tenant,
+      has_active_users: hasActiveUsers,
+      last_user_activity_at: raw.last_user_activity_at,
+    };
+  });
+}
+
+// Get tenants that need immediate sync (have active users)
+export async function getActiveUserTenants(): Promise<TenantConfig[]> {
+  const tenants = await getActiveTenants();
+  return tenants.filter((t) => t.has_active_users);
+}
+
+// Get tenants that need background sync (no active users)
+export async function getInactiveTenants(): Promise<TenantConfig[]> {
+  const tenants = await getActiveTenants();
+  return tenants.filter((t) => !t.has_active_users);
 }
 
 export async function getTenantPool(tenant: TenantConfig): Promise<Pool | null> {

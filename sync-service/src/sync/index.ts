@@ -200,14 +200,23 @@ export async function runMultiTenantSync(options?: {
   skipMedia?: boolean;
   skipExtensions?: boolean;
   batchSize?: number;
+  tenantIds?: string[]; // Optional filter for specific tenants
 }): Promise<MultiTenantSyncResult> {
   const startTime = Date.now();
   const results: TenantSyncResult[] = [];
 
-  logger.info("=== Starting centralized multi-tenant sync ===");
+  logger.info("=== Starting centralized multi-tenant sync ===", {
+    tenantFilter: options?.tenantIds?.length ? `${options.tenantIds.length} specific tenants` : "all active tenants",
+  });
 
   // Get all active tenants with configured 3CX connections
-  const tenants = await getActiveTenants();
+  let tenants = await getActiveTenants();
+
+  // Filter to specific tenants if provided
+  if (options?.tenantIds && options.tenantIds.length > 0) {
+    const tenantIdSet = new Set(options.tenantIds);
+    tenants = tenants.filter((t) => tenantIdSet.has(t.id));
+  }
 
   if (tenants.length === 0) {
     logger.warn("No active tenants with 3CX configuration found");

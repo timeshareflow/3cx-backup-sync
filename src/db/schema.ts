@@ -127,6 +127,9 @@ export const tenants = pgTable(
     billingCycle: varchar("billing_cycle", { length: 20 }).default("monthly"), // monthly, yearly
     storageLastCalculatedAt: timestamp("storage_last_calculated_at", { withTimezone: true }),
 
+    // User Activity Tracking (for dynamic sync frequency)
+    lastUserActivityAt: timestamp("last_user_activity_at", { withTimezone: true }),
+
     // Metadata
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
@@ -135,6 +138,7 @@ export const tenants = pgTable(
   (table) => ({
     slugIdx: index("idx_tenants_slug").on(table.slug),
     activeIdx: index("idx_tenants_active").on(table.isActive),
+    lastActivityIdx: index("idx_tenants_last_activity").on(table.lastUserActivityAt),
   })
 );
 

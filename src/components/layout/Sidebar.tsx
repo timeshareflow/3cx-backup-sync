@@ -21,6 +21,7 @@ import {
   FileText,
   Video,
   PhoneCall,
+  Columns,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -34,6 +35,7 @@ interface NavItem {
 const navigation: NavItem[] = [
   { name: "Dashboard", href: "/", icon: LayoutDashboard },
   { name: "Conversations", href: "/conversations", icon: MessageSquare },
+  { name: "Monitor", href: "/monitor", icon: Columns },
   { name: "Media", href: "/media", icon: Image },
   { name: "Search", href: "/search", icon: Search },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },

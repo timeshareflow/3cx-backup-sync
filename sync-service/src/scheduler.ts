@@ -2,9 +2,11 @@ import cron from "node-cron";
 import { logger } from "./utils/logger";
 import { runMultiTenantSync } from "./sync";
 import { getSupabaseClient } from "./storage/supabase";
+import { getActiveUserTenants, getInactiveTenants } from "./tenant";
 
 let isRunning = false;
-let syncTask: cron.ScheduledTask | null = null;
+let activeUserSyncTask: cron.ScheduledTask | null = null;
+let backgroundSyncTask: cron.ScheduledTask | null = null;
 let cycleCount = 0;
 
 // Check if any tenant has requested a manual sync trigger
@@ -37,76 +39,116 @@ async function clearManualTriggers(): Promise<void> {
     .gt("trigger_requested_at", twoMinutesAgo);
 }
 
-export function startScheduler(): void {
-  const intervalSeconds = parseInt(process.env.SYNC_INTERVAL_SECONDS || "60");
-
-  // Convert seconds to cron expression
-  let cronExpression: string;
-
-  if (intervalSeconds < 60) {
-    // Run every minute for sub-minute intervals
-    cronExpression = "* * * * *";
-  } else {
-    const minutes = Math.floor(intervalSeconds / 60);
-    cronExpression = `*/${minutes} * * * *`;
+// Run sync for tenants with active users (every minute)
+async function runActiveUserSync(): Promise<void> {
+  if (isRunning) {
+    logger.debug("Sync already running, skipping active user sync");
+    return;
   }
 
-  logger.info(`Starting scheduler with ${intervalSeconds}s interval`, {
-    cronExpression,
-  });
+  try {
+    const activeTenants = await getActiveUserTenants();
 
-  syncTask = cron.schedule(cronExpression, async () => {
-    if (isRunning) {
-      logger.warn("Previous sync still running, skipping this cycle");
+    if (activeTenants.length === 0) {
+      logger.debug("No tenants with active users");
       return;
     }
 
     isRunning = true;
     cycleCount++;
 
-    try {
-      // Check for manual trigger requests first
-      const hasManualTrigger = await checkForManualTriggers();
+    logger.info(`Running sync for ${activeTenants.length} tenant(s) with active users`);
 
-      // Every 10 cycles, do a full sync including media and extensions
-      // Manual triggers also force a full sync
-      const isFullSync = cycleCount % 10 === 0 || hasManualTrigger;
-
-      if (hasManualTrigger) {
-        logger.info("Manual sync triggered - running full sync");
-        await clearManualTriggers();
-      }
-
-      if (isFullSync) {
-        logger.info("Running full sync (including media)");
-        await runMultiTenantSync({ skipMedia: false, skipExtensions: false });
-      } else {
-        logger.debug("Running quick sync (messages only)");
-        await runMultiTenantSync({ skipMedia: true, skipExtensions: true });
-      }
-    } catch (error) {
-      logger.error("Scheduled sync failed", {
-        error: (error as Error).message,
-      });
-    } finally {
-      isRunning = false;
+    // Check for manual triggers
+    const hasManualTrigger = await checkForManualTriggers();
+    if (hasManualTrigger) {
+      logger.info("Manual sync triggered");
+      await clearManualTriggers();
     }
-  });
 
-  syncTask.start();
-  logger.info("Scheduler started");
-}
+    // Every 10 cycles, do a full sync; otherwise quick sync
+    const isFullSync = cycleCount % 10 === 0 || hasManualTrigger;
 
-export function stopScheduler(): void {
-  if (syncTask) {
-    syncTask.stop();
-    syncTask = null;
-    logger.info("Scheduler stopped");
+    await runMultiTenantSync({
+      skipMedia: !isFullSync,
+      skipExtensions: !isFullSync,
+      tenantIds: activeTenants.map((t) => t.id),
+    });
+  } catch (error) {
+    logger.error("Active user sync failed", { error: (error as Error).message });
+  } finally {
+    isRunning = false;
   }
 }
 
+// Run sync for inactive tenants (every 15 minutes)
+async function runBackgroundSync(): Promise<void> {
+  if (isRunning) {
+    logger.debug("Sync already running, skipping background sync");
+    return;
+  }
+
+  try {
+    const inactiveTenants = await getInactiveTenants();
+
+    if (inactiveTenants.length === 0) {
+      logger.debug("No inactive tenants to sync");
+      return;
+    }
+
+    isRunning = true;
+
+    logger.info(`Running background sync for ${inactiveTenants.length} inactive tenant(s)`);
+
+    // Background sync is always a quick sync
+    await runMultiTenantSync({
+      skipMedia: true,
+      skipExtensions: true,
+      tenantIds: inactiveTenants.map((t) => t.id),
+    });
+  } catch (error) {
+    logger.error("Background sync failed", { error: (error as Error).message });
+  } finally {
+    isRunning = false;
+  }
+}
+
+export function startScheduler(): void {
+  const activeIntervalSeconds = parseInt(process.env.SYNC_INTERVAL_ACTIVE || "60");
+  const backgroundIntervalMinutes = parseInt(process.env.SYNC_INTERVAL_BACKGROUND || "15");
+
+  logger.info("Starting dynamic scheduler", {
+    activeInterval: `${activeIntervalSeconds}s (for tenants with active users)`,
+    backgroundInterval: `${backgroundIntervalMinutes}m (for inactive tenants)`,
+  });
+
+  // Active user sync: every minute (or configured interval)
+  activeUserSyncTask = cron.schedule("* * * * *", runActiveUserSync);
+  activeUserSyncTask.start();
+
+  // Background sync: every 15 minutes (or configured interval)
+  backgroundSyncTask = cron.schedule(`*/${backgroundIntervalMinutes} * * * *`, runBackgroundSync);
+  backgroundSyncTask.start();
+
+  logger.info("Dynamic scheduler started");
+  logger.info("  - Active user tenants: sync every minute");
+  logger.info("  - Inactive tenants: sync every 15 minutes");
+}
+
+export function stopScheduler(): void {
+  if (activeUserSyncTask) {
+    activeUserSyncTask.stop();
+    activeUserSyncTask = null;
+  }
+  if (backgroundSyncTask) {
+    backgroundSyncTask.stop();
+    backgroundSyncTask = null;
+  }
+  logger.info("Scheduler stopped");
+}
+
 export function isSchedulerRunning(): boolean {
-  return syncTask !== null;
+  return activeUserSyncTask !== null || backgroundSyncTask !== null;
 }
 
 export function isSyncInProgress(): boolean {
