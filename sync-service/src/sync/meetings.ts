@@ -125,12 +125,22 @@ export async function syncMeetings(tenant: TenantConfig): Promise<MeetingsSyncRe
 
   if (!tenant.backup_meetings) {
     logger.info("Meeting backup disabled for tenant", { tenantId: tenant.id });
+    await updateSyncStatus("meetings", "success", {
+      recordsSynced: 0,
+      notes: "Meetings backup disabled",
+      tenantId: tenant.id,
+    });
     return result;
   }
 
   const sftpConfig = getTenantSftpConfig(tenant);
   if (!sftpConfig) {
     logger.info("No SFTP credentials configured - skipping meetings sync", { tenantId: tenant.id });
+    await updateSyncStatus("meetings", "success", {
+      recordsSynced: 0,
+      notes: "No SFTP credentials configured - meetings sync skipped",
+      tenantId: tenant.id,
+    });
     return result;
   }
 

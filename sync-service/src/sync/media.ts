@@ -42,6 +42,11 @@ export async function syncMedia(
   // Check if media backup is enabled for this tenant
   if (!tenant.backup_chat_media) {
     logger.info("Chat media backup disabled for tenant", { tenantId });
+    await updateSyncStatus("media", "success", {
+      recordsSynced: 0,
+      notes: "Chat media backup disabled",
+      tenantId,
+    });
     return result;
   }
 
@@ -49,6 +54,11 @@ export async function syncMedia(
   const sftpConfig = getTenantSftpConfig(tenant);
   if (!sftpConfig) {
     logger.info("No SFTP credentials configured - skipping media sync", { tenantId });
+    await updateSyncStatus("media", "success", {
+      recordsSynced: 0,
+      notes: "No SFTP credentials configured - media sync skipped",
+      tenantId,
+    });
     return result;
   }
 
@@ -187,11 +197,21 @@ export async function syncRecordings(
 
   if (!tenant.backup_recordings) {
     logger.info("Recordings backup disabled for tenant", { tenantId: tenant.id });
+    await updateSyncStatus("recordings", "success", {
+      recordsSynced: 0,
+      notes: "Recordings backup disabled",
+      tenantId: tenant.id,
+    });
     return result;
   }
 
   const sftpConfig = getTenantSftpConfig(tenant);
   if (!sftpConfig) {
+    await updateSyncStatus("recordings", "success", {
+      recordsSynced: 0,
+      notes: "No SFTP credentials configured - recordings sync skipped",
+      tenantId: tenant.id,
+    });
     return result;
   }
 
@@ -254,11 +274,21 @@ export async function syncVoicemails(
   };
 
   if (!tenant.backup_voicemails) {
+    await updateSyncStatus("voicemails", "success", {
+      recordsSynced: 0,
+      notes: "Voicemails backup disabled",
+      tenantId: tenant.id,
+    });
     return result;
   }
 
   const sftpConfig = getTenantSftpConfig(tenant);
   if (!sftpConfig) {
+    await updateSyncStatus("voicemails", "success", {
+      recordsSynced: 0,
+      notes: "No SFTP credentials configured - voicemails sync skipped",
+      tenantId: tenant.id,
+    });
     return result;
   }
 

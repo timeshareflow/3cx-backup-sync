@@ -255,13 +255,13 @@ export default function MonitorPage() {
               </button>
             </div>
           </div>
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-auto min-h-0">
             <MessageList conversationId={maximizedPanel.conversation.id} />
           </div>
         </div>
       ) : (
         // Show grid of panels
-        <div className={`flex-1 grid ${getGridCols()} gap-4 overflow-hidden`}>
+        <div className={`flex-1 grid ${getGridCols()} gap-4 overflow-auto`}>
           {panels.map((panel) => (
             <div
               key={panel.id}
@@ -288,7 +288,7 @@ export default function MonitorPage() {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-hidden">
+              <div className="flex-1 overflow-auto min-h-0">
                 <MessageList conversationId={panel.conversation.id} />
               </div>
             </div>

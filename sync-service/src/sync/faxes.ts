@@ -77,12 +77,22 @@ export async function syncFaxes(tenant: TenantConfig): Promise<FaxesSyncResult> 
 
   if (!tenant.backup_faxes) {
     logger.info("Fax backup disabled for tenant", { tenantId: tenant.id });
+    await updateSyncStatus("faxes", "success", {
+      recordsSynced: 0,
+      notes: "Faxes backup disabled",
+      tenantId: tenant.id,
+    });
     return result;
   }
 
   const sftpConfig = getTenantSftpConfig(tenant);
   if (!sftpConfig) {
     logger.info("No SFTP credentials configured - skipping fax sync", { tenantId: tenant.id });
+    await updateSyncStatus("faxes", "success", {
+      recordsSynced: 0,
+      notes: "No SFTP credentials configured - fax sync skipped",
+      tenantId: tenant.id,
+    });
     return result;
   }
 
