@@ -46,9 +46,16 @@ export async function updateSession(request: NextRequest) {
   );
 
   if (!user && !isPublicRoute) {
-    // No user and trying to access protected route, redirect to login
+    // No user and trying to access protected route
     const url = request.nextUrl.clone();
-    url.pathname = "/login";
+
+    // Redirect root to welcome page for unauthenticated users
+    if (request.nextUrl.pathname === "/") {
+      url.pathname = "/welcome";
+    } else {
+      // Other protected routes redirect to login
+      url.pathname = "/login";
+    }
     return NextResponse.redirect(url);
   }
 
