@@ -71,6 +71,11 @@ export function Sidebar() {
   const { profile, currentTenant, signOut } = useAuth();
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
+  const handleSignOut = async () => {
+    await signOut();
+    window.location.href = "/login";
+  };
+
   // Check both global role (from profile) and tenant-specific role
   const globalRole = profile?.role;
   const tenantRole = currentTenant?.role;
@@ -262,7 +267,7 @@ export function Sidebar() {
 
         {/* Sign Out Button */}
         <button
-          onClick={signOut}
+          onClick={handleSignOut}
           className="w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-medium text-slate-400 hover:text-white bg-slate-800/30 hover:bg-red-500/20 border border-slate-700/30 hover:border-red-500/30 rounded-xl transition-all duration-300"
         >
           <LogOut className="h-4 w-4" />
