@@ -82,6 +82,8 @@ export async function POST(request: NextRequest) {
       is_active,
     } = body;
 
+    console.log("SMTP POST - received body:", { ...body, password: body.password ? "[REDACTED]" : undefined, sendgrid_api_key: body.sendgrid_api_key ? "[REDACTED]" : undefined });
+
     if (!from_email) {
       return NextResponse.json(
         { error: "From email is required" },
@@ -89,19 +91,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Validate based on provider
+    // Allow saving without credentials - user can add them later
+    // Just warn if provider-specific settings are missing
+    const warnings: string[] = [];
     if (provider === "sendgrid" && !sendgrid_api_key) {
-      return NextResponse.json(
-        { error: "SendGrid API key is required" },
-        { status: 400 }
-      );
+      warnings.push("SendGrid API key not set - emails will not be sent until configured");
     }
-
     if (provider !== "sendgrid" && !host) {
-      return NextResponse.json(
-        { error: "SMTP host is required" },
-        { status: 400 }
-      );
+      warnings.push("SMTP host not set - emails will not be sent until configured");
     }
 
     const supabase = createAdminClient();
@@ -148,10 +145,12 @@ export async function POST(request: NextRequest) {
     if (error) {
       console.error("Error creating email settings:", error);
       return NextResponse.json(
-        { error: "Failed to create email settings" },
+        { error: `Failed to create email settings: ${error.message}` },
         { status: 500 }
       );
     }
+
+    console.log("SMTP POST - settings saved successfully:", settings.id);
 
     return NextResponse.json({
       settings: {
@@ -161,6 +160,7 @@ export async function POST(request: NextRequest) {
         has_password: !!settings.password_encrypted,
         has_sendgrid_api_key: !!settings.sendgrid_api_key_encrypted,
       },
+      warnings: warnings.length > 0 ? warnings : undefined,
     });
   } catch (error) {
     console.error("Error in email settings API:", error);

@@ -125,14 +125,20 @@ export function EmailSettingsSection() {
 
     try {
       const method = settings?.id ? "PUT" : "POST";
-      const body = {
+      const body: Record<string, unknown> = {
         ...formData,
         id: settings?.id,
       };
 
-      // Don't send empty password/api_key (keep existing)
-      if (!body.password) delete (body as Record<string, unknown>).password;
-      if (!body.sendgrid_api_key) delete (body as Record<string, unknown>).sendgrid_api_key;
+      // Only delete empty credentials on UPDATE (not on CREATE)
+      // On create, we want to send whatever the user entered
+      if (settings?.id) {
+        // For updates: don't send empty password/api_key (keep existing)
+        if (!body.password) delete body.password;
+        if (!body.sendgrid_api_key) delete body.sendgrid_api_key;
+      }
+
+      console.log("Saving email settings:", { method, provider: body.provider, hasApiKey: !!body.sendgrid_api_key });
 
       const response = await fetch("/api/admin/smtp", {
         method,
@@ -140,21 +146,27 @@ export function EmailSettingsSection() {
         body: JSON.stringify(body),
       });
 
+      const data = await response.json();
+
       if (response.ok) {
-        const data = await response.json();
         setSettings(data.settings);
-        setMessage({ type: "success", text: "Email settings saved successfully" });
+        let successMsg = "Email settings saved successfully";
+        if (data.warnings?.length) {
+          successMsg += ` (Warning: ${data.warnings.join(", ")})`;
+        }
+        setMessage({ type: "success", text: successMsg });
         // Clear password fields after save
         setFormData((prev) => ({ ...prev, password: "", sendgrid_api_key: "" }));
       } else {
-        const data = await response.json();
+        console.error("Failed to save email settings:", data);
         setMessage({ type: "error", text: data.error || "Failed to save settings" });
       }
     } catch (error) {
+      console.error("Error saving email settings:", error);
       setMessage({ type: "error", text: "Failed to save settings" });
     } finally {
       setIsSaving(false);
-      setTimeout(() => setMessage(null), 5000);
+      setTimeout(() => setMessage(null), 8000);
     }
   }
 
