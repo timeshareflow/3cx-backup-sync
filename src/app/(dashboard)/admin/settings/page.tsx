@@ -3,8 +3,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { Settings, Download, Trash2, Bell, Clock, Shield, Archive, Infinity, User, Mail } from "lucide-react";
-import { EmailSettingsSection } from "@/components/admin/EmailSettingsSection";
+import { Settings, Download, Trash2, Bell, Clock, Shield, Archive, Infinity, User } from "lucide-react";
 import { TwoFactorSetup } from "@/components/auth/TwoFactorSetup";
 import { createClient } from "@/lib/supabase/client";
 
@@ -353,17 +352,6 @@ export default function SettingsPage() {
             </div>
           </div>
         </div>
-      </div>
-
-      {/* Email Settings */}
-      <div className="space-y-4">
-        <div className="flex items-center gap-3">
-          <div className="p-2 bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl">
-            <Mail className="h-5 w-5 text-white" />
-          </div>
-          <h2 className="text-xl font-bold text-slate-800">Email Settings</h2>
-        </div>
-        <EmailSettingsSection />
       </div>
 
       {/* Notifications */}
