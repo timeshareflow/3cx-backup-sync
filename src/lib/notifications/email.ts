@@ -1,6 +1,6 @@
 import nodemailer from "nodemailer";
 import sgMail from "@sendgrid/mail";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { decrypt } from "@/lib/encryption";
 
 interface EmailConfig {
@@ -37,7 +37,7 @@ interface EmailResult {
 }
 
 async function getEmailConfig(): Promise<EmailConfig | null> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   const { data: settings, error } = await supabase
     .from("smtp_settings")
@@ -185,7 +185,7 @@ export async function sendTemplatedEmail(
   to: string | string[],
   variables: Record<string, string>
 ): Promise<EmailResult> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   // Fetch the template
   const { data: template, error } = await supabase
