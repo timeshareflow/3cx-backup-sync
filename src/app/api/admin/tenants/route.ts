@@ -10,17 +10,21 @@ export async function GET() {
 
     // Check if user is super_admin
     const { data: { user } } = await supabase.auth.getUser();
+    console.log("Tenants API - user:", user?.id, user?.email);
     if (!user) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { data: profile } = await adminClient
+    const { data: profile, error: profileError } = await adminClient
       .from("user_profiles")
       .select("role")
       .eq("id", user.id)
       .single();
 
+    console.log("Tenants API - profile:", profile, "error:", profileError);
+
     if (profile?.role !== "super_admin") {
+      console.log("Tenants API - not super_admin, role:", profile?.role);
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
@@ -34,6 +38,8 @@ export async function GET() {
         storage_plan:storage_plans(id, name, description, storage_limit_gb, price_monthly, price_yearly, features, is_default)
       `)
       .order("created_at", { ascending: false });
+
+    console.log("Tenants API - fetched tenants:", tenants?.length, "error:", error);
 
     if (error) {
       throw error;
