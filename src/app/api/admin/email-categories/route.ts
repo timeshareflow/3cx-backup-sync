@@ -18,6 +18,33 @@ const DEFAULT_CATEGORIES = [
   { category: "security", label: "Security Emails", description: "Password resets, 2FA codes, login alerts" },
 ];
 
+// Create table if it doesn't exist
+async function ensureTableExists(supabase: ReturnType<typeof createAdminClient>) {
+  const createTableSQL = `
+    CREATE TABLE IF NOT EXISTS email_categories (
+      id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+      category VARCHAR(50) NOT NULL UNIQUE,
+      label VARCHAR(100) NOT NULL,
+      description TEXT,
+      from_email VARCHAR(255),
+      from_name VARCHAR(255),
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+  `;
+
+  try {
+    // Try to create the table using raw SQL
+    const { error } = await supabase.rpc('exec_sql', { sql: createTableSQL });
+    if (error && !error.message?.includes('already exists')) {
+      console.error("Error creating table via RPC:", error);
+    }
+  } catch {
+    // RPC might not exist, try direct query approach
+    console.log("RPC not available, table should be created via migration");
+  }
+}
+
 export async function GET() {
   try {
     const context = await getTenantContext();
