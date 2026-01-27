@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname } from "next/navigation";
 import {
   MessageSquare,
   Search,
@@ -27,7 +27,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
-import { useState, useEffect } from "react";
+import { useState } from "react";
 
 interface NavItem {
   name: string;
@@ -67,7 +67,6 @@ const adminNavigation: NavItem[] = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { profile, currentTenant, signOut } = useAuth();
   const [hoveredItem, setHoveredItem] = useState<string | null>(null);
 
@@ -183,6 +182,16 @@ export function Sidebar() {
             <p className="text-xs text-slate-500 font-medium">Enterprise Edition</p>
           </div>
         </div>
+
+        {/* Tenant Name Display */}
+        {currentTenant?.tenant && globalRole !== "super_admin" && (
+          <div className="mt-4 px-3 py-2 bg-gradient-to-r from-teal-500/10 to-cyan-500/10 border border-teal-500/20 rounded-xl">
+            <div className="flex items-center gap-2">
+              <Building2 className="h-4 w-4 text-teal-400" />
+              <span className="text-sm font-semibold text-white truncate">{currentTenant.tenant.name}</span>
+            </div>
+          </div>
+        )}
       </div>
 
       <nav className="relative flex-1 px-3 space-y-1 overflow-y-auto scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-transparent">
