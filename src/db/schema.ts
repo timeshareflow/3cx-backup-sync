@@ -116,6 +116,9 @@ export const tenants = pgTable(
     syncIntervalSeconds: integer("sync_interval_seconds").default(60),
     lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
 
+    // Agent Token (for sync agent installation)
+    agentToken: varchar("agent_token", { length: 64 }),
+
     // Billing/Plan
     planType: varchar("plan_type", { length: 50 }).default("free"),
     planExpiresAt: timestamp("plan_expires_at", { withTimezone: true }),
@@ -768,6 +771,41 @@ export const userPushTokens = pgTable(
 );
 
 // ============================================
+// SYNC AGENTS (Installed on customer 3CX servers)
+// ============================================
+export const syncAgents = pgTable(
+  "sync_agents",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+
+    // Agent identification
+    hostname: varchar("hostname", { length: 255 }),
+    ipAddress: varchar("ip_address", { length: 45 }),
+    osInfo: text("os_info"),
+    agentVersion: varchar("agent_version", { length: 20 }),
+    installPath: text("install_path"),
+
+    // Authentication
+    agentToken: varchar("agent_token", { length: 64 }).notNull().unique(),
+
+    // Status
+    status: varchar("status", { length: 20 }).default("pending"), // pending, active, inactive, error
+    lastHeartbeatAt: timestamp("last_heartbeat_at", { withTimezone: true }),
+    lastSyncAt: timestamp("last_sync_at", { withTimezone: true }),
+    lastError: text("last_error"),
+
+    // Timestamps
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    tenantIdx: uniqueIndex("sync_agents_tenant_id_key").on(table.tenantId), // One agent per tenant
+    heartbeatIdx: index("idx_sync_agents_heartbeat").on(table.status, table.lastHeartbeatAt),
+  })
+);
+
+// ============================================
 // RELATIONS
 // ============================================
 export const tenantsRelations = relations(tenants, ({ many }) => ({
@@ -784,6 +822,14 @@ export const tenantsRelations = relations(tenants, ({ many }) => ({
   syncStatus: many(syncStatus),
   syncLogs: many(syncLogs),
   retentionPolicies: many(retentionPolicies),
+  syncAgents: many(syncAgents),
+}));
+
+export const syncAgentsRelations = relations(syncAgents, ({ one }) => ({
+  tenant: one(tenants, {
+    fields: [syncAgents.tenantId],
+    references: [tenants.id],
+  }),
 }));
 
 export const userProfilesRelations = relations(userProfiles, ({ many }) => ({
@@ -878,3 +924,5 @@ export type UserNotificationPreference = typeof userNotificationPreferences.$inf
 export type SmsSettings = typeof smsSettings.$inferSelect;
 export type PushSettings = typeof pushSettings.$inferSelect;
 export type UserPushToken = typeof userPushTokens.$inferSelect;
+export type SyncAgent = typeof syncAgents.$inferSelect;
+export type NewSyncAgent = typeof syncAgents.$inferInsert;

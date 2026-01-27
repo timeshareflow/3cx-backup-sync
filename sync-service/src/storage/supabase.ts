@@ -4,6 +4,20 @@ import { SupabaseError } from "../utils/errors";
 
 let supabase: SupabaseClient | null = null;
 
+/**
+ * Initialize Supabase client with custom credentials.
+ * Used by local mode agent to use credentials received from the API.
+ */
+export function initSupabaseClient(url: string, key: string): void {
+  supabase = createClient(url, key, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+  logger.info("Supabase client initialized with custom credentials");
+}
+
 export function getSupabaseClient(): SupabaseClient {
   if (!supabase) {
     const url = process.env.SUPABASE_URL || process.env.NEXT_PUBLIC_SUPABASE_URL;
