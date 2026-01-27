@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
 interface EmailCategory {
@@ -30,7 +30,7 @@ export async function GET() {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     const { data: categories, error } = await supabase
       .from("email_categories")
@@ -94,7 +94,7 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     // Upsert each category
     const upsertedCategories: EmailCategory[] = [];

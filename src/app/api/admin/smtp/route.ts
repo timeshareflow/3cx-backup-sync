@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 import { encrypt } from "@/lib/encryption";
 
@@ -16,7 +16,7 @@ export async function GET() {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     const { data: settings, error } = await supabase
       .from("smtp_settings")
@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     // Check if settings already exist
     const { data: existing } = await supabase
@@ -203,7 +203,7 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: "Settings ID is required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     const updateData: Record<string, unknown> = {
       updated_at: new Date().toISOString(),
@@ -281,7 +281,7 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Settings ID is required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
+    const supabase = createAdminClient();
 
     const { error } = await supabase
       .from("smtp_settings")
