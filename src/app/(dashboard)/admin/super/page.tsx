@@ -33,6 +33,7 @@ import {
   CheckCircle,
   XCircle,
 } from "lucide-react";
+import { EmailSettingsSection } from "@/components/admin/EmailSettingsSection";
 
 interface SystemStats {
   totalTenants: number;
@@ -122,16 +123,20 @@ export default function SuperAdminPage() {
   const [testResult, setTestResult] = useState<{ channel: string; success: boolean; message: string } | null>(null);
 
   useEffect(() => {
-    if (!authLoading && profile?.role !== "super_admin") {
+    // Wait for auth to finish loading
+    if (authLoading) return;
+
+    // If profile is still null after auth loading, wait for it
+    if (!profile) return;
+
+    if (profile.role !== "super_admin") {
       router.push("/unauthorized");
       return;
     }
 
-    if (profile?.role === "super_admin") {
-      fetchStats();
-      fetchStoragePlans();
-      fetchNotificationSettings();
-    }
+    fetchStats();
+    fetchStoragePlans();
+    fetchNotificationSettings();
   }, [profile, authLoading, router]);
 
   const fetchStats = async () => {
@@ -665,14 +670,29 @@ export default function SuperAdminPage() {
         </CardContent>
       </Card>
 
-      {/* Notification Settings */}
+      {/* Email Settings - SendGrid / SMTP with Category Addresses */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-3">
+            <div className="p-2 bg-gradient-to-br from-teal-500 to-cyan-600 rounded-lg">
+              <Mail className="h-5 w-5 text-white" />
+            </div>
+            Email Settings
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <EmailSettingsSection />
+        </CardContent>
+      </Card>
+
+      {/* Other Notification Settings */}
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-3">
             <div className="p-2 bg-blue-100 rounded-lg">
               <Bell className="h-5 w-5 text-blue-600" />
             </div>
-            Notification Settings
+            Other Notification Channels
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -696,71 +716,6 @@ export default function SuperAdminPage() {
                 </button>
               </div>
             )}
-
-            {/* SMTP Settings */}
-            <div className="p-6 bg-gray-50 rounded-2xl border border-gray-200">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-violet-100 rounded-lg">
-                    <Mail className="h-5 w-5 text-violet-600" />
-                  </div>
-                  <div>
-                    <h4 className="font-semibold text-gray-900">Email (SMTP)</h4>
-                    <p className="text-sm text-gray-500">
-                      {smtpSettings?.is_active ? "Configured" : "Not configured"}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => testNotificationChannel("email")}
-                    disabled={!smtpSettings?.id || testingChannel === "email"}
-                  >
-                    {testingChannel === "email" ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Send className="h-4 w-4" />
-                    )}
-                    <span className="ml-2">Test</span>
-                  </Button>
-                  <Button size="sm" onClick={() => setEditingSmtp(!editingSmtp)}>
-                    {editingSmtp ? "Cancel" : smtpSettings?.id ? "Edit" : "Configure"}
-                  </Button>
-                </div>
-              </div>
-
-              {editingSmtp && (
-                <SmtpEditor
-                  settings={smtpSettings}
-                  onSave={saveSmtpSettings}
-                  onCancel={() => setEditingSmtp(false)}
-                  isSaving={notifSaving === "smtp"}
-                />
-              )}
-
-              {!editingSmtp && smtpSettings?.id && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
-                  <div>
-                    <span className="text-gray-500">Host:</span>
-                    <span className="ml-2 font-medium">{smtpSettings.host}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Port:</span>
-                    <span className="ml-2 font-medium">{smtpSettings.port}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">From:</span>
-                    <span className="ml-2 font-medium">{smtpSettings.from_email}</span>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Encryption:</span>
-                    <span className="ml-2 font-medium uppercase">{smtpSettings.encryption}</span>
-                  </div>
-                </div>
-              )}
-            </div>
 
             {/* SMS Settings */}
             <div className="p-6 bg-gray-50 rounded-2xl border border-gray-200">

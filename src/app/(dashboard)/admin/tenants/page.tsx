@@ -19,8 +19,22 @@ import {
   Mail,
   User,
   AlertCircle,
+  CreditCard,
+  Package,
+  DollarSign,
 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils/date";
+
+interface StoragePlan {
+  id: string;
+  name: string;
+  description: string | null;
+  storage_limit_gb: number;
+  price_monthly: string;
+  price_yearly: string | null;
+  features: string[];
+  is_default: boolean;
+}
 
 interface Tenant {
   id: string;
@@ -33,38 +47,72 @@ interface Tenant {
   created_at: string;
   user_count?: number;
   conversation_count?: number;
+  storage_plan_id: string | null;
+  price_override: string | null;
+  billing_email: string | null;
+  billing_status: string | null;
+  storage_plan?: StoragePlan | null;
 }
 
+type CustomerType = "standard" | "business";
+
 interface CreateTenantFormData {
+  customerType: CustomerType;
   name: string;
   slug: string;
+  // Standard user fields
+  admin_first_name: string;
+  admin_last_name: string;
   admin_email: string;
+  admin_phone: string;
+  admin_address: string;
   admin_password: string;
-  admin_name: string;
+  // Business fields
+  business_name: string;
+  contact_name: string;
+  billing_email: string;
+  business_phone: string;
+  business_address: string;
 }
 
 interface EditTenantFormData {
   name: string;
   is_active: boolean;
+  storage_plan_id: string;
+  price_override: string;
+  billing_email: string;
 }
 
 const defaultCreateFormData: CreateTenantFormData = {
+  customerType: "standard",
   name: "",
   slug: "",
+  admin_first_name: "",
+  admin_last_name: "",
   admin_email: "",
+  admin_phone: "",
+  admin_address: "",
   admin_password: "",
-  admin_name: "",
+  business_name: "",
+  contact_name: "",
+  billing_email: "",
+  business_phone: "",
+  business_address: "",
 };
 
 const defaultEditFormData: EditTenantFormData = {
   name: "",
   is_active: true,
+  storage_plan_id: "",
+  price_override: "",
+  billing_email: "",
 };
 
 export default function TenantManagementPage() {
   const { profile, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [storagePlans, setStoragePlans] = useState<StoragePlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -76,14 +124,19 @@ export default function TenantManagementPage() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!authLoading && profile?.role !== "super_admin") {
+    // Wait for auth to finish loading and profile to be fetched
+    if (authLoading) return;
+
+    // If profile is still null after auth loading, wait for it
+    if (!profile) return;
+
+    if (profile.role !== "super_admin") {
       router.push("/unauthorized");
       return;
     }
 
-    if (profile?.role === "super_admin") {
-      fetchTenants();
-    }
+    fetchTenants();
+    fetchStoragePlans();
   }, [profile, authLoading, router]);
 
   const fetchTenants = async () => {
@@ -97,6 +150,18 @@ export default function TenantManagementPage() {
       console.error("Failed to fetch tenants:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const fetchStoragePlans = async () => {
+    try {
+      const response = await fetch("/api/admin/storage-plans");
+      if (response.ok) {
+        const data = await response.json();
+        setStoragePlans(data.plans || []);
+      }
+    } catch (error) {
+      console.error("Failed to fetch storage plans:", error);
     }
   };
 
@@ -171,6 +236,9 @@ export default function TenantManagementPage() {
     setEditFormData({
       name: tenant.name,
       is_active: tenant.is_active,
+      storage_plan_id: tenant.storage_plan_id || "",
+      price_override: tenant.price_override || "",
+      billing_email: tenant.billing_email || "",
     });
     setShowEditModal(true);
   };
@@ -267,6 +335,28 @@ export default function TenantManagementPage() {
                   <span className="text-xs font-medium">3CX not configured</span>
                 </div>
               )}
+
+              {/* Plan & Billing Info */}
+              <div className="flex items-center gap-2 text-slate-600 bg-violet-50 px-3 py-2 rounded-lg border border-violet-200">
+                <Package className="h-4 w-4 text-violet-500" />
+                <span className="text-xs">
+                  {tenant.storage_plan?.name || "No plan"}
+                  {tenant.price_override && (
+                    <span className="ml-1 text-violet-600 font-medium">(${tenant.price_override}/mo)</span>
+                  )}
+                </span>
+                {tenant.billing_status && (
+                  <span className={`ml-auto px-2 py-0.5 rounded text-xs font-medium ${
+                    tenant.billing_status === "active" ? "bg-green-100 text-green-700" :
+                    tenant.billing_status === "past_due" ? "bg-red-100 text-red-700" :
+                    tenant.billing_status === "trial" ? "bg-blue-100 text-blue-700" :
+                    "bg-slate-100 text-slate-600"
+                  }`}>
+                    {tenant.billing_status}
+                  </span>
+                )}
+              </div>
+
               <div className="flex items-center gap-4 text-slate-500">
                 <span className="flex items-center gap-1.5 bg-blue-50 px-3 py-1.5 rounded-lg">
                   <Users className="h-4 w-4 text-blue-500" />
@@ -316,7 +406,7 @@ export default function TenantManagementPage() {
         )}
       </div>
 
-      {/* Create Tenant Modal - Simple form with just admin credentials */}
+      {/* Create Tenant Modal with Customer Type Selection */}
       <Modal
         isOpen={showCreateModal}
         onClose={() => {
@@ -326,7 +416,7 @@ export default function TenantManagementPage() {
         }}
         title="Create New Tenant"
       >
-        <div className="space-y-5">
+        <div className="space-y-5 max-h-[70vh] overflow-y-auto">
           <p className="text-sm text-slate-600 bg-teal-50 border border-teal-200 rounded-xl p-4">
             Create a new tenant organization. The tenant admin will be able to configure their own 3CX connection settings after logging in.
           </p>
@@ -338,6 +428,42 @@ export default function TenantManagementPage() {
             </div>
           )}
 
+          {/* Customer Type Selection */}
+          <div className="space-y-3">
+            <label className="block text-sm font-medium text-slate-700">
+              Customer Type *
+            </label>
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                type="button"
+                onClick={() => setCreateFormData({ ...createFormData, customerType: "standard" })}
+                className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${
+                  createFormData.customerType === "standard"
+                    ? "border-teal-500 bg-teal-50 text-teal-700"
+                    : "border-slate-200 hover:border-slate-300 text-slate-600"
+                }`}
+              >
+                <User className="h-6 w-6" />
+                <span className="font-medium">Standard</span>
+                <span className="text-xs text-slate-500">Individual user</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setCreateFormData({ ...createFormData, customerType: "business" })}
+                className={`p-4 rounded-xl border-2 transition-all flex flex-col items-center gap-2 ${
+                  createFormData.customerType === "business"
+                    ? "border-violet-500 bg-violet-50 text-violet-700"
+                    : "border-slate-200 hover:border-slate-300 text-slate-600"
+                }`}
+              >
+                <Building2 className="h-6 w-6" />
+                <span className="font-medium">Business</span>
+                <span className="text-xs text-slate-500">Organization</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Organization Details */}
           <div className="space-y-4">
             <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
               <div className="p-2 bg-teal-100 rounded-lg">
@@ -376,44 +502,168 @@ export default function TenantManagementPage() {
             </div>
           </div>
 
-          <div className="space-y-4">
-            <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <User className="h-5 w-5 text-blue-600" />
+          {/* Standard User Fields */}
+          {createFormData.customerType === "standard" && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
+                <div className="p-2 bg-blue-100 rounded-lg">
+                  <User className="h-5 w-5 text-blue-600" />
+                </div>
+                <h4 className="font-semibold text-slate-800">Admin Details</h4>
               </div>
-              <h4 className="font-semibold text-slate-800">Tenant Admin Account</h4>
-            </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Admin Full Name *
-              </label>
-              <Input
-                placeholder="John Smith"
-                value={createFormData.admin_name}
-                onChange={(e) => setCreateFormData({ ...createFormData, admin_name: e.target.value })}
-              />
-            </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    First Name *
+                  </label>
+                  <Input
+                    placeholder="John"
+                    value={createFormData.admin_first_name}
+                    onChange={(e) => setCreateFormData({ ...createFormData, admin_first_name: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                    Last Name *
+                  </label>
+                  <Input
+                    placeholder="Smith"
+                    value={createFormData.admin_last_name}
+                    onChange={(e) => setCreateFormData({ ...createFormData, admin_last_name: e.target.value })}
+                  />
+                </div>
+              </div>
 
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Admin Email *
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Email Address *
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+                  <Input
+                    type="email"
+                    placeholder="admin@example.com"
+                    value={createFormData.admin_email}
+                    onChange={(e) => setCreateFormData({ ...createFormData, admin_email: e.target.value })}
+                    className="pl-10"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Phone Number *
+                </label>
                 <Input
-                  type="email"
-                  placeholder="admin@acme.com"
-                  value={createFormData.admin_email}
-                  onChange={(e) => setCreateFormData({ ...createFormData, admin_email: e.target.value })}
-                  className="pl-10"
+                  type="tel"
+                  placeholder="+1 (555) 000-0000"
+                  value={createFormData.admin_phone}
+                  onChange={(e) => setCreateFormData({ ...createFormData, admin_phone: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Address *
+                </label>
+                <textarea
+                  placeholder="123 Main St, City, State 12345"
+                  value={createFormData.admin_address}
+                  onChange={(e) => setCreateFormData({ ...createFormData, admin_address: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 min-h-[60px] resize-none"
                 />
               </div>
             </div>
+          )}
+
+          {/* Business Fields */}
+          {createFormData.customerType === "business" && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
+                <div className="p-2 bg-violet-100 rounded-lg">
+                  <Building2 className="h-5 w-5 text-violet-600" />
+                </div>
+                <h4 className="font-semibold text-slate-800">Business Details</h4>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Business Name *
+                </label>
+                <Input
+                  placeholder="Acme Corporation"
+                  value={createFormData.business_name}
+                  onChange={(e) => setCreateFormData({ ...createFormData, business_name: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Contact Name *
+                </label>
+                <Input
+                  placeholder="John Smith"
+                  value={createFormData.contact_name}
+                  onChange={(e) => setCreateFormData({ ...createFormData, contact_name: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Billing Email *
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+                  <Input
+                    type="email"
+                    placeholder="billing@company.com"
+                    value={createFormData.billing_email}
+                    onChange={(e) => setCreateFormData({ ...createFormData, billing_email: e.target.value })}
+                    className="pl-10"
+                  />
+                </div>
+                <p className="text-xs text-slate-500 mt-1">Used for login and billing notifications</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Business Phone *
+                </label>
+                <Input
+                  type="tel"
+                  placeholder="+1 (555) 000-0000"
+                  value={createFormData.business_phone}
+                  onChange={(e) => setCreateFormData({ ...createFormData, business_phone: e.target.value })}
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Business Address *
+                </label>
+                <textarea
+                  placeholder="123 Business Ave, Suite 100, City, State 12345"
+                  value={createFormData.business_address}
+                  onChange={(e) => setCreateFormData({ ...createFormData, business_address: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 min-h-[60px] resize-none"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Password Section */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
+              <div className="p-2 bg-amber-100 rounded-lg">
+                <Server className="h-5 w-5 text-amber-600" />
+              </div>
+              <h4 className="font-semibold text-slate-800">Account Password</h4>
+            </div>
 
             <div>
               <label className="block text-sm font-medium text-slate-700 mb-1.5">
-                Admin Password *
+                Password *
               </label>
               <Input
                 type="password"
@@ -439,7 +689,14 @@ export default function TenantManagementPage() {
             <Button
               onClick={handleCreateTenant}
               isLoading={isSubmitting}
-              disabled={!createFormData.name || !createFormData.admin_email || !createFormData.admin_password || !createFormData.admin_name}
+              disabled={
+                !createFormData.name ||
+                !createFormData.admin_password ||
+                (createFormData.customerType === "standard"
+                  ? !createFormData.admin_first_name || !createFormData.admin_last_name || !createFormData.admin_email || !createFormData.admin_phone || !createFormData.admin_address
+                  : !createFormData.business_name || !createFormData.contact_name || !createFormData.billing_email || !createFormData.business_phone || !createFormData.business_address
+                )
+              }
             >
               Create Tenant
             </Button>
@@ -502,6 +759,73 @@ export default function TenantManagementPage() {
                   <p className="text-sm text-slate-500">Inactive tenants cannot access the system</p>
                 </div>
               </label>
+            </div>
+
+            {/* Billing & Plan Section */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-3 pb-3 border-b border-slate-200">
+                <div className="p-2 bg-violet-100 rounded-lg">
+                  <CreditCard className="h-5 w-5 text-violet-600" />
+                </div>
+                <h4 className="font-semibold text-slate-800">Billing & Plan</h4>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Storage Plan
+                </label>
+                <select
+                  value={editFormData.storage_plan_id}
+                  onChange={(e) => setEditFormData({ ...editFormData, storage_plan_id: e.target.value })}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                >
+                  <option value="">No plan assigned</option>
+                  {storagePlans.map((plan) => (
+                    <option key={plan.id} value={plan.id}>
+                      {plan.name} - ${parseFloat(plan.price_monthly).toFixed(2)}/mo ({plan.storage_limit_gb === 0 ? "Unlimited" : `${plan.storage_limit_gb}GB`})
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Price Override (Monthly)
+                </label>
+                <div className="relative">
+                  <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+                  <Input
+                    type="number"
+                    step="0.01"
+                    placeholder="Leave empty to use plan price"
+                    value={editFormData.price_override}
+                    onChange={(e) => setEditFormData({ ...editFormData, price_override: e.target.value })}
+                    className="pl-10"
+                  />
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Override the plan&apos;s monthly price for this tenant
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-700 mb-1.5">
+                  Billing Email
+                </label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+                  <Input
+                    type="email"
+                    placeholder="billing@company.com"
+                    value={editFormData.billing_email}
+                    onChange={(e) => setEditFormData({ ...editFormData, billing_email: e.target.value })}
+                    className="pl-10"
+                  />
+                </div>
+                <p className="text-xs text-slate-500 mt-1">
+                  Email address for billing notifications
+                </p>
+              </div>
             </div>
 
             <div className="flex justify-end gap-3 pt-4 border-t border-slate-200">

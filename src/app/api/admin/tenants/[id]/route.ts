@@ -41,6 +41,11 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       updateData.threecx_password = body.threecx_password;
     }
     if (body.is_active !== undefined) updateData.is_active = body.is_active;
+    if (body.storage_plan_id !== undefined) updateData.storage_plan_id = body.storage_plan_id || null;
+    if (body.price_override !== undefined) {
+      updateData.price_override = body.price_override ? parseFloat(body.price_override) : null;
+    }
+    if (body.billing_email !== undefined) updateData.billing_email = body.billing_email || null;
 
     // Update tenant
     const { data: tenant, error } = await supabase

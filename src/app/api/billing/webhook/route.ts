@@ -3,6 +3,7 @@ import { createClient } from "@supabase/supabase-js";
 import Stripe from "stripe";
 import { withRateLimit } from "@/lib/api-utils";
 import { rateLimitConfigs } from "@/lib/rate-limit";
+import { sendBillingEmail } from "@/lib/notifications/email";
 
 // Lazy initialization to avoid build-time errors when env vars are not set
 function getStripeClient(): Stripe | null {
@@ -169,10 +170,12 @@ async function handleSubscriptionUpdate(subscription: Stripe.Subscription) {
 }
 
 async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
+  const supabase = getSupabaseAdmin();
+
   // Find tenant by subscription ID
-  const { data: tenant } = await getSupabaseAdmin()
+  const { data: tenant } = await supabase
     .from("tenants")
-    .select("id")
+    .select("id, name, billing_email")
     .eq("stripe_subscription_id", subscription.id)
     .single();
 
@@ -182,13 +185,23 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
   }
 
   // Get default free plan
-  const { data: freePlan } = await getSupabaseAdmin()
+  const { data: freePlan } = await supabase
     .from("storage_plans")
     .select("id")
     .eq("is_default", true)
     .single();
 
-  await getSupabaseAdmin()
+  // Calculate end date from subscription
+  const periodEnd = (subscription as unknown as { current_period_end?: number }).current_period_end;
+  const endDate = periodEnd
+    ? new Date(periodEnd * 1000).toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      })
+    : "soon";
+
+  await supabase
     .from("tenants")
     .update({
       billing_status: "canceled",
@@ -198,6 +211,14 @@ async function handleSubscriptionDeleted(subscription: Stripe.Subscription) {
     })
     .eq("id", tenant.id);
 
+  // Send subscription cancelled email
+  if (tenant.billing_email) {
+    await sendBillingEmail(tenant.billing_email, "subscription_cancelled", {
+      name: tenant.name,
+      endDate,
+    });
+  }
+
   console.log(`Subscription deleted for tenant ${tenant.id}`);
 }
 
@@ -206,13 +227,36 @@ async function handlePaymentSucceeded(invoice: Stripe.Invoice) {
   const subscriptionId = (invoice as unknown as { subscription?: string }).subscription;
   if (!subscriptionId) return;
 
-  await getSupabaseAdmin()
+  const supabase = getSupabaseAdmin();
+
+  // Get tenant info
+  const { data: tenant } = await supabase
+    .from("tenants")
+    .select("id, name, billing_email")
+    .eq("stripe_subscription_id", subscriptionId)
+    .single();
+
+  await supabase
     .from("tenants")
     .update({
       billing_status: "active",
       updated_at: new Date().toISOString(),
     })
     .eq("stripe_subscription_id", subscriptionId);
+
+  // Send payment success email
+  if (tenant?.billing_email) {
+    const amount = invoice.amount_paid ? `$${(invoice.amount_paid / 100).toFixed(2)}` : "your subscription";
+
+    // Get plan name from line items
+    const planName = invoice.lines?.data?.[0]?.description || "Subscription";
+
+    await sendBillingEmail(tenant.billing_email, "payment_success", {
+      name: tenant.name,
+      amount,
+      planName,
+    });
+  }
 
   console.log(`Payment succeeded for subscription ${subscriptionId}`);
 }
@@ -222,13 +266,32 @@ async function handlePaymentFailed(invoice: Stripe.Invoice) {
   const subscriptionId = (invoice as unknown as { subscription?: string }).subscription;
   if (!subscriptionId) return;
 
-  await getSupabaseAdmin()
+  const supabase = getSupabaseAdmin();
+
+  // Get tenant info
+  const { data: tenant } = await supabase
+    .from("tenants")
+    .select("id, name, billing_email")
+    .eq("stripe_subscription_id", subscriptionId)
+    .single();
+
+  await supabase
     .from("tenants")
     .update({
       billing_status: "past_due",
       updated_at: new Date().toISOString(),
     })
     .eq("stripe_subscription_id", subscriptionId);
+
+  // Send payment failed email
+  if (tenant?.billing_email) {
+    const amount = invoice.amount_due ? `$${(invoice.amount_due / 100).toFixed(2)}` : "your subscription";
+
+    await sendBillingEmail(tenant.billing_email, "payment_failed", {
+      name: tenant.name,
+      amount,
+    });
+  }
 
   console.log(`Payment failed for subscription ${subscriptionId}`);
 }

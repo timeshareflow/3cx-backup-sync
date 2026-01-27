@@ -51,7 +51,13 @@ export default function TenantSetupPage() {
   const [isConfigured, setIsConfigured] = useState(false);
 
   useEffect(() => {
-    if (!authLoading && profile?.role !== "admin" && profile?.role !== "super_admin") {
+    // Wait for auth to finish loading
+    if (authLoading) return;
+
+    // If profile is still null after auth loading, wait for it
+    if (!profile) return;
+
+    if (profile.role !== "admin" && profile.role !== "super_admin") {
       router.push("/unauthorized");
       return;
     }
