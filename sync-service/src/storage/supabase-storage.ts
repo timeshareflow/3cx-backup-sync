@@ -43,6 +43,23 @@ const mimeTypes: Record<string, string> = {
 
 export type FileCategory = "chat-media" | "recordings" | "voicemails" | "faxes" | "meetings";
 
+/**
+ * Sanitize a filename for Supabase Storage.
+ * Supabase Storage doesn't allow certain characters like brackets.
+ */
+export function sanitizeFilename(filename: string): string {
+  return filename
+    // Replace brackets with parentheses
+    .replace(/\[/g, "(")
+    .replace(/\]/g, ")")
+    // Replace other problematic characters with underscores
+    .replace(/[#%&{}\\<>*?/$!'":@+`|=]/g, "_")
+    // Collapse multiple underscores
+    .replace(/_+/g, "_")
+    // Remove leading/trailing underscores
+    .replace(/^_+|_+$/g, "");
+}
+
 export interface FileTypeInfo {
   fileType: "image" | "video" | "audio" | "document";
   mimeType: string;
@@ -128,7 +145,10 @@ export function generateStoragePath(
   const ext = extension || path.extname(filename).slice(1) || "bin";
   const baseName = path.basename(filename, path.extname(filename));
 
-  return `${tenantId}/${category}/${year}/${month}/${baseName}.${ext}`;
+  // Sanitize the filename to remove problematic characters
+  const sanitizedBaseName = sanitizeFilename(baseName);
+
+  return `${tenantId}/${category}/${year}/${month}/${sanitizedBaseName}.${ext}`;
 }
 
 // Check if file exists in Supabase Storage
