@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/service";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function POST(request: NextRequest) {
   try {
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
     const { hostname, ip_address, os_info, agent_version, install_path } = body;
 
     // Use service client for admin operations
-    const supabase = createServiceClient();
+    const supabase = createAdminClient();
 
     // Find tenant by agent token
     const { data: tenant, error: tenantError } = await supabase

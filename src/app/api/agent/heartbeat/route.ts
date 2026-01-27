@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createServiceClient } from "@/lib/supabase/service";
+import { createAdminClient } from "@/lib/supabase/admin";
 
 export async function POST(request: NextRequest) {
   try {
@@ -18,7 +18,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { status, last_sync_at, last_error, agent_version } = body;
 
-    const supabase = createServiceClient();
+    const supabase = createAdminClient();
 
     // Update agent status
     const { data: agent, error } = await supabase
