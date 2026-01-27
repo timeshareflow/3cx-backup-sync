@@ -509,7 +509,7 @@ export function EmailSettingsSection() {
               placeholder="Enter email to send test"
             />
           </div>
-          <Button onClick={sendTestEmail} disabled={isTesting || !settings?.is_active}>
+          <Button onClick={sendTestEmail} disabled={isTesting || !settings?.id || !formData.is_active}>
             {isTesting ? (
               <>
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
@@ -539,7 +539,12 @@ export function EmailSettingsSection() {
             {testResult.message}
           </div>
         )}
-        {!settings?.is_active && (
+        {!settings?.id && (
+          <p className="mt-2 text-sm text-amber-600">
+            Save your email settings first to test the configuration.
+          </p>
+        )}
+        {settings?.id && !formData.is_active && (
           <p className="mt-2 text-sm text-amber-600">
             Enable email sending above to test your configuration.
           </p>
