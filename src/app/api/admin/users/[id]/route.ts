@@ -41,24 +41,27 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     }
 
     const isTenantAdmin = currentUserTenantRole === "admin";
+    const isEditingSelf = id === context.userId;
 
-    if (!isSuperAdmin && !isTenantAdmin) {
+    // Allow users to edit their own profile, or require admin rights to edit others
+    if (!isEditingSelf && !isSuperAdmin && !isTenantAdmin) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // Check if target user is protected
+    // Check if target user is protected (but allow self-editing)
     const { data: targetUser } = await supabase
       .from("user_profiles")
       .select("is_protected")
       .eq("id", id)
       .single();
 
-    if (targetUser?.is_protected) {
+    if (targetUser?.is_protected && !isEditingSelf) {
       return NextResponse.json({ error: "Cannot modify protected user" }, { status: 403 });
     }
 
     // Check target user's tenant role if not super admin
-    if (!isSuperAdmin && context.tenantId) {
+
+    if (!isSuperAdmin && !isEditingSelf && context.tenantId) {
       const { data: targetTenantRole } = await supabase
         .from("user_tenants")
         .select("role")
