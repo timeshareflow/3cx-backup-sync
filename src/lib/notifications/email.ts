@@ -39,6 +39,8 @@ interface EmailResult {
 async function getEmailConfig(): Promise<EmailConfig | null> {
   const supabase = createAdminClient();
 
+  console.log("getEmailConfig - fetching settings...");
+
   const { data: settings, error } = await supabase
     .from("smtp_settings")
     .select("*")
@@ -50,6 +52,9 @@ async function getEmailConfig(): Promise<EmailConfig | null> {
     console.error("No active email settings found:", error);
     return null;
   }
+
+  console.log("getEmailConfig - settings found, provider:", settings.provider);
+  console.log("getEmailConfig - has encrypted API key:", !!settings.sendgrid_api_key_encrypted);
 
   const provider = settings.provider || "smtp";
 
@@ -63,7 +68,12 @@ async function getEmailConfig(): Promise<EmailConfig | null> {
 
   if (provider === "sendgrid") {
     if (settings.sendgrid_api_key_encrypted) {
+      console.log("getEmailConfig - decrypting API key...");
       config.sendgridApiKey = decrypt(settings.sendgrid_api_key_encrypted);
+      console.log("getEmailConfig - decrypted key length:", config.sendgridApiKey?.length || 0);
+      console.log("getEmailConfig - decrypted key starts with SG.:", config.sendgridApiKey?.startsWith("SG.") || false);
+    } else {
+      console.log("getEmailConfig - no encrypted API key found in settings");
     }
   } else {
     // SMTP configuration
@@ -83,6 +93,11 @@ async function getEmailConfig(): Promise<EmailConfig | null> {
 }
 
 async function sendViaSendGrid(config: EmailConfig, options: EmailOptions): Promise<EmailResult> {
+  console.log("SendGrid - checking API key...");
+  console.log("SendGrid - API key present:", !!config.sendgridApiKey);
+  console.log("SendGrid - API key length:", config.sendgridApiKey?.length || 0);
+  console.log("SendGrid - API key starts with SG.:", config.sendgridApiKey?.startsWith("SG.") || false);
+
   if (!config.sendgridApiKey) {
     return {
       success: false,
@@ -105,14 +120,24 @@ async function sendViaSendGrid(config: EmailConfig, options: EmailOptions): Prom
       replyTo: options.replyTo,
     };
 
+    console.log("SendGrid - sending to:", options.to);
+    console.log("SendGrid - from:", config.from.email);
+
     const [response] = await sgMail.send(msg);
+
+    console.log("SendGrid - success, message ID:", response.headers["x-message-id"]);
 
     return {
       success: true,
       messageId: response.headers["x-message-id"],
     };
-  } catch (error) {
+  } catch (error: unknown) {
     console.error("SendGrid error:", error);
+    // Log more details for SendGrid errors
+    if (error && typeof error === 'object' && 'response' in error) {
+      const sgError = error as { response?: { body?: unknown } };
+      console.error("SendGrid response body:", JSON.stringify(sgError.response?.body, null, 2));
+    }
     return {
       success: false,
       error: error instanceof Error ? error.message : "SendGrid send failed",
