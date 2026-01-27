@@ -636,10 +636,12 @@ export const retentionPolicies = pgTable(
 // ============================================
 export const smtpSettings = pgTable("smtp_settings", {
   id: uuid("id").primaryKey().defaultRandom(),
-  host: varchar("host", { length: 255 }).notNull(),
+  provider: varchar("provider", { length: 20 }).default("smtp"), // smtp or sendgrid
+  host: varchar("host", { length: 255 }),
   port: integer("port").notNull().default(587),
   username: varchar("username", { length: 255 }),
   passwordEncrypted: text("password_encrypted"),
+  sendgridApiKeyEncrypted: text("sendgrid_api_key_encrypted"),
   fromEmail: varchar("from_email", { length: 255 }).notNull(),
   fromName: varchar("from_name", { length: 255 }).default("3CX BackupWiz"),
   encryption: varchar("encryption", { length: 20 }).default("tls"), // none, ssl, tls
