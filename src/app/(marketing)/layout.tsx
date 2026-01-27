@@ -12,7 +12,7 @@ export default function MarketingLayout({
       <nav className="sticky top-0 z-50 backdrop-blur-xl bg-white/80 border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="flex items-center justify-between h-16">
-            <Link href="/" className="flex items-center gap-3">
+            <Link href="/welcome" className="flex items-center gap-3">
               <div className="p-2 bg-gradient-to-br from-teal-500 to-cyan-600 rounded-xl shadow-lg shadow-teal-500/25">
                 <Database className="h-6 w-6 text-white" />
               </div>
@@ -21,7 +21,7 @@ export default function MarketingLayout({
 
             <div className="hidden md:flex items-center gap-8">
               <Link
-                href="/#features"
+                href="/welcome#features"
                 className="text-slate-600 hover:text-teal-600 transition-colors font-medium"
               >
                 Features
@@ -77,7 +77,7 @@ export default function MarketingLayout({
               <h3 className="font-semibold text-white mb-4">Product</h3>
               <ul className="space-y-2">
                 <li>
-                  <Link href="/#features" className="hover:text-teal-400 transition-colors">
+                  <Link href="/welcome#features" className="hover:text-teal-400 transition-colors">
                     Features
                   </Link>
                 </li>
