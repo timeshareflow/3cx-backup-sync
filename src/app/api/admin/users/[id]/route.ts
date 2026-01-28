@@ -187,20 +187,19 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     if (isSuperAdmin) {
       // Super admin can fully delete users
-      // Clean up all related records first to avoid FK constraint issues
+      // Clean up ALL references to avoid FK constraint issues
+      // Note: audit_logs.user_id and user_tenants.invited_by reference auth.users(id) with NO ACTION
 
-      // Clear created_by references (these don't have onDelete cascade)
-      await supabase
-        .from("user_extension_permissions")
-        .update({ created_by: null })
-        .eq("created_by", id);
+      // Nullify references that point to auth.users(id) (ON DELETE no action)
+      await supabase.from("audit_logs").update({ user_id: null }).eq("user_id", id);
+      await supabase.from("notification_logs").update({ user_id: null }).eq("user_id", id);
+      await supabase.from("user_tenants").update({ invited_by: null }).eq("invited_by", id);
 
-      await supabase
-        .from("user_group_chat_permissions")
-        .update({ created_by: null })
-        .eq("created_by", id);
+      // Clear created_by references (these reference user_profiles with no onDelete)
+      await supabase.from("user_extension_permissions").update({ created_by: null }).eq("created_by", id);
+      await supabase.from("user_group_chat_permissions").update({ created_by: null }).eq("created_by", id);
 
-      // Delete from child tables explicitly
+      // Delete from child tables that reference user_profiles (in case cascades aren't set up)
       await supabase.from("impersonation_sessions").delete().or(`super_admin_id.eq.${id},impersonated_user_id.eq.${id}`);
       await supabase.from("user_push_tokens").delete().eq("user_id", id);
       await supabase.from("user_notification_preferences").delete().eq("user_id", id);
@@ -208,22 +207,20 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       await supabase.from("user_extension_permissions").delete().eq("user_id", id);
       await supabase.from("user_tenants").delete().eq("user_id", id);
 
-      // Nullify audit log references (set null on delete)
-      await supabase.from("audit_logs").update({ user_id: null }).eq("user_id", id);
-      await supabase.from("notification_logs").update({ user_id: null }).eq("user_id", id);
-
       // Delete from user_profiles
-      const { error } = await supabase
+      const { error: profileError } = await supabase
         .from("user_profiles")
         .delete()
         .eq("id", id);
 
-      if (error) {
-        console.error("Error deleting user profile:", error);
-        throw error;
+      if (profileError) {
+        console.error("Error deleting user profile:", profileError);
+        return NextResponse.json({
+          error: `Failed to delete user profile: ${profileError.message}`
+        }, { status: 500 });
       }
 
-      // Delete from Supabase Auth last (profile FK reference is gone now)
+      // Delete from Supabase Auth last (all FK references should be gone now)
       const { error: authError } = await supabase.auth.admin.deleteUser(id);
       if (authError) {
         console.error("Error deleting user from Auth:", authError);
@@ -264,22 +261,19 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
       if (!remainingTenants || remainingTenants.length === 0) {
         // User is no longer in any tenant - fully clean up
 
+        // Nullify references to auth.users (ON DELETE no action)
+        await supabase.from("audit_logs").update({ user_id: null }).eq("user_id", id);
+        await supabase.from("notification_logs").update({ user_id: null }).eq("user_id", id);
+        await supabase.from("user_tenants").update({ invited_by: null }).eq("invited_by", id);
+
         // Clear created_by references
-        await supabase
-          .from("user_extension_permissions")
-          .update({ created_by: null })
-          .eq("created_by", id);
-        await supabase
-          .from("user_group_chat_permissions")
-          .update({ created_by: null })
-          .eq("created_by", id);
+        await supabase.from("user_extension_permissions").update({ created_by: null }).eq("created_by", id);
+        await supabase.from("user_group_chat_permissions").update({ created_by: null }).eq("created_by", id);
 
         // Delete remaining child records
         await supabase.from("impersonation_sessions").delete().or(`super_admin_id.eq.${id},impersonated_user_id.eq.${id}`);
         await supabase.from("user_push_tokens").delete().eq("user_id", id);
         await supabase.from("user_notification_preferences").delete().eq("user_id", id);
-        await supabase.from("audit_logs").update({ user_id: null }).eq("user_id", id);
-        await supabase.from("notification_logs").update({ user_id: null }).eq("user_id", id);
 
         // Delete the profile first, then auth
         await supabase.from("user_profiles").delete().eq("id", id);
@@ -304,7 +298,8 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
 
     return NextResponse.json({ success: true });
   } catch (error) {
-    console.error("Error deleting user:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Error deleting user:", message, error);
+    return NextResponse.json({ error: `Failed to delete user: ${message}` }, { status: 500 });
   }
 }
