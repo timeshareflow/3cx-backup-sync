@@ -108,18 +108,25 @@ export default function UserManagementPage() {
       });
       const data = await response.json();
       if (response.ok) {
-        setInviteSuccess(data.message || "User invited successfully!");
+        const message = data.message || "User invited successfully!";
+        setInviteSuccess(message);
         setInviteEmail("");
         setInviteName("");
         setInviteRole("user");
         setUseTemporaryPassword(false);
         setTemporaryPassword("");
         fetchUsers();
-        // Close modal after showing success briefly
-        setTimeout(() => {
-          setShowInviteModal(false);
-          setInviteSuccess(null);
-        }, 2000);
+        // Only auto-close if there's no warning/failure in the message
+        const hasWarning = message.toLowerCase().includes("failed") ||
+                          message.toLowerCase().includes("error") ||
+                          message.toLowerCase().includes("could not");
+        if (!hasWarning) {
+          setTimeout(() => {
+            setShowInviteModal(false);
+            setInviteSuccess(null);
+          }, 2000);
+        }
+        // If there's a warning, keep modal open so user can read the full message
       } else {
         setInviteError(data.error || "Failed to invite user");
       }
@@ -477,8 +484,34 @@ export default function UserManagementPage() {
 
           {/* Success message */}
           {inviteSuccess && (
-            <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700">
-              {inviteSuccess}
+            <div className={`rounded-lg p-4 text-sm ${
+              inviteSuccess.toLowerCase().includes("failed") ||
+              inviteSuccess.toLowerCase().includes("error")
+                ? "bg-amber-50 border border-amber-200"
+                : "bg-green-50 border border-green-200"
+            }`}>
+              <div className={`${
+                inviteSuccess.toLowerCase().includes("failed") ||
+                inviteSuccess.toLowerCase().includes("error")
+                  ? "text-amber-800"
+                  : "text-green-700"
+              }`}>
+                {inviteSuccess}
+              </div>
+              {(inviteSuccess.toLowerCase().includes("failed") ||
+                inviteSuccess.toLowerCase().includes("error")) && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-3"
+                  onClick={() => {
+                    setShowInviteModal(false);
+                    setInviteSuccess(null);
+                  }}
+                >
+                  Close
+                </Button>
+              )}
             </div>
           )}
 
