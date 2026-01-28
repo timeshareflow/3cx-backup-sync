@@ -219,17 +219,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    // Clear local state first to prevent any re-renders from using stale data
-    setProfile(null);
-    setTenants([]);
-    setCurrentTenant(null);
-    setAllTenants([]);
-    setViewingAsTenantState(null);
-    setPasswordChangeRequired(false);
-    setUser(null);
-    setSession(null);
-
-    // Clear localStorage
+    // Clear localStorage first
     localStorage.removeItem("currentTenantId");
     localStorage.removeItem("viewingAsTenantId");
 
@@ -242,8 +232,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       await supabase.auth.signOut({ scope: 'global' });
     } catch (error) {
       console.error("Error during sign out:", error);
-      // Continue even if there's an error - we've already cleared local state
     }
+
+    // Clear local state after Supabase signOut
+    setProfile(null);
+    setTenants([]);
+    setCurrentTenant(null);
+    setAllTenants([]);
+    setViewingAsTenantState(null);
+    setPasswordChangeRequired(false);
+    setUser(null);
+    setSession(null);
+
+    // Force redirect to login page to avoid any stale state issues
+    window.location.href = "/login";
   };
 
   const clearPasswordChangeRequired = async () => {
