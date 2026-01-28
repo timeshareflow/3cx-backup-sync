@@ -30,8 +30,9 @@ export async function GET() {
     return NextResponse.json({ plans: plans || [] });
   } catch (error) {
     console.error("Error in storage plans API:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
     return NextResponse.json(
-      { error: "Internal server error" },
+      { error: "Internal server error", details: errorMessage },
       { status: 500 }
     );
   }
