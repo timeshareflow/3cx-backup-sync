@@ -313,6 +313,36 @@ WHERE m.sender_identifier IS NOT NULL
   )
 ORDER BY m.conversation_id, m.sender_identifier, m.sent_at ASC;`,
       },
+      // Add conversation_id column to media_files if missing
+      {
+        name: "Add conversation_id column to media_files",
+        sql: `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE;`,
+      },
+      // Link unlinked media files to their messages by matching filename
+      {
+        name: "Backfill media_files message links by filename",
+        sql: `UPDATE media_files mf
+SET message_id = m.id,
+    conversation_id = m.conversation_id
+FROM messages m
+WHERE mf.message_id IS NULL
+  AND mf.tenant_id = m.tenant_id
+  AND m.has_media = true
+  AND LOWER(TRIM(m.content)) = LOWER(mf.file_name);`,
+      },
+      // Fallback: link media by matching filename without extension (handles compressed files)
+      {
+        name: "Backfill media_files message links by filename (no extension)",
+        sql: `UPDATE media_files mf
+SET message_id = m.id,
+    conversation_id = m.conversation_id
+FROM messages m
+WHERE mf.message_id IS NULL
+  AND mf.tenant_id = m.tenant_id
+  AND m.has_media = true
+  AND m.content IS NOT NULL
+  AND LOWER(TRIM(regexp_replace(m.content, '\\.[^.]+$', ''))) = LOWER(regexp_replace(mf.file_name, '\\.[^.]+$', ''));`,
+      },
     ];
 
     for (const migration of migrations) {

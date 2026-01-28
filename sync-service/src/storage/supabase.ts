@@ -316,6 +316,56 @@ export async function getConversationId(
   return data?.id || null;
 }
 
+// Get count of unlinked media files (no message_id)
+export async function getUnlinkedMediaCount(
+  tenantId: string
+): Promise<number> {
+  const client = getSupabaseClient();
+  const { count, error } = await client
+    .from("media_files")
+    .select("id", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .is("message_id", null);
+
+  if (error) {
+    logger.error("Failed to count unlinked media", { error: error.message });
+    return 0;
+  }
+  return count || 0;
+}
+
+// Bulk lookup Supabase messages by their 3CX message IDs
+export async function getMessagesByThreecxIds(
+  threecxIds: string[],
+  tenantId: string
+): Promise<Array<{ threecx_message_id: string; id: string; conversation_id: string }>> {
+  if (threecxIds.length === 0) return [];
+
+  const client = getSupabaseClient();
+  const results: Array<{ threecx_message_id: string; id: string; conversation_id: string }> = [];
+
+  // Query in batches of 100 to avoid URL length limits
+  for (let i = 0; i < threecxIds.length; i += 100) {
+    const batch = threecxIds.slice(i, i + 100);
+    const { data, error } = await client
+      .from("messages")
+      .select("id, threecx_message_id, conversation_id")
+      .eq("tenant_id", tenantId)
+      .in("threecx_message_id", batch);
+
+    if (error) {
+      logger.error("Failed to lookup messages by threecx IDs", { error: error.message });
+      continue;
+    }
+
+    if (data) {
+      results.push(...data);
+    }
+  }
+
+  return results;
+}
+
 // Update sync status - uses upsert to create if not exists
 export async function updateSyncStatus(
   syncType: string,
@@ -818,6 +868,7 @@ export async function linkMediaToMessage(
   internalFileName: string, // The hash/filename stored on disk
   messageId: string,
   originalFilename: string,
+  conversationId?: string,
   fileInfo?: { Width?: number; Height?: number; Size?: number } | null
 ): Promise<boolean> {
   const client = getSupabaseClient();
@@ -853,6 +904,10 @@ export async function linkMediaToMessage(
     file_name: originalFilename, // Replace hash with original filename
   };
 
+  if (conversationId) {
+    updateData.conversation_id = conversationId;
+  }
+
   // Add dimensions if available
   if (fileInfo?.Width) {
     updateData.width = fileInfo.Width;
@@ -874,13 +929,81 @@ export async function linkMediaToMessage(
     return false;
   }
 
-  logger.debug("Linked media to message", {
+  logger.info("Linked media to message", {
     mediaId: mediaFile.id,
     messageId,
     originalFilename,
   });
 
   return true;
+}
+
+// Link media file to message by matching original filename to message content
+export async function linkMediaByFilename(
+  tenantId: string,
+  messageId: string,
+  conversationId: string,
+  messageContent: string
+): Promise<boolean> {
+  const client = getSupabaseClient();
+  const filename = messageContent.trim();
+
+  if (!filename) return false;
+
+  // Match media_files.file_name to the message content (which is the filename)
+  // Try exact match first, then case-insensitive
+  const { data, error } = await client
+    .from("media_files")
+    .update({ message_id: messageId, conversation_id: conversationId })
+    .eq("tenant_id", tenantId)
+    .ilike("file_name", filename)
+    .is("message_id", null)
+    .select("id");
+
+  if (error) {
+    logger.error("Failed to link media by filename", {
+      error: error.message,
+      filename,
+      messageId,
+    });
+    return false;
+  }
+
+  if (data && data.length > 0) {
+    logger.info("Linked media to message by filename", {
+      mediaId: data[0].id,
+      messageId,
+      conversationId,
+      filename,
+      matchCount: data.length,
+    });
+    return true;
+  }
+
+  // Fallback: try matching without file extension (media may have been compressed to different format)
+  const filenameWithoutExt = filename.replace(/\.[^/.]+$/, "");
+  if (filenameWithoutExt !== filename) {
+    const { data: fallbackData, error: fallbackError } = await client
+      .from("media_files")
+      .update({ message_id: messageId, conversation_id: conversationId })
+      .eq("tenant_id", tenantId)
+      .ilike("file_name", `${filenameWithoutExt}.%`)
+      .is("message_id", null)
+      .select("id");
+
+    if (!fallbackError && fallbackData && fallbackData.length > 0) {
+      logger.info("Linked media to message by filename (extension fallback)", {
+        mediaId: fallbackData[0].id,
+        messageId,
+        conversationId,
+        originalFilename: filename,
+        matchCount: fallbackData.length,
+      });
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ============================================

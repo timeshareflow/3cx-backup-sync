@@ -5,6 +5,8 @@ import {
   getNewMessages,
   getConversations,
   getAllLiveConversations,
+  getFileMappings,
+  getAllFileMappings,
 } from "../threecx/queries";
 import {
   upsertConversation,
@@ -13,6 +15,10 @@ import {
   getConversationId,
   updateSyncStatus,
   getLastSyncedTimestamp,
+  linkMediaByFilename,
+  linkMediaToMessage,
+  getUnlinkedMediaCount,
+  getMessagesByThreecxIds,
 } from "../storage/supabase";
 
 export interface MessageSyncResult {
@@ -228,6 +234,14 @@ export async function syncMessages(
         conversations.map((c) => [c.conversation_id, c])
       );
 
+      // Track media messages in this batch for linking
+      const mediaMessagesInBatch: Array<{
+        threecxMessageId: string;
+        supabaseMessageId: string;
+        conversationId: string;
+        messageContent: string;
+      }> = [];
+
       // Process each message
       for (const msg of messages) {
         try {
@@ -299,6 +313,16 @@ export async function syncMessages(
 
           if (messageId) {
             result.messagesSynced++;
+
+            // Track media messages for batch linking via 3CX file mappings
+            if (hasMedia && msg.message && supabaseConversationId) {
+              mediaMessagesInBatch.push({
+                threecxMessageId: msg.message_id,
+                supabaseMessageId: messageId,
+                conversationId: supabaseConversationId,
+                messageContent: msg.message,
+              });
+            }
           }
 
           // Store the timestamp with a 1ms buffer to avoid re-fetching the same message
@@ -315,6 +339,56 @@ export async function syncMessages(
             tenantId,
             messageId: msg.message_id,
             error: err.message,
+          });
+        }
+      }
+
+      // Link media files to messages using 3CX file mappings (hash → original filename)
+      if (mediaMessagesInBatch.length > 0) {
+        try {
+          const fileMappings = await getFileMappings(
+            mediaMessagesInBatch.map((m) => m.threecxMessageId),
+            pool
+          );
+
+          for (const mapping of fileMappings) {
+            const mediaMsg = mediaMessagesInBatch.find(
+              (m) => m.threecxMessageId === mapping.message_id
+            );
+            if (mediaMsg) {
+              await linkMediaToMessage(
+                tenantId || "",
+                mapping.internal_file_name,
+                mediaMsg.supabaseMessageId,
+                mapping.public_file_name,
+                mediaMsg.conversationId,
+                mapping.file_info
+              );
+            }
+          }
+
+          if (fileMappings.length > 0) {
+            logger.info(`Linked ${fileMappings.length} media files to messages`, { tenantId });
+          }
+
+          // Fallback: try direct filename matching for any remaining unlinked media messages
+          for (const mediaMsg of mediaMessagesInBatch) {
+            const wasLinkedByHash = fileMappings.some(
+              (m) => m.message_id === mediaMsg.threecxMessageId
+            );
+            if (!wasLinkedByHash) {
+              await linkMediaByFilename(
+                tenantId || "",
+                mediaMsg.supabaseMessageId,
+                mediaMsg.conversationId,
+                mediaMsg.messageContent
+              );
+            }
+          }
+        } catch (error) {
+          logger.warn("Failed to link media files in batch", {
+            tenantId,
+            error: (error as Error).message,
           });
         }
       }
@@ -338,6 +412,51 @@ export async function syncMessages(
           lastSyncedTimestamp: lastTimestamp,
           recordsSynced: result.messagesSynced,
           tenantId,
+        });
+      }
+    }
+
+    // Backfill: link any remaining unlinked media files using 3CX file mappings
+    if (tenantId) {
+      try {
+        const unlinkedCount = await getUnlinkedMediaCount(tenantId);
+        if (unlinkedCount > 0) {
+          logger.info(`Found ${unlinkedCount} unlinked media files, attempting backfill`, { tenantId });
+
+          const allMappings = await getAllFileMappings(5000, pool);
+          if (allMappings.length > 0) {
+            // Get Supabase message IDs for all mapped messages
+            const threecxIds = allMappings.map((m) => m.message_id);
+            const supabaseMessages = await getMessagesByThreecxIds(threecxIds, tenantId);
+            const messageMap = new Map(
+              supabaseMessages.map((m) => [m.threecx_message_id, m])
+            );
+
+            let linked = 0;
+            for (const mapping of allMappings) {
+              const msg = messageMap.get(mapping.message_id);
+              if (msg) {
+                const wasLinked = await linkMediaToMessage(
+                  tenantId,
+                  mapping.internal_file_name,
+                  msg.id,
+                  mapping.public_file_name,
+                  msg.conversation_id,
+                  mapping.file_info
+                );
+                if (wasLinked) linked++;
+              }
+            }
+
+            if (linked > 0) {
+              logger.info(`Backfill linked ${linked} media files to messages`, { tenantId });
+            }
+          }
+        }
+      } catch (error) {
+        logger.warn("Media backfill failed (non-critical)", {
+          tenantId,
+          error: (error as Error).message,
         });
       }
     }

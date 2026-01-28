@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Navigation } from "@/components/layout/Navigation";
 import { MessageList } from "@/components/chat/MessageList";
 import { Button } from "@/components/ui/Button";
@@ -32,22 +32,86 @@ export default function MonitorPage() {
   const [showSelector, setShowSelector] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const initialLoadDone = useRef(false);
+  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const fetchConversations = useCallback(async () => {
+  // Save selected conversation IDs to user preferences (debounced)
+  const saveMonitorPreferences = useCallback((conversationIds: string[]) => {
+    if (saveTimeoutRef.current) {
+      clearTimeout(saveTimeoutRef.current);
+    }
+    saveTimeoutRef.current = setTimeout(async () => {
+      try {
+        await fetch("/api/user/preferences", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ monitorConversationIds: conversationIds }),
+        });
+      } catch (error) {
+        console.error("Failed to save monitor preferences:", error);
+      }
+    }, 500);
+  }, []);
+
+  const fetchConversations = useCallback(async (): Promise<Conversation[]> => {
     setIsLoadingConversations(true);
     try {
       const response = await fetch("/api/conversations?limit=100");
       if (response.ok) {
         const data = await response.json();
-        setConversations(data.data || []);
+        const convList = data.data || [];
+        setConversations(convList);
+        return convList;
       }
     } catch (error) {
       console.error("Failed to fetch conversations:", error);
     } finally {
       setIsLoadingConversations(false);
     }
+    return [];
   }, []);
+
+  // Load saved monitor preferences on mount
+  useEffect(() => {
+    if (initialLoadDone.current) return;
+    initialLoadDone.current = true;
+
+    (async () => {
+      try {
+        const [prefsResponse, convList] = await Promise.all([
+          fetch("/api/user/preferences"),
+          fetchConversations(),
+        ]);
+
+        if (prefsResponse.ok) {
+          const prefsData = await prefsResponse.json();
+          const savedIds: string[] =
+            prefsData.preferences?.monitorConversationIds || [];
+
+          if (savedIds.length > 0 && convList.length > 0) {
+            const savedPanels: MonitorPanel[] = [];
+            for (const id of savedIds) {
+              const conv = convList.find((c: Conversation) => c.id === id);
+              if (conv) {
+                savedPanels.push({
+                  id: `panel-${id}`,
+                  conversation: conv,
+                  isMaximized: false,
+                });
+              }
+            }
+            setPanels(savedPanels);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to load monitor preferences:", error);
+      } finally {
+        setIsLoadingInitial(false);
+      }
+    })();
+  }, [fetchConversations]);
 
   useEffect(() => {
     if (showSelector && conversations.length === 0) {
@@ -56,24 +120,27 @@ export default function MonitorPage() {
   }, [showSelector, conversations.length, fetchConversations]);
 
   const addPanel = (conversation: Conversation) => {
-    // Don't add if already in panels
     if (panels.some((p) => p.conversation.id === conversation.id)) {
       return;
     }
 
-    setPanels([
+    const newPanels = [
       ...panels,
       {
         id: `panel-${Date.now()}`,
         conversation,
         isMaximized: false,
       },
-    ]);
+    ];
+    setPanels(newPanels);
     setShowSelector(false);
+    saveMonitorPreferences(newPanels.map((p) => p.conversation.id));
   };
 
   const removePanel = (panelId: string) => {
-    setPanels(panels.filter((p) => p.id !== panelId));
+    const newPanels = panels.filter((p) => p.id !== panelId);
+    setPanels(newPanels);
+    saveMonitorPreferences(newPanels.map((p) => p.conversation.id));
   };
 
   const toggleMaximize = (panelId: string) => {
@@ -113,6 +180,18 @@ export default function MonitorPage() {
     if (panels.length <= 4) return "grid-cols-2";
     return "grid-cols-3";
   };
+
+  if (isLoadingInitial) {
+    return (
+      <div className="flex flex-col h-[calc(100vh-8rem)]">
+        <Navigation breadcrumbs={[{ label: "Multi-Chat Monitor" }]} />
+        <div className="flex-1 flex items-center justify-center">
+          <Spinner size="lg" />
+          <span className="ml-3 text-gray-600">Loading monitor...</span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
