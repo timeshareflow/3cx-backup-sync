@@ -33,19 +33,25 @@ function ResetPasswordContent() {
     const supabase = createClient();
 
     const establishSession = async () => {
-      // First, check if there's a code parameter (PKCE flow)
-      const code = searchParams.get("code");
-      if (code) {
-        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
-        if (!exchangeError) {
+      // Check for token_hash parameter (server-generated invite links)
+      const token_hash = searchParams.get("token_hash");
+      const type = searchParams.get("type") as "recovery" | "email" | undefined;
+      if (token_hash) {
+        const { error: verifyError } = await supabase.auth.verifyOtp({
+          token_hash,
+          type: type || "recovery",
+        });
+        if (!verifyError) {
           setIsValidSession(true);
           setIsCheckingSession(false);
           return;
         }
-        console.error("Code exchange failed:", exchangeError);
+        console.error("Token verification failed:", verifyError);
+        setIsCheckingSession(false);
+        return;
       }
 
-      // Check if there's already an active session
+      // Check if there's already an active session (e.g., user navigated here directly)
       const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setIsValidSession(true);
@@ -53,8 +59,7 @@ function ResetPasswordContent() {
         return;
       }
 
-      // Listen for auth state changes (handles hash fragment tokens)
-      // Give it a moment to process hash fragments
+      // Listen for auth state changes (handles hash fragment tokens from Supabase emails)
       const timeout = setTimeout(() => {
         setIsCheckingSession(false);
       }, 3000);

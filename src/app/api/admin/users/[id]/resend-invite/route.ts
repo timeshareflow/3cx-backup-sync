@@ -87,18 +87,21 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
       },
     });
 
-    if (linkError || !linkData?.properties?.action_link) {
+    if (linkError || !linkData?.properties?.hashed_token) {
       console.error("Error generating invite link:", linkError);
       return NextResponse.json({
         error: "Failed to generate invite link. User can use 'Forgot Password' on login page."
       }, { status: 500 });
     }
 
+    // Use token_hash approach to bypass PKCE - construct direct link to reset-password page
+    const inviteLink = `${appUrl}/auth/reset-password?token_hash=${linkData.properties.hashed_token}&type=recovery`;
+
     // Send the invite email
     const emailResult = await sendInviteEmail(
       targetUser.email,
       targetUser.full_name || "",
-      linkData.properties.action_link,
+      inviteLink,
       tenantData?.name
     );
 

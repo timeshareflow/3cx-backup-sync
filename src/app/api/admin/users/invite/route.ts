@@ -175,7 +175,10 @@ export async function POST(request: NextRequest) {
       if (linkError) {
         console.error("Error generating recovery link for orphaned user:", linkError);
         emailError = linkError.message;
-      } else if (linkData?.properties?.action_link) {
+      } else if (linkData?.properties?.hashed_token) {
+        // Use token_hash approach to bypass PKCE - construct direct link to reset-password page
+        const inviteLink = `${appUrl}/auth/reset-password?token_hash=${linkData.properties.hashed_token}&type=recovery`;
+
         const { data: tenantData } = await supabase
           .from("tenants")
           .select("name")
@@ -185,7 +188,7 @@ export async function POST(request: NextRequest) {
         const emailResult = await sendInviteEmail(
           email,
           fullName || "",
-          linkData.properties.action_link,
+          inviteLink,
           tenantData?.name
         );
 
@@ -313,11 +316,14 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      if (linkError || !linkData.properties?.action_link) {
+      if (linkError || !linkData.properties?.hashed_token) {
         console.error("Error generating invite link:", linkError);
         // Fall back to welcome email with message to use "Forgot Password"
         responseMessage = "User created. They should use 'Forgot Password' on the login page to set their password.";
       } else {
+        // Use token_hash approach to bypass PKCE - construct direct link to reset-password page
+        const inviteLink = `${appUrl}/auth/reset-password?token_hash=${linkData.properties.hashed_token}&type=recovery`;
+
         // Get tenant name for the email
         const { data: tenantData } = await supabase
           .from("tenants")
@@ -329,7 +335,7 @@ export async function POST(request: NextRequest) {
         const emailResult = await sendInviteEmail(
           email,
           fullName || "",
-          linkData.properties.action_link,
+          inviteLink,
           tenantData?.name
         );
 
