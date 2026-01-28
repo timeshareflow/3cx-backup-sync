@@ -1,14 +1,27 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useState, useEffect, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 
 export default function ResetPasswordPage() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-gray-50">
+        <div className="text-gray-600">Loading...</div>
+      </div>
+    }>
+      <ResetPasswordContent />
+    </Suspense>
+  );
+}
+
+function ResetPasswordContent() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -17,18 +30,55 @@ export default function ResetPasswordPage() {
   const [isCheckingSession, setIsCheckingSession] = useState(true);
 
   useEffect(() => {
-    // Check if user has a valid recovery session
-    const checkSession = async () => {
-      const supabase = createClient();
-      const { data: { session } } = await supabase.auth.getSession();
+    const supabase = createClient();
 
+    const establishSession = async () => {
+      // First, check if there's a code parameter (PKCE flow)
+      const code = searchParams.get("code");
+      if (code) {
+        const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
+        if (!exchangeError) {
+          setIsValidSession(true);
+          setIsCheckingSession(false);
+          return;
+        }
+        console.error("Code exchange failed:", exchangeError);
+      }
+
+      // Check if there's already an active session
+      const { data: { session } } = await supabase.auth.getSession();
       if (session) {
         setIsValidSession(true);
+        setIsCheckingSession(false);
+        return;
       }
-      setIsCheckingSession(false);
+
+      // Listen for auth state changes (handles hash fragment tokens)
+      // Give it a moment to process hash fragments
+      const timeout = setTimeout(() => {
+        setIsCheckingSession(false);
+      }, 3000);
+
+      const { data: { subscription } } = supabase.auth.onAuthStateChange(
+        (event, session) => {
+          if (event === "PASSWORD_RECOVERY" || event === "SIGNED_IN") {
+            if (session) {
+              setIsValidSession(true);
+              setIsCheckingSession(false);
+              clearTimeout(timeout);
+            }
+          }
+        }
+      );
+
+      return () => {
+        clearTimeout(timeout);
+        subscription.unsubscribe();
+      };
     };
 
-    checkSession();
+    establishSession();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -52,6 +102,7 @@ export default function ResetPasswordPage() {
       const supabase = createClient();
       const { error: updateError } = await supabase.auth.updateUser({
         password: password,
+        data: { password_change_required: false },
       });
 
       if (updateError) {
@@ -73,7 +124,7 @@ export default function ResetPasswordPage() {
   if (isCheckingSession) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-600">Loading...</div>
+        <div className="text-gray-600">Verifying your link...</div>
       </div>
     );
   }
