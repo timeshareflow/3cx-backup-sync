@@ -568,6 +568,83 @@ export async function sendWelcomeEmail(
   });
 }
 
+// Send an invitation email to a new user
+export async function sendInviteEmail(
+  to: string,
+  name: string,
+  inviteLink: string,
+  tenantName?: string
+): Promise<EmailResult> {
+  const appName = getAppName();
+  const appUrl = getAppUrl();
+
+  const content = `
+    <h1 style="margin: 0 0 8px; font-size: 28px; font-weight: 700; color: #0f172a;">
+      You've Been Invited! 🎉
+    </h1>
+    <p style="margin: 0 0 24px; color: #475569; font-size: 16px; line-height: 1.6;">
+      Hi ${name || "there"},
+    </p>
+    <p style="margin: 0 0 24px; color: #475569; font-size: 16px; line-height: 1.6;">
+      You've been invited to join ${tenantName ? `<strong>${tenantName}</strong> on ` : ""}${appName} - a secure platform for archiving and managing your 3CX communications.
+    </p>
+
+    <div style="background: linear-gradient(135deg, #f0fdfa 0%, #ecfeff 100%); border-radius: 12px; padding: 24px; margin-bottom: 24px;">
+      <h3 style="margin: 0 0 16px; font-size: 16px; font-weight: 600; color: #0f172a;">
+        What you'll get access to:
+      </h3>
+      <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%;">
+        <tr>
+          <td style="padding: 8px 0;">
+            <span style="color: #14b8a6; margin-right: 8px;">✓</span>
+            <span style="color: #334155; font-size: 14px;">Secure chat message archives</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0;">
+            <span style="color: #14b8a6; margin-right: 8px;">✓</span>
+            <span style="color: #334155; font-size: 14px;">Call recordings and voicemails</span>
+          </td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0;">
+            <span style="color: #14b8a6; margin-right: 8px;">✓</span>
+            <span style="color: #334155; font-size: 14px;">Powerful search and export tools</span>
+          </td>
+        </tr>
+      </table>
+    </div>
+
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin: 32px auto;">
+      <tr>
+        <td style="background: linear-gradient(135deg, #14b8a6 0%, #06b6d4 100%); border-radius: 8px;">
+          <a href="${inviteLink}" style="display: inline-block; padding: 14px 32px; color: #ffffff; font-size: 16px; font-weight: 600; text-decoration: none;">
+            Accept Invitation & Set Password →
+          </a>
+        </td>
+      </tr>
+    </table>
+
+    <p style="margin: 24px 0 0; color: #94a3b8; font-size: 14px; text-align: center;">
+      This invitation link will expire in 24 hours.
+    </p>
+    <p style="margin: 8px 0 0; color: #94a3b8; font-size: 12px; text-align: center;">
+      If you didn't expect this invitation, you can safely ignore this email.
+    </p>
+  `;
+
+  const html = wrapInBrandedTemplate(content, {
+    preheader: `You've been invited to join ${tenantName || appName}!`
+  });
+
+  return sendEmail({
+    to,
+    subject: `You've been invited to ${tenantName || appName}`,
+    html,
+    text: `You've been invited to ${appName}!\n\nHi ${name || "there"},\n\nYou've been invited to join ${tenantName ? tenantName + " on " : ""}${appName}.\n\nClick here to accept the invitation and set your password:\n${inviteLink}\n\nThis link will expire in 24 hours.\n\nIf you didn't expect this invitation, you can safely ignore this email.`,
+  });
+}
+
 // Send a billing notification email
 export async function sendBillingEmail(
   to: string,

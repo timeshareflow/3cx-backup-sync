@@ -4,6 +4,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { withRateLimit, parseJsonBody } from "@/lib/api-utils";
 import { rateLimitConfigs } from "@/lib/rate-limit";
 import { logUserAction } from "@/lib/audit";
+import { sendInviteEmail, sendWelcomeEmail } from "@/lib/notifications/email";
 
 interface InviteRequest {
   email: string;
@@ -141,36 +142,84 @@ export async function POST(request: NextRequest) {
       }
 
       newUserId = createData.user.id;
-      responseMessage = "User created with temporary password. They must change it on first login.";
+
+      // Send welcome email with temporary password via SendGrid
+      const welcomeResult = await sendWelcomeEmail(email, fullName || "", temporaryPassword);
+      if (welcomeResult.success) {
+        responseMessage = "User created and welcome email sent with temporary password. They must change it on first login.";
+      } else {
+        console.error("Failed to send welcome email:", welcomeResult.error);
+        responseMessage = `User created with temporary password "${temporaryPassword}". Welcome email failed to send (${welcomeResult.error}).`;
+      }
     } else {
-      // Create new user with email invite
-      const { data: inviteData, error: inviteError } = await supabase.auth.admin.inviteUserByEmail(
-        email,
-        {
+      // Create new user and send invite via our email system (SendGrid)
+      // First, create the user with a temporary random password
+      const tempPassword = crypto.randomUUID().slice(0, 16) + "Aa1!"; // Random password meeting requirements
+
+      const { data: createData, error: createError } = await supabase.auth.admin.createUser({
+        email: email,
+        password: tempPassword,
+        email_confirm: true, // Auto-confirm so they can use recovery link
+        user_metadata: {
+          invited_to_tenant: context.tenantId,
+          tenant_role: role,
+          invited_by: context.userId,
+          password_change_required: true,
+        },
+      });
+
+      if (createError) {
+        console.error("Error creating user:", createError);
+        return NextResponse.json({
+          error: `Failed to create user: ${createError.message}`
+        }, { status: 500 });
+      }
+
+      if (!createData.user) {
+        return NextResponse.json({
+          error: "Failed to create user: No user returned"
+        }, { status: 500 });
+      }
+
+      newUserId = createData.user.id;
+
+      // Generate an invite/recovery link so user can set their own password
+      const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
+        type: "recovery",
+        email: email,
+        options: {
           redirectTo: `${appUrl}/auth/reset-password`,
-          data: {
-            invited_to_tenant: context.tenantId,
-            tenant_role: role,
-            invited_by: context.userId,
-          },
+        },
+      });
+
+      if (linkError || !linkData.properties?.action_link) {
+        console.error("Error generating invite link:", linkError);
+        // Fall back to welcome email with message to use "Forgot Password"
+        responseMessage = "User created. They should use 'Forgot Password' on the login page to set their password.";
+      } else {
+        // Get tenant name for the email
+        const { data: tenantData } = await supabase
+          .from("tenants")
+          .select("name")
+          .eq("id", context.tenantId)
+          .single();
+
+        // Send invite email via our email system (SendGrid)
+        const emailResult = await sendInviteEmail(
+          email,
+          fullName || "",
+          linkData.properties.action_link,
+          tenantData?.name
+        );
+
+        if (emailResult.success) {
+          responseMessage = "Invitation email sent. User will set their password when they click the link.";
+        } else {
+          console.error("Failed to send invite email:", emailResult.error);
+          // User was created, but email failed - they can use forgot password
+          responseMessage = `User created but email failed to send (${emailResult.error}). They can use 'Forgot Password' on the login page.`;
         }
-      );
-
-      if (inviteError) {
-        console.error("Error inviting user:", inviteError);
-        return NextResponse.json({
-          error: `Failed to send invitation: ${inviteError.message}`
-        }, { status: 500 });
       }
-
-      if (!inviteData.user) {
-        return NextResponse.json({
-          error: "Failed to invite user: No user returned"
-        }, { status: 500 });
-      }
-
-      newUserId = inviteData.user.id;
-      responseMessage = "Invitation email sent. User will set their password when they click the link.";
     }
 
     // Create user profile
