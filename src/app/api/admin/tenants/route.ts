@@ -56,8 +56,13 @@ export async function GET() {
     return NextResponse.json({ data: tenantsWithCounts });
   } catch (error) {
     console.error("Error fetching tenants:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    return NextResponse.json({ error: "Internal server error", details: errorMessage }, { status: 500 });
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const errorStack = error instanceof Error ? error.stack : undefined;
+    return NextResponse.json({
+      error: "Internal server error",
+      details: errorMessage,
+      stack: errorStack
+    }, { status: 500 });
   }
 }
 
