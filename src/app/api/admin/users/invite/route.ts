@@ -161,7 +161,7 @@ export async function POST(request: NextRequest) {
 
       // Generate a recovery link so user can set their password
       const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://3cxbackupwiz.vercel.app";
-      const { data: linkData } = await supabase.auth.admin.generateLink({
+      const { data: linkData, error: linkError } = await supabase.auth.admin.generateLink({
         type: "recovery",
         email: email,
         options: {
@@ -169,14 +169,34 @@ export async function POST(request: NextRequest) {
         },
       });
 
-      if (linkData?.properties?.action_link) {
+      let emailSent = false;
+      let emailError: string | undefined;
+
+      if (linkError) {
+        console.error("Error generating recovery link for orphaned user:", linkError);
+        emailError = linkError.message;
+      } else if (linkData?.properties?.action_link) {
         const { data: tenantData } = await supabase
           .from("tenants")
           .select("name")
           .eq("id", context.tenantId)
           .single();
 
-        await sendInviteEmail(email, fullName || "", linkData.properties.action_link, tenantData?.name);
+        const emailResult = await sendInviteEmail(
+          email,
+          fullName || "",
+          linkData.properties.action_link,
+          tenantData?.name
+        );
+
+        if (emailResult.success) {
+          emailSent = true;
+        } else {
+          console.error("Failed to send invite email for orphaned user:", emailResult.error);
+          emailError = emailResult.error;
+        }
+      } else {
+        emailError = "No recovery link generated";
       }
 
       // Log audit event
@@ -193,9 +213,19 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      // Build response message based on email result
+      let message = "User account recovered and added to tenant.";
+      if (emailSent) {
+        message += " Invitation email sent.";
+      } else if (emailError) {
+        message += ` Email failed to send (${emailError}). They can use 'Forgot Password' on the login page.`;
+      } else {
+        message += " They can use 'Forgot Password' on the login page to set their password.";
+      }
+
       return NextResponse.json({
         success: true,
-        message: "User account recovered and added to tenant. Invitation email sent."
+        message
       });
     }
 
