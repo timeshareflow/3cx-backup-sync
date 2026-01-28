@@ -56,12 +56,17 @@ export async function GET() {
     return NextResponse.json({ data: tenantsWithCounts });
   } catch (error) {
     console.error("Error fetching tenants:", error);
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    const errorStack = error instanceof Error ? error.stack : undefined;
+    let errorDetails: unknown;
+    if (error instanceof Error) {
+      errorDetails = { message: error.message, stack: error.stack };
+    } else if (typeof error === "object" && error !== null) {
+      errorDetails = JSON.parse(JSON.stringify(error));
+    } else {
+      errorDetails = String(error);
+    }
     return NextResponse.json({
       error: "Internal server error",
-      details: errorMessage,
-      stack: errorStack
+      details: errorDetails
     }, { status: 500 });
   }
 }
