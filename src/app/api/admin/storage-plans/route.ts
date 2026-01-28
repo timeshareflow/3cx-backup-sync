@@ -67,6 +67,8 @@ export async function POST(request: NextRequest) {
       sort_order,
       stripe_price_id_monthly,
       stripe_price_id_yearly,
+      overage_price_per_gb,
+      allow_overage,
     } = body;
 
     if (!name || storage_limit_gb === undefined || price_monthly === undefined) {
@@ -102,6 +104,8 @@ export async function POST(request: NextRequest) {
         sort_order: sort_order || 0,
         stripe_price_id_monthly,
         stripe_price_id_yearly,
+        overage_price_per_gb: overage_price_per_gb !== undefined ? String(overage_price_per_gb) : "0.15",
+        allow_overage: allow_overage ?? true,
       })
       .select()
       .single();
@@ -152,6 +156,8 @@ export async function PUT(request: NextRequest) {
       sort_order,
       stripe_price_id_monthly,
       stripe_price_id_yearly,
+      overage_price_per_gb,
+      allow_overage,
     } = body;
 
     if (!id) {
@@ -182,6 +188,8 @@ export async function PUT(request: NextRequest) {
     if (sort_order !== undefined) updateData.sort_order = sort_order;
     if (stripe_price_id_monthly !== undefined) updateData.stripe_price_id_monthly = stripe_price_id_monthly;
     if (stripe_price_id_yearly !== undefined) updateData.stripe_price_id_yearly = stripe_price_id_yearly;
+    if (overage_price_per_gb !== undefined) updateData.overage_price_per_gb = String(overage_price_per_gb);
+    if (allow_overage !== undefined) updateData.allow_overage = allow_overage;
 
     const { data: plan, error } = await supabase
       .from("storage_plans")

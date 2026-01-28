@@ -213,6 +213,15 @@ async function migrate() {
         name: "Grant permissions on sync_agents",
         sql: `GRANT ALL ON sync_agents TO anon, authenticated, service_role;`,
       },
+      // Storage overage pricing
+      {
+        name: "Add overage_price_per_gb column to storage_plans",
+        sql: `ALTER TABLE storage_plans ADD COLUMN IF NOT EXISTS overage_price_per_gb DECIMAL(10, 4) DEFAULT 0.15;`,
+      },
+      {
+        name: "Add allow_overage column to storage_plans",
+        sql: `ALTER TABLE storage_plans ADD COLUMN IF NOT EXISTS allow_overage BOOLEAN DEFAULT true;`,
+      },
     ];
 
     for (const migration of migrations) {

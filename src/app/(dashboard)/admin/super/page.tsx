@@ -60,6 +60,8 @@ interface StoragePlan {
   sort_order: number;
   stripe_price_id_monthly: string | null;
   stripe_price_id_yearly: string | null;
+  overage_price_per_gb: string | null;
+  allow_overage: boolean;
 }
 
 interface SmtpSettings {
@@ -636,10 +638,20 @@ export default function SuperAdminPage() {
                   </span>
                   <span className="text-gray-500">/month</span>
                 </div>
-                <div className="flex items-center gap-2 mb-4 text-sm text-gray-600">
+                <div className="flex items-center gap-2 mb-2 text-sm text-gray-600">
                   <HardDrive className="h-4 w-4" />
                   {plan.storage_limit_gb === 0 ? "Unlimited" : `${plan.storage_limit_gb} GB`} Storage
                 </div>
+                {plan.allow_overage && plan.overage_price_per_gb && (
+                  <div className="text-xs text-gray-500 mb-4">
+                    +${parseFloat(plan.overage_price_per_gb).toFixed(2)}/GB overage
+                  </div>
+                )}
+                {!plan.allow_overage && (
+                  <div className="text-xs text-red-500 mb-4">
+                    Hard limit (no overage)
+                  </div>
+                )}
                 <ul className="space-y-2 text-sm">
                   {(plan.features || []).slice(0, 4).map((feature, i) => (
                     <li key={i} className="flex items-center gap-2 text-gray-600">
@@ -870,6 +882,8 @@ function PlanEditor({
     sort_order: plan?.sort_order?.toString() || "0",
     stripe_price_id_monthly: plan?.stripe_price_id_monthly || "",
     stripe_price_id_yearly: plan?.stripe_price_id_yearly || "",
+    overage_price_per_gb: plan?.overage_price_per_gb || "0.15",
+    allow_overage: plan?.allow_overage ?? true,
   });
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -880,6 +894,7 @@ function PlanEditor({
       storage_limit_gb: parseInt(formData.storage_limit_gb),
       sort_order: parseInt(formData.sort_order),
       features: formData.features.split("\n").filter((f) => f.trim()),
+      overage_price_per_gb: parseFloat(formData.overage_price_per_gb),
     });
   };
 
@@ -930,6 +945,29 @@ function PlanEditor({
             className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
             min="0"
           />
+        </div>
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1">Overage Price ($/GB)</label>
+          <input
+            type="number"
+            step="0.01"
+            value={formData.overage_price_per_gb}
+            onChange={(e) => setFormData({ ...formData, overage_price_per_gb: e.target.value })}
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            min="0"
+            placeholder="0.15"
+          />
+        </div>
+        <div className="flex items-center">
+          <label className="flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={formData.allow_overage}
+              onChange={(e) => setFormData({ ...formData, allow_overage: e.target.checked })}
+              className="rounded border-gray-300 text-violet-600 focus:ring-violet-500"
+            />
+            <span className="text-sm text-gray-700">Allow overage (charge for extra storage)</span>
+          </label>
         </div>
         <div className="md:col-span-2">
           <label className="block text-sm font-medium text-gray-700 mb-1">Features (one per line)</label>
