@@ -8,7 +8,24 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(npx ts-node:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npx supabase:*)",
+      "Bash(npx drizzle-kit push:*)",
+      "Bash(node -e:*)",
+      "Bash(git push)",
+      "Bash(npx pm2 start:*)",
+      "Bash(git push:*)",
+      "Bash(npx tsx:*)",
+      "Bash(npx tsc:*)",
+      "Bash(openssl rand:*)",
+      "Bash(npm run db:push:*)",
+      "Bash(curl:*)",
+      "Bash(ssh -o StrictHostKeyChecking=no root@chachatowing.fl.3cx.us \"cd /opt/3cx-backup-sync && git pull && npm run build && pm2 restart 3cx-sync\")",
+      "Bash(ssh:*)",
+      "Bash(node fix-rls.js:*)",
+      "Bash(node check-email.js:*)",
+      "Bash(node fix-email.js:*)",
+      "Bash(git diff:*)"
     ]
   }
 }

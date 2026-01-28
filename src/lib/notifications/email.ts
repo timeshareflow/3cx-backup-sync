@@ -41,6 +41,21 @@ async function getEmailConfig(): Promise<EmailConfig | null> {
 
   console.log("getEmailConfig - fetching settings...");
 
+  // First check all settings to debug issues
+  const { data: allSettings } = await supabase
+    .from("smtp_settings")
+    .select("id, provider, is_active, from_email, sendgrid_api_key_encrypted")
+    .limit(5);
+
+  if (allSettings && allSettings.length > 0) {
+    console.log("getEmailConfig - found", allSettings.length, "settings records");
+    allSettings.forEach((s, i) => {
+      console.log(`  Record ${i}: id=${s.id}, provider=${s.provider}, is_active=${s.is_active}, has_api_key=${!!s.sendgrid_api_key_encrypted}`);
+    });
+  } else {
+    console.log("getEmailConfig - no settings records found in database");
+  }
+
   const { data: settings, error } = await supabase
     .from("smtp_settings")
     .select("*")
@@ -50,6 +65,11 @@ async function getEmailConfig(): Promise<EmailConfig | null> {
 
   if (error || !settings) {
     console.error("No active email settings found:", error);
+    // Check if there's a record that's just not active
+    const inactiveRecord = allSettings?.find(s => !s.is_active);
+    if (inactiveRecord) {
+      console.log("getEmailConfig - Found inactive settings record. Enable 'Email sending' toggle in admin.");
+    }
     return null;
   }
 

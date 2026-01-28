@@ -238,6 +238,29 @@ export default function UserManagementPage() {
     }
   };
 
+  const [resendingInvite, setResendingInvite] = useState<string | null>(null);
+
+  const handleResendInvite = async (user: UserProfile) => {
+    if (!confirm(`Resend invite email to ${user.email}?`)) return;
+    setResendingInvite(user.id);
+    try {
+      const response = await fetch(`/api/admin/users/${user.id}/resend-invite`, {
+        method: "POST",
+      });
+      const data = await response.json();
+      if (response.ok && data.success) {
+        alert("Invite email sent successfully!");
+      } else {
+        alert(data.error || "Failed to send invite email");
+      }
+    } catch (error) {
+      console.error("Failed to resend invite:", error);
+      alert("An error occurred while sending the invite");
+    } finally {
+      setResendingInvite(null);
+    }
+  };
+
   // Get effective role (tenant role takes precedence for display in tenant context)
   const getEffectiveRole = (user: UserProfile) => {
     return user.tenant_role || user.role;
@@ -379,6 +402,19 @@ export default function UserManagementPage() {
                           title="Login as this user"
                         >
                           <LogIn className="h-4 w-4" />
+                        </Button>
+                      )}
+                      {/* Resend Invite button - visible for non-super_admin users */}
+                      {effectiveRole !== "super_admin" && hasAdminAccess && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleResendInvite(user)}
+                          disabled={resendingInvite === user.id}
+                          className="hover:bg-blue-50 hover:text-blue-600"
+                          title="Resend invite email"
+                        >
+                          <Mail className="h-4 w-4" />
                         </Button>
                       )}
                       {/* Permissions button - visible for all non-super_admin users */}
