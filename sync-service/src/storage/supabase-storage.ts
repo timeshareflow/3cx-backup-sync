@@ -2,6 +2,12 @@ import { getSupabaseClient } from "./supabase";
 import * as fs from "fs";
 import * as path from "path";
 import { logger } from "../utils/logger";
+import {
+  compressMedia,
+  CompressionResult,
+  CompressionSettings,
+  DEFAULT_COMPRESSION_SETTINGS,
+} from "../utils/compression";
 
 const BUCKET_NAME = "backupwiz-files";
 
@@ -267,3 +273,65 @@ export function getPublicUrl(storagePath: string): string {
 
 // Alias for uploadBuffer for clarity in SFTP contexts
 export const uploadFileBuffer = uploadBuffer;
+
+/**
+ * Upload buffer with automatic compression based on file type
+ * Returns the compressed result including new extension/mime type
+ */
+export async function uploadBufferWithCompression(
+  buffer: Buffer,
+  storagePath: string,
+  fileType: "image" | "video" | "audio" | "document",
+  originalExtension: string,
+  compressionSettings: CompressionSettings = DEFAULT_COMPRESSION_SETTINGS
+): Promise<{
+  path: string;
+  size: number;
+  originalSize: number;
+  compressionRatio: number;
+  wasCompressed: boolean;
+  newExtension: string;
+  newMimeType: string;
+}> {
+  // Compress the media
+  const compressionResult = await compressMedia(
+    buffer,
+    fileType,
+    originalExtension,
+    compressionSettings
+  );
+
+  // Update storage path with new extension if compressed
+  let finalStoragePath = storagePath;
+  if (compressionResult.wasCompressed && compressionResult.newExtension !== originalExtension) {
+    // Replace extension in storage path
+    const pathWithoutExt = storagePath.replace(/\.[^.]+$/, "");
+    finalStoragePath = `${pathWithoutExt}.${compressionResult.newExtension}`;
+  }
+
+  // Upload the (possibly compressed) buffer
+  const uploadResult = await uploadBuffer(
+    compressionResult.buffer,
+    finalStoragePath,
+    compressionResult.newMimeType
+  );
+
+  if (compressionResult.wasCompressed) {
+    logger.info("Uploaded compressed media", {
+      originalSize: `${(compressionResult.originalSize / 1024).toFixed(1)}KB`,
+      compressedSize: `${(compressionResult.compressedSize / 1024).toFixed(1)}KB`,
+      savings: `${compressionResult.compressionRatio.toFixed(1)}%`,
+      path: finalStoragePath,
+    });
+  }
+
+  return {
+    path: uploadResult.path,
+    size: compressionResult.compressedSize,
+    originalSize: compressionResult.originalSize,
+    compressionRatio: compressionResult.compressionRatio,
+    wasCompressed: compressionResult.wasCompressed,
+    newExtension: compressionResult.newExtension,
+    newMimeType: compressionResult.newMimeType,
+  };
+}

@@ -2,7 +2,7 @@ import * as path from "path";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import {
-  uploadFileBuffer,
+  uploadBufferWithCompression,
   fileExists,
   detectFileType,
   generateStoragePath,
@@ -10,6 +10,7 @@ import {
 import { insertMediaFileNew, updateSyncStatus } from "../storage/supabase";
 import { createSftpClient, listRemoteFiles, listRemoteFilesRecursive, downloadFile, closeSftpClient } from "../storage/sftp";
 import { TenantConfig, getTenantSftpConfig } from "../tenant";
+import { DEFAULT_COMPRESSION_SETTINGS } from "../utils/compression";
 
 export interface MediaSyncResult {
   filesSynced: number;
@@ -120,25 +121,31 @@ export async function syncMedia(
         // Generate storage path - preserve subfolder structure
         const storagePath = generateStoragePath(tenantId, "chat-media", file.relativePath, extension);
 
-        // Check if already uploaded
+        // Check if already uploaded (check with possible compressed extension too)
         const exists = await fileExists(storagePath);
         if (exists) {
           result.filesSkipped++;
           continue;
         }
 
-        // Upload to Supabase Storage
-        const { path: uploadedPath, size } = await uploadFileBuffer(buffer, storagePath, mimeType);
+        // Upload to Supabase Storage with compression
+        const uploadResult = await uploadBufferWithCompression(
+          buffer,
+          storagePath,
+          fileType,
+          extension,
+          DEFAULT_COMPRESSION_SETTINGS
+        );
 
-        // Record in database
+        // Record in database with compressed file info
         await insertMediaFileNew({
           tenant_id: tenantId,
           original_filename: file.filename,
-          stored_filename: `${path.basename(file.filename, path.extname(file.filename))}.${extension}`,
+          stored_filename: `${path.basename(file.filename, path.extname(file.filename))}.${uploadResult.newExtension}`,
           file_type: fileType,
-          mime_type: mimeType,
-          file_size: size,
-          storage_path: uploadedPath,
+          mime_type: uploadResult.newMimeType,
+          file_size: uploadResult.size,
+          storage_path: uploadResult.path,
         });
 
         result.filesSynced++;
@@ -237,19 +244,34 @@ export async function syncRecordings(
           continue;
         }
 
-        const { path: uploadedPath, size } = await uploadFileBuffer(buffer, storagePath, mimeType);
+        // Upload with compression (recordings are often WAV, compress to MP3)
+        const uploadResult = await uploadBufferWithCompression(
+          buffer,
+          storagePath,
+          fileType,
+          extension,
+          DEFAULT_COMPRESSION_SETTINGS
+        );
 
         await insertMediaFileNew({
           tenant_id: tenant.id,
           original_filename: filename,
-          stored_filename: `${path.basename(filename, path.extname(filename))}.${extension}`,
+          stored_filename: `${path.basename(filename, path.extname(filename))}.${uploadResult.newExtension}`,
           file_type: "recording",
-          mime_type: mimeType,
-          file_size: size,
-          storage_path: uploadedPath,
+          mime_type: uploadResult.newMimeType,
+          file_size: uploadResult.size,
+          storage_path: uploadResult.path,
         });
 
         result.filesSynced++;
+
+        if (uploadResult.wasCompressed) {
+          logger.info("Recording compressed", {
+            tenantId: tenant.id,
+            filename,
+            savings: `${uploadResult.compressionRatio.toFixed(1)}%`,
+          });
+        }
       } catch (error) {
         result.errors.push({ filename, error: (error as Error).message });
       }
@@ -303,7 +325,7 @@ export async function syncVoicemails(
       try {
         const remotePath = path.posix.join(voicemailPath, filename);
         const buffer = await downloadFile(sftp, remotePath);
-        const { mimeType, extension } = detectFileType(buffer);
+        const { fileType, mimeType, extension } = detectFileType(buffer);
         const storagePath = generateStoragePath(tenant.id, "voicemails", filename, extension);
 
         const exists = await fileExists(storagePath);
@@ -312,19 +334,34 @@ export async function syncVoicemails(
           continue;
         }
 
-        const { path: uploadedPath, size } = await uploadFileBuffer(buffer, storagePath, mimeType);
+        // Upload with compression (voicemails are often WAV, compress to MP3)
+        const uploadResult = await uploadBufferWithCompression(
+          buffer,
+          storagePath,
+          fileType,
+          extension,
+          DEFAULT_COMPRESSION_SETTINGS
+        );
 
         await insertMediaFileNew({
           tenant_id: tenant.id,
           original_filename: filename,
-          stored_filename: filename,
+          stored_filename: `${path.basename(filename, path.extname(filename))}.${uploadResult.newExtension}`,
           file_type: "voicemail",
-          mime_type: mimeType,
-          file_size: size,
-          storage_path: uploadedPath,
+          mime_type: uploadResult.newMimeType,
+          file_size: uploadResult.size,
+          storage_path: uploadResult.path,
         });
 
         result.filesSynced++;
+
+        if (uploadResult.wasCompressed) {
+          logger.info("Voicemail compressed", {
+            tenantId: tenant.id,
+            filename,
+            savings: `${uploadResult.compressionRatio.toFixed(1)}%`,
+          });
+        }
       } catch (error) {
         result.errors.push({ filename, error: (error as Error).message });
       }

@@ -3,7 +3,7 @@ import { Pool } from "pg";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import {
-  uploadBuffer,
+  uploadBufferWithCompression,
   generateStoragePath,
   fileExists,
   detectFileType,
@@ -12,6 +12,7 @@ import { createSftpClient, downloadFile, closeSftpClient } from "../storage/sftp
 import { insertCallRecording, updateSyncStatus, getLastSyncedTimestamp } from "../storage/supabase";
 import { TenantConfig, getTenantSftpConfig } from "../tenant";
 import { getRecordings } from "../threecx/queries";
+import { DEFAULT_COMPRESSION_SETTINGS } from "../utils/compression";
 
 export interface RecordingsSyncResult {
   filesSynced: number;
@@ -186,10 +187,16 @@ export async function syncRecordings(
         }
 
         // Detect content type
-        const { mimeType } = detectFileType(buffer!);
+        const { fileType, mimeType, extension } = detectFileType(buffer!);
 
-        // Upload to Supabase Storage
-        const uploadResult = await uploadBuffer(buffer!, storagePath, mimeType);
+        // Upload to Supabase Storage with compression (WAV -> MP3)
+        const uploadResult = await uploadBufferWithCompression(
+          buffer!,
+          storagePath,
+          fileType,
+          extension,
+          DEFAULT_COMPRESSION_SETTINGS
+        );
 
         // Calculate duration
         const durationSeconds = recording.duration_seconds ||
@@ -197,7 +204,7 @@ export async function syncRecordings(
             ? Math.floor((new Date(recording.end_time).getTime() - new Date(recording.start_time).getTime()) / 1000)
             : null);
 
-        // Record in database
+        // Record in database with compressed file info
         await insertCallRecording({
           tenant_id: tenant.id,
           threecx_recording_id: recording.recording_id,
@@ -207,7 +214,7 @@ export async function syncRecordings(
           original_filename: filename,
           file_size: uploadResult.size,
           storage_path: uploadResult.path,
-          mime_type: mimeType,
+          mime_type: uploadResult.newMimeType,
           duration_seconds: durationSeconds || undefined,
           transcription: recording.transcription || undefined,
           recorded_at: recording.start_time?.toISOString() || new Date().toISOString(),
@@ -216,6 +223,17 @@ export async function syncRecordings(
         });
 
         result.filesSynced++;
+
+        if (uploadResult.wasCompressed) {
+          logger.info("Recording compressed", {
+            tenantId: tenant.id,
+            recordingId: recording.recording_id,
+            originalSize: `${(uploadResult.originalSize / 1024 / 1024).toFixed(2)}MB`,
+            compressedSize: `${(uploadResult.size / 1024 / 1024).toFixed(2)}MB`,
+            savings: `${uploadResult.compressionRatio.toFixed(1)}%`,
+          });
+        }
+
         logger.debug(`Synced recording via SFTP`, { tenantId: tenant.id, recordingId: recording.recording_id });
       } catch (error) {
         const err = handleError(error);
