@@ -364,12 +364,21 @@ export default function UserManagementPage() {
               return (
                 <tr key={user.id} className="hover:bg-slate-50 transition-colors">
                   <td className="px-6 py-4">
-                    <div className="flex items-center gap-3">
+                    <button
+                      className="flex items-center gap-3 text-left w-full group"
+                      onClick={() => {
+                        if (effectiveRole !== "super_admin") {
+                          setPermissionsUser(user);
+                          setShowPermissionsModal(true);
+                        }
+                      }}
+                      title={effectiveRole !== "super_admin" ? "View permissions" : undefined}
+                    >
                       <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-teal-100 to-cyan-100 flex items-center justify-center shadow-sm">
                         {getRoleIcon(effectiveRole)}
                       </div>
                       <div>
-                        <div className="font-semibold text-slate-800">
+                        <div className="font-semibold text-slate-800 group-hover:text-blue-600 transition-colors">
                           {user.full_name || "No name"}
                           {user.is_protected && (
                             <span className="ml-2 text-xs bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">(Protected)</span>
@@ -380,7 +389,7 @@ export default function UserManagementPage() {
                           {user.email}
                         </div>
                       </div>
-                    </div>
+                    </button>
                   </td>
                   <td className="px-6 py-4">
                     <span className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold capitalize ${getRoleBadgeColor(effectiveRole)}`}>

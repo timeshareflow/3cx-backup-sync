@@ -263,6 +263,7 @@ export async function syncMessages(
                   extension_number: p.extension,
                   display_name: p.name,
                   participant_type: msg.is_external ? "external" : "extension",
+                  tenant_id: tenantId,
                 });
               }
 
@@ -273,6 +274,7 @@ export async function syncMessages(
                   extension_number: msg.sender_participant_no,
                   display_name: msg.sender_participant_name || null,
                   participant_type: msg.is_external ? "external" : "extension",
+                  tenant_id: tenantId,
                 });
               }
             }

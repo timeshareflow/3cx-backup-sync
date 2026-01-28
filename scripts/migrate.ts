@@ -274,6 +274,18 @@ END $$;`,
         name: "Grant permissions on notification_logs",
         sql: `GRANT ALL ON notification_logs TO anon, authenticated, service_role;`,
       },
+      // Backfill participants.extension_id from extensions table
+      {
+        name: "Backfill participants extension_id",
+        sql: `UPDATE participants p
+SET extension_id = e.id
+FROM conversations c
+JOIN extensions e ON e.tenant_id = c.tenant_id AND e.extension_number = p.external_id
+WHERE p.conversation_id = c.id
+  AND p.extension_id IS NULL
+  AND p.external_id IS NOT NULL
+  AND p.participant_type != 'external';`,
+      },
     ];
 
     for (const migration of migrations) {

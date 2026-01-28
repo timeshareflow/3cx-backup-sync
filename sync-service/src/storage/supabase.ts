@@ -90,19 +90,40 @@ export async function upsertParticipant(participant: {
   email?: string | null;
   phone?: string | null;
   participant_type?: string;
+  tenant_id?: string;
 }): Promise<void> {
   const client = getSupabaseClient();
 
   // Check if participant already exists
   const { data: existing } = await client
     .from("participants")
-    .select("id")
+    .select("id, extension_id")
     .eq("conversation_id", participant.conversation_id)
     .eq("external_id", participant.extension_number || "")
     .single();
 
+  // Look up the extension UUID by extension_number + tenant_id
+  let extensionId: string | null = null;
+  if (participant.extension_number && participant.tenant_id && participant.participant_type !== "external") {
+    const { data: ext } = await client
+      .from("extensions")
+      .select("id")
+      .eq("extension_number", participant.extension_number)
+      .eq("tenant_id", participant.tenant_id)
+      .single();
+
+    extensionId = ext?.id || null;
+  }
+
   if (existing) {
-    return; // Already exists
+    // Update extension_id if it was missing
+    if (!existing.extension_id && extensionId) {
+      await client
+        .from("participants")
+        .update({ extension_id: extensionId })
+        .eq("id", existing.id);
+    }
+    return;
   }
 
   const { error } = await client.from("participants").insert({
@@ -111,6 +132,7 @@ export async function upsertParticipant(participant: {
     external_name: participant.display_name,
     external_number: participant.participant_type === "external" ? participant.phone : null,
     participant_type: participant.participant_type || "extension",
+    extension_id: extensionId,
     joined_at: new Date().toISOString(),
   });
 
