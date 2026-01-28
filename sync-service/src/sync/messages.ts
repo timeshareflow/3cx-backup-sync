@@ -80,24 +80,25 @@ function detectMediaInMessage(message: string | null): {
   if (!message) return { hasMedia: false, messageType: "text" };
 
   // 3CX often indicates media with specific patterns
-  const imagePatterns = [/\[image\]/i, /\.jpg$/i, /\.png$/i, /\.gif$/i];
-  const videoPatterns = [/\[video\]/i, /\.mp4$/i, /\.mov$/i];
-  const filePatterns = [/\[file\]/i, /\[document\]/i];
+  const trimmed = message.trim();
+  const imagePatterns = [/\[image\]/i, /\.jpe?g$/i, /\.png$/i, /\.gif$/i, /\.webp$/i, /\.heic$/i];
+  const videoPatterns = [/\[video\]/i, /\.mp4$/i, /\.mov$/i, /\.avi$/i, /\.webm$/i, /\.3gp$/i];
+  const filePatterns = [/\[file\]/i, /\[document\]/i, /\.pdf$/i, /\.doc$/i, /\.docx$/i];
 
   for (const pattern of imagePatterns) {
-    if (pattern.test(message)) {
+    if (pattern.test(trimmed)) {
       return { hasMedia: true, messageType: "image" };
     }
   }
 
   for (const pattern of videoPatterns) {
-    if (pattern.test(message)) {
+    if (pattern.test(trimmed)) {
       return { hasMedia: true, messageType: "video" };
     }
   }
 
   for (const pattern of filePatterns) {
-    if (pattern.test(message)) {
+    if (pattern.test(trimmed)) {
       return { hasMedia: true, messageType: "file" };
     }
   }

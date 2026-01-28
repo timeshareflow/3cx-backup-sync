@@ -343,6 +343,34 @@ WHERE mf.message_id IS NULL
   AND m.content IS NOT NULL
   AND LOWER(TRIM(regexp_replace(m.content, '\\.[^.]+$', ''))) = LOWER(regexp_replace(mf.file_name, '\\.[^.]+$', ''));`,
       },
+      // Add width/height/duration columns to media_files
+      {
+        name: "Add width column to media_files",
+        sql: `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS width integer;`,
+      },
+      {
+        name: "Add height column to media_files",
+        sql: `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS height integer;`,
+      },
+      {
+        name: "Add duration_seconds column to media_files",
+        sql: `ALTER TABLE media_files ADD COLUMN IF NOT EXISTS duration_seconds integer;`,
+      },
+      // Fix has_media flag for messages with filename content
+      {
+        name: "Update has_media for messages with filename content",
+        sql: `UPDATE messages
+SET has_media = true,
+    message_type = CASE
+      WHEN content ~* '\\.(jpe?g|png|gif|webp|heic)$' THEN 'image'
+      WHEN content ~* '\\.(mp4|mov|avi|webm|3gp)$' THEN 'video'
+      WHEN content ~* '\\.(wav|mp3|ogg|aac)$' THEN 'audio'
+      ELSE 'file'
+    END
+WHERE has_media = false
+  AND content IS NOT NULL
+  AND TRIM(content) ~* '\\.(jpe?g|png|gif|webp|heic|mp4|mov|avi|webm|3gp|wav|mp3|ogg|aac|pdf|doc|docx)$';`,
+      },
     ];
 
     for (const migration of migrations) {

@@ -2,12 +2,15 @@
 
 import { formatMessageTime } from "@/lib/utils/date";
 import { MediaPreview } from "./MediaPreview";
+import { Image as ImageIcon, Film, FileText, Music } from "lucide-react";
 import type { MessageWithMedia } from "@/types";
 
 interface MessageBubbleProps {
   message: MessageWithMedia;
   isHighlighted?: boolean;
 }
+
+const FILE_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|heic|mp4|mov|avi|webm|3gp|wav|mp3|ogg|aac|pdf|doc|docx)$/i;
 
 // Check if content is just a filename (should be hidden when media is present)
 function isJustFilename(content: string | null, mediaFiles: { file_name: string }[]): boolean {
@@ -18,16 +21,57 @@ function isJustFilename(content: string | null, mediaFiles: { file_name: string 
   if (mediaFiles.some(m => m.file_name === trimmed)) return true;
 
   // Check if content looks like a filename (common extensions)
-  const fileExtensions = /\.(jpg|jpeg|png|gif|webp|mp4|mov|avi|webm|wav|mp3|pdf|doc|docx)$/i;
-  return fileExtensions.test(trimmed);
+  return FILE_EXTENSIONS.test(trimmed);
+}
+
+function getFileTypeFromName(filename: string): "image" | "video" | "audio" | "document" {
+  if (/\.(jpg|jpeg|png|gif|webp|heic)$/i.test(filename)) return "image";
+  if (/\.(mp4|mov|avi|webm|3gp)$/i.test(filename)) return "video";
+  if (/\.(wav|mp3|ogg|aac)$/i.test(filename)) return "audio";
+  return "document";
+}
+
+function FileAttachmentCard({ filename }: { filename: string }) {
+  const fileType = getFileTypeFromName(filename);
+  const Icon = fileType === "image" ? ImageIcon
+    : fileType === "video" ? Film
+    : fileType === "audio" ? Music
+    : FileText;
+  const label = fileType === "image" ? "Image"
+    : fileType === "video" ? "Video"
+    : fileType === "audio" ? "Audio"
+    : "File";
+  const bgColor = fileType === "image" ? "bg-blue-50 border-blue-200"
+    : fileType === "video" ? "bg-purple-50 border-purple-200"
+    : fileType === "audio" ? "bg-amber-50 border-amber-200"
+    : "bg-gray-50 border-gray-200";
+  const iconColor = fileType === "image" ? "text-blue-500"
+    : fileType === "video" ? "text-purple-500"
+    : fileType === "audio" ? "text-amber-500"
+    : "text-gray-500";
+
+  return (
+    <div className={`flex items-center gap-3 p-3 rounded-xl border-2 ${bgColor} max-w-xs`}>
+      <div className={`h-10 w-10 rounded-lg ${fileType === "image" ? "bg-blue-100" : fileType === "video" ? "bg-purple-100" : fileType === "audio" ? "bg-amber-100" : "bg-gray-200"} flex items-center justify-center`}>
+        <Icon className={`h-5 w-5 ${iconColor}`} />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium text-gray-900 truncate">{filename}</p>
+        <p className="text-xs text-gray-500">{label} attachment</p>
+      </div>
+    </div>
+  );
 }
 
 export function MessageBubble({ message, isHighlighted = false }: MessageBubbleProps) {
   const hasMedia = message.media_files && message.media_files.length > 0;
   const hasText = message.content && message.content.trim().length > 0;
+  const contentIsFilename = hasText && FILE_EXTENSIONS.test(message.content!.trim());
 
-  // Hide text if it's just a filename and we have media to show
-  const shouldShowText = hasText && !(hasMedia && isJustFilename(message.content, message.media_files));
+  // Hide text if it's just a filename (whether we have linked media or not)
+  const shouldShowText = hasText && !contentIsFilename;
+  // Show attachment card when content is a filename but no linked media
+  const shouldShowAttachmentCard = contentIsFilename && !hasMedia;
 
   return (
     <div
@@ -67,6 +111,11 @@ export function MessageBubble({ message, isHighlighted = false }: MessageBubbleP
                 {message.content}
               </p>
             </div>
+          )}
+
+          {/* Styled attachment card for filename messages without linked media */}
+          {shouldShowAttachmentCard && (
+            <FileAttachmentCard filename={message.content!.trim()} />
           )}
 
           {/* Media content */}
