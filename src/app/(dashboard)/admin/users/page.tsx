@@ -203,9 +203,13 @@ export default function UserManagementPage() {
       });
       if (response.ok) {
         fetchUsers();
+      } else {
+        const data = await response.json();
+        alert(data.error || "Failed to delete user");
       }
     } catch (error) {
       console.error("Failed to delete user:", error);
+      alert("An error occurred while deleting the user");
     }
   };
 

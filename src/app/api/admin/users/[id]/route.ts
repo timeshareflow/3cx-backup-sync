@@ -186,23 +186,48 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
 
     if (isSuperAdmin) {
-      // Super admin can fully delete users - delete from Auth first, then profile
-      // Delete from Supabase Auth (this will cascade to profile if there's a trigger)
-      const { error: authError } = await supabase.auth.admin.deleteUser(id);
+      // Super admin can fully delete users
+      // Clean up all related records first to avoid FK constraint issues
 
-      if (authError) {
-        console.error("Error deleting user from Auth:", authError);
-        // Continue to try deleting the profile anyway
-      }
+      // Clear created_by references (these don't have onDelete cascade)
+      await supabase
+        .from("user_extension_permissions")
+        .update({ created_by: null })
+        .eq("created_by", id);
 
-      // Also delete from user_profiles (in case Auth deletion didn't cascade)
+      await supabase
+        .from("user_group_chat_permissions")
+        .update({ created_by: null })
+        .eq("created_by", id);
+
+      // Delete from child tables explicitly
+      await supabase.from("impersonation_sessions").delete().or(`super_admin_id.eq.${id},impersonated_user_id.eq.${id}`);
+      await supabase.from("user_push_tokens").delete().eq("user_id", id);
+      await supabase.from("user_notification_preferences").delete().eq("user_id", id);
+      await supabase.from("user_group_chat_permissions").delete().eq("user_id", id);
+      await supabase.from("user_extension_permissions").delete().eq("user_id", id);
+      await supabase.from("user_tenants").delete().eq("user_id", id);
+
+      // Nullify audit log references (set null on delete)
+      await supabase.from("audit_logs").update({ user_id: null }).eq("user_id", id);
+      await supabase.from("notification_logs").update({ user_id: null }).eq("user_id", id);
+
+      // Delete from user_profiles
       const { error } = await supabase
         .from("user_profiles")
         .delete()
         .eq("id", id);
 
       if (error) {
+        console.error("Error deleting user profile:", error);
         throw error;
+      }
+
+      // Delete from Supabase Auth last (profile FK reference is gone now)
+      const { error: authError } = await supabase.auth.admin.deleteUser(id);
+      if (authError) {
+        console.error("Error deleting user from Auth:", authError);
+        // Profile already deleted, auth cleanup is best-effort
       }
     } else if (context.tenantId) {
       // Tenant admins can only remove users from their tenant
@@ -237,15 +262,32 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         .limit(1);
 
       if (!remainingTenants || remainingTenants.length === 0) {
-        // User is no longer in any tenant - delete from Auth and profile
-        // Delete from Supabase Auth first
+        // User is no longer in any tenant - fully clean up
+
+        // Clear created_by references
+        await supabase
+          .from("user_extension_permissions")
+          .update({ created_by: null })
+          .eq("created_by", id);
+        await supabase
+          .from("user_group_chat_permissions")
+          .update({ created_by: null })
+          .eq("created_by", id);
+
+        // Delete remaining child records
+        await supabase.from("impersonation_sessions").delete().or(`super_admin_id.eq.${id},impersonated_user_id.eq.${id}`);
+        await supabase.from("user_push_tokens").delete().eq("user_id", id);
+        await supabase.from("user_notification_preferences").delete().eq("user_id", id);
+        await supabase.from("audit_logs").update({ user_id: null }).eq("user_id", id);
+        await supabase.from("notification_logs").update({ user_id: null }).eq("user_id", id);
+
+        // Delete the profile first, then auth
+        await supabase.from("user_profiles").delete().eq("id", id);
+
         const { error: authError } = await supabase.auth.admin.deleteUser(id);
         if (authError) {
           console.error("Error deleting orphaned user from Auth:", authError);
         }
-
-        // Then delete the profile
-        await supabase.from("user_profiles").delete().eq("id", id);
       }
     }
 
