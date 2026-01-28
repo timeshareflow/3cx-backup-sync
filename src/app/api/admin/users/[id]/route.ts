@@ -186,7 +186,16 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
 
     if (isSuperAdmin) {
-      // Super admin can fully delete users
+      // Super admin can fully delete users - delete from Auth first, then profile
+      // Delete from Supabase Auth (this will cascade to profile if there's a trigger)
+      const { error: authError } = await supabase.auth.admin.deleteUser(id);
+
+      if (authError) {
+        console.error("Error deleting user from Auth:", authError);
+        // Continue to try deleting the profile anyway
+      }
+
+      // Also delete from user_profiles (in case Auth deletion didn't cascade)
       const { error } = await supabase
         .from("user_profiles")
         .delete()
@@ -220,7 +229,7 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         .eq("user_id", id)
         .eq("tenant_id", context.tenantId);
 
-      // Clean up orphaned user - if user no longer belongs to any tenant, delete profile
+      // Clean up orphaned user - if user no longer belongs to any tenant, delete completely
       const { data: remainingTenants } = await supabase
         .from("user_tenants")
         .select("id")
@@ -228,7 +237,14 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         .limit(1);
 
       if (!remainingTenants || remainingTenants.length === 0) {
-        // User is no longer in any tenant - delete the profile
+        // User is no longer in any tenant - delete from Auth and profile
+        // Delete from Supabase Auth first
+        const { error: authError } = await supabase.auth.admin.deleteUser(id);
+        if (authError) {
+          console.error("Error deleting orphaned user from Auth:", authError);
+        }
+
+        // Then delete the profile
         await supabase.from("user_profiles").delete().eq("id", id);
       }
     }

@@ -90,42 +90,57 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const fetchProfile = async (userId: string) => {
-    const { data: profileData } = await supabase
-      .from("user_profiles")
-      .select("*")
-      .eq("id", userId)
-      .single();
+    try {
+      const { data: profileData, error: profileError } = await supabase
+        .from("user_profiles")
+        .select("*")
+        .eq("id", userId)
+        .single();
 
-    if (profileData) {
-      setProfile(profileData);
-
-      // If super admin, fetch all tenants for "view as" feature
-      if (profileData.role === "super_admin") {
-        fetchAllTenants();
+      if (profileError) {
+        console.error("Error fetching profile:", profileError);
+        // If profile fetch fails, try creating one (handles edge cases where profile doesn't exist)
+        return;
       }
-    }
 
-    // Fetch user's tenants
-    const { data: tenantsData } = await supabase
-      .from("user_tenants")
-      .select(`
-        tenant_id,
-        role,
-        tenant:tenants(id, name, slug)
-      `)
-      .eq("user_id", userId);
+      if (profileData) {
+        setProfile(profileData);
 
-    if (tenantsData) {
-      const formattedTenants = tenantsData as unknown as Tenant[];
-      setTenants(formattedTenants);
-
-      // Set first tenant as current if none selected
-      if (formattedTenants.length > 0 && !currentTenant) {
-        // Try to restore from localStorage
-        const savedTenantId = localStorage.getItem("currentTenantId");
-        const savedTenant = formattedTenants.find(t => t.tenant_id === savedTenantId);
-        setCurrentTenant(savedTenant || formattedTenants[0]);
+        // If super admin, fetch all tenants for "view as" feature
+        if (profileData.role === "super_admin") {
+          fetchAllTenants();
+        }
       }
+
+      // Fetch user's tenants
+      const { data: tenantsData, error: tenantsError } = await supabase
+        .from("user_tenants")
+        .select(`
+          tenant_id,
+          role,
+          tenant:tenants(id, name, slug)
+        `)
+        .eq("user_id", userId);
+
+      if (tenantsError) {
+        console.error("Error fetching tenants:", tenantsError);
+        return;
+      }
+
+      if (tenantsData) {
+        const formattedTenants = tenantsData as unknown as Tenant[];
+        setTenants(formattedTenants);
+
+        // Set first tenant as current if none selected
+        if (formattedTenants.length > 0 && !currentTenant) {
+          // Try to restore from localStorage
+          const savedTenantId = localStorage.getItem("currentTenantId");
+          const savedTenant = formattedTenants.find(t => t.tenant_id === savedTenantId);
+          setCurrentTenant(savedTenant || formattedTenants[0]);
+        }
+      }
+    } catch (error) {
+      console.error("Error in fetchProfile:", error);
     }
   };
 
@@ -137,7 +152,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Get initial session
-    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
+    supabase.auth.getSession().then(async ({ data: { session: initialSession } }) => {
       setSession(initialSession);
       setUser(initialSession?.user ?? null);
 
@@ -145,7 +160,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // Check if password change is required
         const needsPasswordChange = initialSession.user.user_metadata?.password_change_required === true;
         setPasswordChangeRequired(needsPasswordChange);
-        fetchProfile(initialSession.user.id);
+        // Wait for profile to load before setting loading to false
+        await fetchProfile(initialSession.user.id);
       }
       setIsLoading(false);
     });
@@ -153,6 +169,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Listen for auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
       async (event, newSession) => {
+        console.log("Auth state change:", event, newSession?.user?.email);
         setSession(newSession);
         setUser(newSession?.user ?? null);
 
@@ -165,7 +182,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           setProfile(null);
           setTenants([]);
           setCurrentTenant(null);
+          setAllTenants([]);
+          setViewingAsTenantState(null);
           setPasswordChangeRequired(false);
+        } else if (event === "TOKEN_REFRESHED" && newSession?.user) {
+          // On token refresh, make sure profile is still loaded
+          if (!profile) {
+            await fetchProfile(newSession.user.id);
+          }
         }
       }
     );
