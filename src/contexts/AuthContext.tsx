@@ -195,18 +195,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    // Clear local state first to prevent any re-renders from using stale data
     setProfile(null);
     setTenants([]);
     setCurrentTenant(null);
     setAllTenants([]);
     setViewingAsTenantState(null);
     setPasswordChangeRequired(false);
+    setUser(null);
+    setSession(null);
+
+    // Clear localStorage
     localStorage.removeItem("currentTenantId");
     localStorage.removeItem("viewingAsTenantId");
+
     // Clear cookies
     document.cookie = "viewingAsTenantId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
     document.cookie = "currentTenantId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+
+    try {
+      // Sign out from Supabase with global scope to clear all sessions
+      await supabase.auth.signOut({ scope: 'global' });
+    } catch (error) {
+      console.error("Error during sign out:", error);
+      // Continue even if there's an error - we've already cleared local state
+    }
   };
 
   const clearPasswordChangeRequired = async () => {
