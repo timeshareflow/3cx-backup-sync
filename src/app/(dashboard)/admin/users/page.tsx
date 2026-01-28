@@ -22,6 +22,7 @@ import {
   Calendar,
   Key,
   LogIn,
+  AlertTriangle,
 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils/date";
 import { UserPermissionsModal } from "@/components/admin/UserPermissionsModal";
@@ -38,7 +39,7 @@ interface UserProfile {
 }
 
 export default function UserManagementPage() {
-  const { profile, currentTenant, isLoading: authLoading } = useAuth();
+  const { profile, currentTenant, viewingAsTenant, isLoading: authLoading } = useAuth();
   const router = useRouter();
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -55,6 +56,8 @@ export default function UserManagementPage() {
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
   const [permissionsUser, setPermissionsUser] = useState<UserProfile | null>(null);
   const [isImpersonating, setIsImpersonating] = useState(false);
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteSuccess, setInviteSuccess] = useState<string | null>(null);
 
   // Check if current user has admin access (either global or tenant-level)
   const isSuperAdmin = profile?.role === "super_admin";
@@ -90,6 +93,8 @@ export default function UserManagementPage() {
     if (!inviteEmail) return;
     if (useTemporaryPassword && !temporaryPassword) return;
     setIsSubmitting(true);
+    setInviteError(null);
+    setInviteSuccess(null);
     try {
       const response = await fetch("/api/admin/users/invite", {
         method: "POST",
@@ -101,17 +106,26 @@ export default function UserManagementPage() {
           temporaryPassword: useTemporaryPassword ? temporaryPassword : undefined,
         }),
       });
+      const data = await response.json();
       if (response.ok) {
-        setShowInviteModal(false);
+        setInviteSuccess(data.message || "User invited successfully!");
         setInviteEmail("");
         setInviteName("");
         setInviteRole("user");
         setUseTemporaryPassword(false);
         setTemporaryPassword("");
         fetchUsers();
+        // Close modal after showing success briefly
+        setTimeout(() => {
+          setShowInviteModal(false);
+          setInviteSuccess(null);
+        }, 2000);
+      } else {
+        setInviteError(data.error || "Failed to invite user");
       }
     } catch (error) {
       console.error("Failed to invite user:", error);
+      setInviteError("An unexpected error occurred");
     } finally {
       setIsSubmitting(false);
     }
@@ -434,10 +448,40 @@ export default function UserManagementPage() {
           setInviteRole("user");
           setUseTemporaryPassword(false);
           setTemporaryPassword("");
+          setInviteError(null);
+          setInviteSuccess(null);
         }}
         title="Invite User"
       >
         <div className="space-y-4">
+          {/* Warning for super admin without tenant selected */}
+          {isSuperAdmin && !viewingAsTenant && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-medium text-amber-800">No tenant selected</p>
+                <p className="text-sm text-amber-700 mt-1">
+                  Please select a tenant from the header dropdown before inviting users.
+                  Users must be invited to a specific tenant.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Error message */}
+          {inviteError && (
+            <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-700">
+              {inviteError}
+            </div>
+          )}
+
+          {/* Success message */}
+          {inviteSuccess && (
+            <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm text-green-700">
+              {inviteSuccess}
+            </div>
+          )}
+
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Full Name
@@ -511,13 +555,15 @@ export default function UserManagementPage() {
               setInviteRole("user");
               setUseTemporaryPassword(false);
               setTemporaryPassword("");
+              setInviteError(null);
+              setInviteSuccess(null);
             }}>
               Cancel
             </Button>
             <Button
               onClick={handleInviteUser}
               isLoading={isSubmitting}
-              disabled={!inviteEmail || (useTemporaryPassword && !temporaryPassword)}
+              disabled={!inviteEmail || (useTemporaryPassword && !temporaryPassword) || (isSuperAdmin && !viewingAsTenant)}
             >
               {useTemporaryPassword ? "Create User" : "Send Invitation"}
             </Button>

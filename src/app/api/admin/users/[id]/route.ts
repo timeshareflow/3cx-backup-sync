@@ -219,6 +219,18 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         .delete()
         .eq("user_id", id)
         .eq("tenant_id", context.tenantId);
+
+      // Clean up orphaned user - if user no longer belongs to any tenant, delete profile
+      const { data: remainingTenants } = await supabase
+        .from("user_tenants")
+        .select("id")
+        .eq("user_id", id)
+        .limit(1);
+
+      if (!remainingTenants || remainingTenants.length === 0) {
+        // User is no longer in any tenant - delete the profile
+        await supabase.from("user_profiles").delete().eq("id", id);
+      }
     }
 
     // Log audit event
