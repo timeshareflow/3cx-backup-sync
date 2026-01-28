@@ -24,6 +24,14 @@ interface Tenant {
   };
 }
 
+// For super admin "view as tenant" feature - all tenants in platform
+interface PlatformTenant {
+  id: string;
+  name: string;
+  slug: string;
+  is_active: boolean;
+}
+
 interface AuthContextType {
   user: User | null;
   profile: UserProfile | null;
@@ -32,7 +40,12 @@ interface AuthContextType {
   session: Session | null;
   isLoading: boolean;
   passwordChangeRequired: boolean;
+  // Super admin specific
+  allTenants: PlatformTenant[];
+  viewingAsTenant: PlatformTenant | null;
+  isViewingAsTenant: boolean;
   setCurrentTenant: (tenant: Tenant) => void;
+  setViewingAsTenant: (tenant: PlatformTenant | null) => void;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
   clearPasswordChangeRequired: () => Promise<void>;
@@ -48,8 +61,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
+  // Super admin "view as tenant" state
+  const [allTenants, setAllTenants] = useState<PlatformTenant[]>([]);
+  const [viewingAsTenant, setViewingAsTenantState] = useState<PlatformTenant | null>(null);
 
   const supabase = createClient();
+
+  // Fetch all tenants for super admin "view as" feature
+  const fetchAllTenants = async () => {
+    try {
+      const response = await fetch("/api/admin/tenants/all");
+      if (response.ok) {
+        const data = await response.json();
+        setAllTenants(data.tenants || []);
+
+        // Restore viewing as tenant from localStorage
+        const savedViewingTenantId = localStorage.getItem("viewingAsTenantId");
+        if (savedViewingTenantId && data.tenants) {
+          const savedTenant = data.tenants.find((t: PlatformTenant) => t.id === savedViewingTenantId);
+          if (savedTenant) {
+            setViewingAsTenantState(savedTenant);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("Failed to fetch all tenants:", error);
+    }
+  };
 
   const fetchProfile = async (userId: string) => {
     const { data: profileData } = await supabase
@@ -60,6 +98,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (profileData) {
       setProfile(profileData);
+
+      // If super admin, fetch all tenants for "view as" feature
+      if (profileData.role === "super_admin") {
+        fetchAllTenants();
+      }
     }
 
     // Fetch user's tenants
@@ -136,13 +179,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     localStorage.setItem("currentTenantId", tenant.tenant_id);
   };
 
+  const handleSetViewingAsTenant = async (tenant: PlatformTenant | null) => {
+    setViewingAsTenantState(tenant);
+    if (tenant) {
+      localStorage.setItem("viewingAsTenantId", tenant.id);
+      // Set cookie for server-side access
+      document.cookie = `viewingAsTenantId=${tenant.id}; path=/; max-age=${60 * 60 * 24}; samesite=lax`;
+    } else {
+      localStorage.removeItem("viewingAsTenantId");
+      // Clear the cookie
+      document.cookie = "viewingAsTenantId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+    }
+    // Refresh the page to apply new context
+    window.location.reload();
+  };
+
   const signOut = async () => {
     await supabase.auth.signOut();
     setProfile(null);
     setTenants([]);
     setCurrentTenant(null);
+    setAllTenants([]);
+    setViewingAsTenantState(null);
     setPasswordChangeRequired(false);
     localStorage.removeItem("currentTenantId");
+    localStorage.removeItem("viewingAsTenantId");
+    // Clear cookies
+    document.cookie = "viewingAsTenantId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
+    document.cookie = "currentTenantId=; path=/; expires=Thu, 01 Jan 1970 00:00:00 GMT";
   };
 
   const clearPasswordChangeRequired = async () => {
@@ -165,7 +229,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         session,
         isLoading,
         passwordChangeRequired,
+        // Super admin specific
+        allTenants,
+        viewingAsTenant,
+        isViewingAsTenant: viewingAsTenant !== null,
         setCurrentTenant: handleSetCurrentTenant,
+        setViewingAsTenant: handleSetViewingAsTenant,
         signOut,
         refreshProfile,
         clearPasswordChangeRequired,

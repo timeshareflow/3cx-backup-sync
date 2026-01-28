@@ -1,8 +1,9 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { withRateLimit, parseJsonBody } from "@/lib/api-utils";
 import { rateLimitConfigs } from "@/lib/rate-limit";
+import { logUserAction } from "@/lib/audit";
 
 interface InviteRequest {
   email: string;
@@ -11,7 +12,7 @@ interface InviteRequest {
   temporaryPassword?: string;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   // Rate limit: 50 admin operations per minute
   const rateLimited = withRateLimit(request, rateLimitConfigs.admin);
   if (rateLimited) return rateLimited;
@@ -201,6 +202,19 @@ export async function POST(request: Request) {
       console.error("Error adding user to tenant:", tenantError);
       // Don't fail completely - user was created/invited
     }
+
+    // Log audit event for user creation
+    await logUserAction("user.created", newUserId, {
+      userId: context.userId,
+      tenantId: context.tenantId,
+      request,
+      newValues: {
+        email: email.toLowerCase(),
+        full_name: fullName || null,
+        role: role,
+        invited_by: context.userId,
+      },
+    });
 
     return NextResponse.json({
       success: true,

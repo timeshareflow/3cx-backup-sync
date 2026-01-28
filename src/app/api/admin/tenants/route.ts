@@ -1,7 +1,8 @@
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { parseJsonBody } from "@/lib/api-utils";
+import { logTenantAction } from "@/lib/audit";
 
 export async function GET() {
   try {
@@ -90,7 +91,7 @@ interface CreateTenantRequest {
   business_address?: string;
 }
 
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
     const parsed = await parseJsonBody<CreateTenantRequest>(request);
     if ("error" in parsed) return parsed.error;
@@ -243,6 +244,18 @@ export async function POST(request: Request) {
     if (linkError) {
       console.error("Failed to link user to tenant:", linkError);
     }
+
+    // Log audit event for tenant creation
+    await logTenantAction("tenant.created", tenant.id, {
+      userId: user.id,
+      request,
+      newValues: {
+        name: body.name,
+        slug: body.slug,
+        customer_type: customerType,
+        admin_email: adminEmail,
+      },
+    });
 
     return NextResponse.json({ data: tenant });
   } catch (error) {

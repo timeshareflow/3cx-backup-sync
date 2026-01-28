@@ -1,13 +1,14 @@
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
+import { logUserAction } from "@/lib/audit";
 
 interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
 // Update user profile
-export async function PATCH(request: Request, { params }: RouteParams) {
+export async function PATCH(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
     const { full_name, email } = await request.json();
@@ -88,6 +89,13 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       updateData.email = email.toLowerCase();
     }
 
+    // Get old values for audit log
+    const { data: oldProfile } = await supabase
+      .from("user_profiles")
+      .select("full_name, email")
+      .eq("id", id)
+      .single();
+
     const { error } = await supabase
       .from("user_profiles")
       .update(updateData)
@@ -97,6 +105,15 @@ export async function PATCH(request: Request, { params }: RouteParams) {
       throw error;
     }
 
+    // Log audit event
+    await logUserAction("user.updated", id, {
+      userId: context.userId,
+      tenantId: context.tenantId,
+      request,
+      oldValues: oldProfile || undefined,
+      newValues: { full_name, email: email?.toLowerCase() },
+    });
+
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error("Error updating user:", error);
@@ -104,7 +121,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
   }
 }
 
-export async function DELETE(request: Request, { params }: RouteParams) {
+export async function DELETE(request: NextRequest, { params }: RouteParams) {
   try {
     const { id } = await params;
     const context = await getTenantContext();
@@ -142,10 +159,10 @@ export async function DELETE(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
-    // Check if target user is protected
+    // Check if target user is protected and get user info for audit
     const { data: targetUser } = await supabase
       .from("user_profiles")
-      .select("is_protected")
+      .select("is_protected, email, full_name")
       .eq("id", id)
       .single();
 
@@ -203,6 +220,17 @@ export async function DELETE(request: Request, { params }: RouteParams) {
         .eq("user_id", id)
         .eq("tenant_id", context.tenantId);
     }
+
+    // Log audit event
+    await logUserAction("user.deleted", id, {
+      userId: context.userId,
+      tenantId: context.tenantId,
+      request,
+      oldValues: {
+        email: targetUser?.email,
+        full_name: targetUser?.full_name,
+      },
+    });
 
     return NextResponse.json({ success: true });
   } catch (error) {

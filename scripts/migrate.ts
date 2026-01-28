@@ -222,6 +222,34 @@ async function migrate() {
         name: "Add allow_overage column to storage_plans",
         sql: `ALTER TABLE storage_plans ADD COLUMN IF NOT EXISTS allow_overage BOOLEAN DEFAULT true;`,
       },
+      // Impersonation sessions table
+      {
+        name: "Create impersonation_sessions table",
+        sql: `CREATE TABLE IF NOT EXISTS impersonation_sessions (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          super_admin_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+          impersonated_user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+          tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          reason TEXT,
+          started_at TIMESTAMPTZ DEFAULT NOW(),
+          ended_at TIMESTAMPTZ,
+          ip_address VARCHAR(45),
+          user_agent TEXT,
+          CONSTRAINT no_self_impersonation CHECK (super_admin_id != impersonated_user_id)
+        );`,
+      },
+      {
+        name: "Create index on active impersonation sessions",
+        sql: `CREATE INDEX IF NOT EXISTS idx_impersonation_active ON impersonation_sessions(super_admin_id) WHERE ended_at IS NULL;`,
+      },
+      {
+        name: "Grant permissions on impersonation_sessions",
+        sql: `GRANT ALL ON impersonation_sessions TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on audit_logs",
+        sql: `GRANT ALL ON audit_logs TO anon, authenticated, service_role;`,
+      },
     ];
 
     for (const migration of migrations) {

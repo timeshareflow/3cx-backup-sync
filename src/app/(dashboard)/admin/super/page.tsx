@@ -894,7 +894,7 @@ function PlanEditor({
       storage_limit_gb: parseInt(formData.storage_limit_gb),
       sort_order: parseInt(formData.sort_order),
       features: formData.features.split("\n").filter((f) => f.trim()),
-      overage_price_per_gb: parseFloat(formData.overage_price_per_gb),
+      overage_price_per_gb: formData.overage_price_per_gb, // Keep as string
     });
   };
 

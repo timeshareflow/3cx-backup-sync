@@ -21,6 +21,7 @@ import {
   Mail,
   Calendar,
   Key,
+  LogIn,
 } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils/date";
 import { UserPermissionsModal } from "@/components/admin/UserPermissionsModal";
@@ -53,6 +54,7 @@ export default function UserManagementPage() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [showPermissionsModal, setShowPermissionsModal] = useState(false);
   const [permissionsUser, setPermissionsUser] = useState<UserProfile | null>(null);
+  const [isImpersonating, setIsImpersonating] = useState(false);
 
   // Check if current user has admin access (either global or tenant-level)
   const isSuperAdmin = profile?.role === "super_admin";
@@ -186,6 +188,35 @@ export default function UserManagementPage() {
     }
   };
 
+  const handleImpersonate = async (user: UserProfile) => {
+    const reason = prompt("Enter a reason for impersonating this user (optional):");
+    setIsImpersonating(true);
+    try {
+      const response = await fetch("/api/admin/impersonate/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId: user.id,
+          reason: reason || undefined,
+        }),
+      });
+
+      if (response.ok) {
+        // Redirect to dashboard as the impersonated user
+        router.push("/dashboard");
+        router.refresh();
+      } else {
+        const data = await response.json();
+        alert(data.error || "Failed to start impersonation");
+      }
+    } catch (error) {
+      console.error("Failed to impersonate user:", error);
+      alert("An error occurred while starting impersonation");
+    } finally {
+      setIsImpersonating(false);
+    }
+  };
+
   // Get effective role (tenant role takes precedence for display in tenant context)
   const getEffectiveRole = (user: UserProfile) => {
     return user.tenant_role || user.role;
@@ -316,6 +347,19 @@ export default function UserManagementPage() {
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">
+                      {/* Login As button - only visible to super_admin for non-super_admin users */}
+                      {isSuperAdmin && effectiveRole !== "super_admin" && !user.is_protected && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleImpersonate(user)}
+                          disabled={isImpersonating}
+                          className="hover:bg-amber-50 hover:text-amber-600"
+                          title="Login as this user"
+                        >
+                          <LogIn className="h-4 w-4" />
+                        </Button>
+                      )}
                       {/* Permissions button - visible for all non-super_admin users */}
                       {effectiveRole !== "super_admin" && (
                         <Button

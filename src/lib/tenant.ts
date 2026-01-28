@@ -7,6 +7,7 @@ export interface TenantContext {
   tenantId: string | null;
   role: "super_admin" | "admin" | "user";
   isAuthenticated: boolean;
+  isSystemWide: boolean; // True for super_admins when no tenant is selected
 }
 
 export async function getTenantContext(): Promise<TenantContext> {
@@ -21,6 +22,7 @@ export async function getTenantContext(): Promise<TenantContext> {
       tenantId: null,
       role: "user",
       isAuthenticated: false,
+      isSystemWide: false,
     };
   }
 
@@ -36,22 +38,32 @@ export async function getTenantContext(): Promise<TenantContext> {
 
   const isSuperAdmin = profile?.role === "super_admin";
 
-  // Get the current tenant from cookie or first available tenant
+  // Get cookies
   const cookieStore = await cookies();
-  let currentTenantId = cookieStore.get("currentTenantId")?.value || null;
+  let currentTenantId: string | null = null;
 
-  // If no cookie, get first tenant the user has access to
-  if (!currentTenantId) {
-    if (isSuperAdmin) {
-      // Super admins can access all tenants - get the first active one
-      const { data: tenants } = await supabase
+  if (isSuperAdmin) {
+    // Super admins: Check for "viewing as tenant" cookie first
+    const viewingAsTenantId = cookieStore.get("viewingAsTenantId")?.value;
+    if (viewingAsTenantId) {
+      // Verify the tenant exists
+      const { data: tenant } = await supabase
         .from("tenants")
         .select("id")
-        .eq("is_active", true)
-        .limit(1);
+        .eq("id", viewingAsTenantId)
+        .single();
 
-      currentTenantId = tenants?.[0]?.id || null;
-    } else {
+      if (tenant) {
+        currentTenantId = viewingAsTenantId;
+      }
+    }
+    // If no viewing as tenant, super admins operate at platform level (null tenant)
+  } else {
+    // Regular users: Get tenant from cookie or first available
+    currentTenantId = cookieStore.get("currentTenantId")?.value || null;
+
+    if (!currentTenantId) {
+      // Get first tenant the user has access to
       const { data: userTenants } = await supabase
         .from("user_tenants")
         .select("tenant_id")
@@ -59,28 +71,8 @@ export async function getTenantContext(): Promise<TenantContext> {
         .limit(1);
 
       currentTenantId = userTenants?.[0]?.tenant_id || null;
-    }
-  } else {
-    // Verify user has access to this tenant
-    if (isSuperAdmin) {
-      // Super admins can access any tenant - just verify it exists
-      const { data: tenant } = await supabase
-        .from("tenants")
-        .select("id")
-        .eq("id", currentTenantId)
-        .single();
-
-      if (!tenant) {
-        // Tenant doesn't exist, get first available
-        const { data: tenants } = await supabase
-          .from("tenants")
-          .select("id")
-          .eq("is_active", true)
-          .limit(1);
-
-        currentTenantId = tenants?.[0]?.id || null;
-      }
     } else {
+      // Verify user has access to this tenant
       const { data: access } = await supabase
         .from("user_tenants")
         .select("tenant_id")
@@ -101,11 +93,15 @@ export async function getTenantContext(): Promise<TenantContext> {
     }
   }
 
+  // Super admins are "system wide" when they haven't selected a specific tenant to view as
+  const isSystemWide = isSuperAdmin && !currentTenantId;
+
   return {
     userId: user.id,
     tenantId: currentTenantId,
     role: profile?.role || "user",
     isAuthenticated: true,
+    isSystemWide,
   };
 }
 
