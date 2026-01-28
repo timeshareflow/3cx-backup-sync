@@ -142,11 +142,16 @@ export async function PUT(request: Request, { params }: RouteParams) {
     const { extensionIds = [], groupChatIds = [] } = body;
 
     // Delete existing extension permissions for this user/tenant
-    await supabase
+    const { error: delExtError } = await supabase
       .from("user_extension_permissions")
       .delete()
       .eq("user_id", targetUserId)
       .eq("tenant_id", context.tenantId);
+
+    if (delExtError) {
+      console.error("Error deleting extension permissions:", delExtError);
+      return NextResponse.json({ error: `Failed to clear extension permissions: ${delExtError.message}` }, { status: 500 });
+    }
 
     // Insert new extension permissions
     if (extensionIds.length > 0) {
@@ -163,16 +168,21 @@ export async function PUT(request: Request, { params }: RouteParams) {
 
       if (extError) {
         console.error("Error inserting extension permissions:", extError);
-        throw extError;
+        return NextResponse.json({ error: `Failed to save extension permissions: ${extError.message}` }, { status: 500 });
       }
     }
 
     // Delete existing group chat permissions for this user/tenant
-    await supabase
+    const { error: delChatError } = await supabase
       .from("user_group_chat_permissions")
       .delete()
       .eq("user_id", targetUserId)
       .eq("tenant_id", context.tenantId);
+
+    if (delChatError) {
+      console.error("Error deleting group chat permissions:", delChatError);
+      return NextResponse.json({ error: `Failed to clear group chat permissions: ${delChatError.message}` }, { status: 500 });
+    }
 
     // Insert new group chat permissions
     if (groupChatIds.length > 0) {
@@ -189,7 +199,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
 
       if (chatError) {
         console.error("Error inserting group chat permissions:", chatError);
-        throw chatError;
+        return NextResponse.json({ error: `Failed to save group chat permissions: ${chatError.message}` }, { status: 500 });
       }
     }
 
@@ -199,7 +209,8 @@ export async function PUT(request: Request, { params }: RouteParams) {
       groupChatCount: groupChatIds.length,
     });
   } catch (error) {
-    console.error("Error updating user permissions:", error);
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("Error updating user permissions:", message, error);
+    return NextResponse.json({ error: `Failed to save permissions: ${message}` }, { status: 500 });
   }
 }

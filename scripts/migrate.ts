@@ -250,6 +250,30 @@ async function migrate() {
         name: "Grant permissions on audit_logs",
         sql: `GRANT ALL ON audit_logs TO anon, authenticated, service_role;`,
       },
+      // User permissions tables grants
+      {
+        name: "Grant permissions on user_extension_permissions",
+        sql: `GRANT ALL ON user_extension_permissions TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on user_group_chat_permissions",
+        sql: `GRANT ALL ON user_group_chat_permissions TO anon, authenticated, service_role;`,
+      },
+      // Add 'manager' role to user_tenants CHECK constraint
+      {
+        name: "Update user_tenants role check to include manager",
+        sql: `DO $$
+BEGIN
+  ALTER TABLE user_tenants DROP CONSTRAINT IF EXISTS user_tenants_role_check;
+  ALTER TABLE user_tenants ADD CONSTRAINT user_tenants_role_check
+    CHECK ((role)::text = ANY ((ARRAY['admin'::character varying, 'manager'::character varying, 'user'::character varying])::text[]));
+END $$;`,
+      },
+      // Grant permissions on notification_logs
+      {
+        name: "Grant permissions on notification_logs",
+        sql: `GRANT ALL ON notification_logs TO anon, authenticated, service_role;`,
+      },
     ];
 
     for (const migration of migrations) {

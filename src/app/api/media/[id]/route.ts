@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { getTenantContext } from "@/lib/tenant";
 
 interface MediaFile {
   id: string;
@@ -18,14 +18,26 @@ export async function GET(
   const { id } = await params;
 
   try {
-    const supabase = await createClient();
+    const context = await getTenantContext();
 
-    // Get media file info (uses user session for RLS)
-    const { data, error } = await supabase
+    if (!context.isAuthenticated) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const supabase = createAdminClient();
+
+    // Build query - use admin client since RLS blocks super admins without tenant membership
+    let query = supabase
       .from("media_files")
       .select("*")
-      .eq("id", id)
-      .single();
+      .eq("id", id);
+
+    // Non-super-admin users: restrict to their tenant
+    if (context.role !== "super_admin" && context.tenantId) {
+      query = query.eq("tenant_id", context.tenantId);
+    }
+
+    const { data, error } = await query.single();
 
     if (error || !data) {
       console.error("Media not found:", id, error?.message);
@@ -37,11 +49,8 @@ export async function GET(
 
     const media = data as unknown as MediaFile;
 
-    // Use admin client for storage access (bypasses storage RLS)
-    const adminClient = createAdminClient();
-
     // Generate signed URL from Supabase Storage (valid for 1 hour)
-    const { data: signedUrlData, error: urlError } = await adminClient
+    const { data: signedUrlData, error: urlError } = await supabase
       .storage
       .from("backupwiz-files")
       .createSignedUrl(media.storage_path, 3600);

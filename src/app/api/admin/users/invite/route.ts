@@ -99,7 +99,7 @@ export async function POST(request: NextRequest) {
 
       if (tenantError) {
         console.error("Error adding user to tenant:", tenantError);
-        return NextResponse.json({ error: "Failed to add user to tenant" }, { status: 500 });
+        return NextResponse.json({ error: `Failed to add user to tenant: ${tenantError.message}` }, { status: 500 });
       }
 
       return NextResponse.json({
@@ -156,7 +156,7 @@ export async function POST(request: NextRequest) {
 
       if (tenantError) {
         console.error("Error adding orphaned user to tenant:", tenantError);
-        return NextResponse.json({ error: "Failed to add user to tenant" }, { status: 500 });
+        return NextResponse.json({ error: `Failed to add user to tenant: ${tenantError.message}` }, { status: 500 });
       }
 
       // Generate a recovery link so user can set their password
@@ -376,7 +376,9 @@ export async function POST(request: NextRequest) {
 
     if (tenantError) {
       console.error("Error adding user to tenant:", tenantError);
-      // Don't fail completely - user was created/invited
+      return NextResponse.json({
+        error: `User was created but failed to add to tenant: ${tenantError.message}. The user may need to be re-invited.`
+      }, { status: 500 });
     }
 
     // Log audit event for user creation
