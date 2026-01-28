@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
 export async function GET() {
@@ -10,7 +11,8 @@ export async function GET() {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const supabase = await createClient();
+    // Use admin client to bypass RLS
+    const supabase = createAdminClient();
 
     // Anyone can view active plans
     const { data: plans, error } = await supabase
@@ -22,7 +24,7 @@ export async function GET() {
     if (error) {
       console.error("Error fetching storage plans:", error);
       return NextResponse.json(
-        { error: "Failed to fetch storage plans" },
+        { error: "Failed to fetch storage plans", details: error.message, code: error.code },
         { status: 500 }
       );
     }
@@ -74,7 +76,8 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = await createClient();
+    // Use admin client to bypass RLS
+    const supabase = createAdminClient();
 
     // If this plan is being set as default, unset other defaults
     if (is_default) {
@@ -155,7 +158,8 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json({ error: "Plan ID is required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
+    // Use admin client to bypass RLS
+    const supabase = createAdminClient();
 
     // If this plan is being set as default, unset other defaults
     if (is_default) {
@@ -224,7 +228,8 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: "Plan ID is required" }, { status: 400 });
     }
 
-    const supabase = await createClient();
+    // Use admin client to bypass RLS
+    const supabase = createAdminClient();
 
     // Check if any tenants are using this plan
     const { data: tenants, error: tenantsError } = await supabase
