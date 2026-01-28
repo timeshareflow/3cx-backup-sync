@@ -65,7 +65,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Only admins can create admin users" }, { status: 403 });
     }
 
-    // Check if user already exists
+    // Check if user already exists in user_profiles
     const { data: existingUsers } = await supabase
       .from("user_profiles")
       .select("id")
@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
       .limit(1);
 
     if (existingUsers && existingUsers.length > 0) {
-      // User exists - add them to this tenant if not already
+      // User exists in profiles - add them to this tenant if not already
       const existingUserId = existingUsers[0].id;
 
       const { data: existingTenantUser } = await supabase
@@ -105,6 +105,97 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({
         success: true,
         message: "Existing user added to tenant"
+      });
+    }
+
+    // Also check if user exists in Supabase Auth (orphaned auth user without profile)
+    const { data: authUserData } = await supabase.auth.admin.listUsers();
+    const existingAuthUser = authUserData?.users?.find(
+      (u) => u.email?.toLowerCase() === email.toLowerCase()
+    );
+
+    if (existingAuthUser) {
+      // User exists in Auth but not in profiles - create profile and add to tenant
+      console.log("Found orphaned auth user, creating profile:", existingAuthUser.id);
+
+      // Create the missing profile
+      const { error: profileError } = await supabase
+        .from("user_profiles")
+        .insert({
+          id: existingAuthUser.id,
+          email: email.toLowerCase(),
+          full_name: fullName || null,
+          role: "user",
+        });
+
+      if (profileError && !profileError.message.includes("duplicate")) {
+        console.error("Error creating profile for orphaned user:", profileError);
+      }
+
+      // Check if already in tenant
+      const { data: existingTenantUser } = await supabase
+        .from("user_tenants")
+        .select("id")
+        .eq("user_id", existingAuthUser.id)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      if (existingTenantUser) {
+        return NextResponse.json({ error: "User is already a member of this tenant" }, { status: 400 });
+      }
+
+      // Add user to tenant
+      const { error: tenantError } = await supabase
+        .from("user_tenants")
+        .insert({
+          user_id: existingAuthUser.id,
+          tenant_id: context.tenantId,
+          role: role,
+          invited_by: context.userId,
+        });
+
+      if (tenantError) {
+        console.error("Error adding orphaned user to tenant:", tenantError);
+        return NextResponse.json({ error: "Failed to add user to tenant" }, { status: 500 });
+      }
+
+      // Generate a recovery link so user can set their password
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://3cxbackupwiz.vercel.app";
+      const { data: linkData } = await supabase.auth.admin.generateLink({
+        type: "recovery",
+        email: email,
+        options: {
+          redirectTo: `${appUrl}/auth/reset-password`,
+        },
+      });
+
+      if (linkData?.properties?.action_link) {
+        const { data: tenantData } = await supabase
+          .from("tenants")
+          .select("name")
+          .eq("id", context.tenantId)
+          .single();
+
+        await sendInviteEmail(email, fullName || "", linkData.properties.action_link, tenantData?.name);
+      }
+
+      // Log audit event
+      await logUserAction("user.created", existingAuthUser.id, {
+        userId: context.userId,
+        tenantId: context.tenantId,
+        request,
+        newValues: {
+          email: email.toLowerCase(),
+          full_name: fullName || null,
+          role: role,
+          invited_by: context.userId,
+          note: "Recovered orphaned auth user",
+        },
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: "User account recovered and added to tenant. Invitation email sent."
       });
     }
 
