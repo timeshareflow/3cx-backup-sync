@@ -180,6 +180,39 @@ async function migrate() {
         name: "Create unique index on extensions",
         sql: `CREATE UNIQUE INDEX IF NOT EXISTS extensions_tenant_id_extension_number_key ON extensions(tenant_id, extension_number);`,
       },
+      // Grant permissions to all roles (fixes RLS bypass issues with admin client)
+      {
+        name: "Grant permissions on storage_plans",
+        sql: `GRANT ALL ON storage_plans TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on smtp_settings",
+        sql: `GRANT ALL ON smtp_settings TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on email_categories",
+        sql: `GRANT ALL ON email_categories TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on tenants",
+        sql: `GRANT ALL ON tenants TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on user_profiles",
+        sql: `GRANT ALL ON user_profiles TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on user_tenants",
+        sql: `GRANT ALL ON user_tenants TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on conversations",
+        sql: `GRANT ALL ON conversations TO anon, authenticated, service_role;`,
+      },
+      {
+        name: "Grant permissions on sync_agents",
+        sql: `GRANT ALL ON sync_agents TO anon, authenticated, service_role;`,
+      },
     ];
 
     for (const migration of migrations) {
