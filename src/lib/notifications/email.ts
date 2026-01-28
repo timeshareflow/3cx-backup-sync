@@ -571,7 +571,11 @@ export async function sendWelcomeEmail(
       </tr>
     </table>
 
-    <p style="margin: 0; color: #94a3b8; font-size: 14px; text-align: center;">
+    <p style="margin: 16px 0 0; color: #64748b; font-size: 13px; text-align: center;">
+      Or sign in at: <a href="${appUrl}/login" style="color: #14b8a6; text-decoration: underline;">${appUrl}/login</a>
+    </p>
+
+    <p style="margin: 16px 0 0; color: #94a3b8; font-size: 14px; text-align: center;">
       If you have any questions, just reply to this email. We're here to help!
     </p>
   `;
@@ -644,6 +648,13 @@ export async function sendInviteEmail(
         </td>
       </tr>
     </table>
+
+    <p style="margin: 16px 0 0; color: #64748b; font-size: 13px; text-align: center;">
+      If the button above doesn't work, copy and paste this link into your browser:
+    </p>
+    <p style="margin: 8px 0 0; text-align: center; word-break: break-all;">
+      <a href="${inviteLink}" style="color: #14b8a6; font-size: 13px; text-decoration: underline;">${inviteLink}</a>
+    </p>
 
     <p style="margin: 24px 0 0; color: #94a3b8; font-size: 14px; text-align: center;">
       This invitation link will expire in 24 hours.
