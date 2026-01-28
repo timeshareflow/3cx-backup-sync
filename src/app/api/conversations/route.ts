@@ -7,6 +7,7 @@ interface ConversationWithParticipants {
   is_group_chat: boolean;
   participants: Array<{
     extension_id: string | null;
+    external_id: string | null;
     participant_identifier: string;
   }>;
   [key: string]: unknown;
@@ -97,10 +98,21 @@ export async function GET(request: NextRequest) {
     }
 
     // For regular users, apply permission-based filtering
-    // Get user's permitted extension IDs
+    // Get user's permitted conversation IDs (stored in user_group_chat_permissions for all types)
+    const { data: conversationPermissions } = await supabase
+      .from("user_group_chat_permissions")
+      .select("conversation_id")
+      .eq("user_id", context.userId)
+      .eq("tenant_id", context.tenantId);
+
+    const permittedConversationIds = new Set(
+      (conversationPermissions || []).map(p => p.conversation_id)
+    );
+
+    // Also check extension-based permissions (backward compatibility)
     const { data: extensionPermissions } = await supabase
       .from("user_extension_permissions")
-      .select("extension_id")
+      .select("extension_id, extensions(extension_number)")
       .eq("user_id", context.userId)
       .eq("tenant_id", context.tenantId);
 
@@ -108,19 +120,17 @@ export async function GET(request: NextRequest) {
       (extensionPermissions || []).map(p => p.extension_id)
     );
 
-    // Get user's permitted group chat conversation IDs
-    const { data: groupChatPermissions } = await supabase
-      .from("user_group_chat_permissions")
-      .select("conversation_id")
-      .eq("user_id", context.userId)
-      .eq("tenant_id", context.tenantId);
-
-    const permittedGroupChatIds = new Set(
-      (groupChatPermissions || []).map(p => p.conversation_id)
+    const permittedExtensionNumbers = new Set(
+      (extensionPermissions || [])
+        .map(p => {
+          const ext = p.extensions as unknown as { extension_number: string } | null;
+          return ext?.extension_number;
+        })
+        .filter((n): n is string => !!n)
     );
 
     // If no permissions at all, return empty
-    if (permittedExtensionIds.size === 0 && permittedGroupChatIds.size === 0) {
+    if (permittedConversationIds.size === 0 && permittedExtensionIds.size === 0) {
       return NextResponse.json({
         data: [],
         total: 0,
@@ -131,8 +141,7 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Fetch all conversations (we'll filter in-memory for now)
-    // This is not ideal for large datasets, but Supabase doesn't support complex filtering
+    // Fetch all conversations (we'll filter in-memory)
     const { data: allConversations, error } = await supabase
       .from("conversations")
       .select(
@@ -154,15 +163,20 @@ export async function GET(request: NextRequest) {
 
     // Filter conversations based on permissions
     const filteredConversations = (allConversations as ConversationWithParticipants[] || []).filter(conv => {
-      if (conv.is_group_chat) {
-        // For group chats, user must have explicit permission
-        return permittedGroupChatIds.has(conv.id);
-      } else {
-        // For 1-on-1 chats, at least one participant's extension must be permitted
-        return conv.participants?.some(
-          p => p.extension_id && permittedExtensionIds.has(p.extension_id)
-        );
+      // Check direct conversation permission (works for both 1-on-1 and group chats)
+      if (permittedConversationIds.has(conv.id)) {
+        return true;
       }
+
+      // Fallback: check extension-based permissions for 1-on-1 chats (backward compatibility)
+      if (!conv.is_group_chat && conv.participants?.some(
+        p => (p.extension_id && permittedExtensionIds.has(p.extension_id)) ||
+             (p.external_id && permittedExtensionNumbers.has(p.external_id))
+      )) {
+        return true;
+      }
+
+      return false;
     });
 
     // Apply pagination

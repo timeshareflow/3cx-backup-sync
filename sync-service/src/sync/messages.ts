@@ -251,7 +251,7 @@ export async function syncMessages(
 
             result.conversationsCreated++;
 
-            // Add participants
+            // Add participants from conversation metadata
             if (convMeta) {
               const participants = parseParticipants(
                 convMeta.participants_grp_array
@@ -266,18 +266,19 @@ export async function syncMessages(
                   tenant_id: tenantId,
                 });
               }
-
-              // Also add the sender as participant if not in array
-              if (msg.sender_participant_no) {
-                await upsertParticipant({
-                  conversation_id: supabaseConversationId,
-                  extension_number: msg.sender_participant_no,
-                  display_name: msg.sender_participant_name || null,
-                  participant_type: msg.is_external ? "external" : "extension",
-                  tenant_id: tenantId,
-                });
-              }
             }
+          }
+
+          // Always ensure the message sender is added as a participant
+          // (handles conversations created by syncAllConversations without participants)
+          if (supabaseConversationId && msg.sender_participant_no) {
+            await upsertParticipant({
+              conversation_id: supabaseConversationId,
+              extension_number: msg.sender_participant_no,
+              display_name: msg.sender_participant_name || null,
+              participant_type: msg.is_external ? "external" : "extension",
+              tenant_id: tenantId,
+            });
           }
 
           // Detect media

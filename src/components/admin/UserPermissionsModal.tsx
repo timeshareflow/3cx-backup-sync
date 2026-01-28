@@ -4,23 +4,20 @@ import { useState, useEffect } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { CheckSquare, Square, Users, Phone } from "lucide-react";
+import { Input } from "@/components/ui/Input";
+import { CheckSquare, Square, Users, MessageSquare, Search } from "lucide-react";
 
-interface Extension {
-  id: string;
-  extension_number: string;
-  display_name: string | null;
-  first_name: string | null;
-  last_name: string | null;
-}
-
-interface GroupChat {
+interface Conversation {
   id: string;
   conversation_name: string | null;
+  is_group_chat: boolean;
+  message_count: number;
   participant_count: number;
   participants: Array<{
-    participant_name: string | null;
-    participant_identifier: string;
+    external_id: string | null;
+    external_name: string | null;
+    extension_id: string | null;
+    participant_type: string;
   }>;
 }
 
@@ -43,10 +40,9 @@ export function UserPermissionsModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [extensions, setExtensions] = useState<Extension[]>([]);
-  const [groupChats, setGroupChats] = useState<GroupChat[]>([]);
-  const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set());
-  const [selectedGroupChats, setSelectedGroupChats] = useState<Set<string>>(new Set());
+  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [selectedConversations, setSelectedConversations] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Fetch data when modal opens
   useEffect(() => {
@@ -60,32 +56,47 @@ export function UserPermissionsModal({
     setError(null);
 
     try {
-      // Fetch extensions, group chats, and current permissions in parallel
-      const [extensionsRes, conversationsRes, permissionsRes] = await Promise.all([
-        fetch("/api/extensions"),
+      // Fetch all conversations and current permissions in parallel
+      const [conversationsRes, permissionsRes] = await Promise.all([
         fetch("/api/conversations?limit=1000"),
         fetch(`/api/admin/users/${userId}/permissions`),
       ]);
 
-      if (!extensionsRes.ok || !conversationsRes.ok || !permissionsRes.ok) {
+      if (!conversationsRes.ok || !permissionsRes.ok) {
         throw new Error("Failed to fetch data");
       }
 
-      const extensionsData = await extensionsRes.json();
       const conversationsData = await conversationsRes.json();
       const permissionsData = await permissionsRes.json();
 
-      // Set extensions
-      setExtensions(extensionsData.data || extensionsData || []);
+      // Get all conversations with messages
+      const allConversations: Conversation[] = (conversationsData.data || [])
+        .filter((c: Conversation) => c.message_count > 0);
 
-      // Filter for group chats only
-      const allConversations = conversationsData.data || [];
-      const groups = allConversations.filter((c: { is_group_chat: boolean }) => c.is_group_chat);
-      setGroupChats(groups);
+      setConversations(allConversations);
 
-      // Set current permissions
-      setSelectedExtensions(new Set(permissionsData.extensionIds || []));
-      setSelectedGroupChats(new Set(permissionsData.groupChatIds || []));
+      // Build the selected set from both conversation permissions and extension permissions
+      const selectedSet = new Set<string>();
+
+      // Add directly permitted conversations (group chats and any conversation-level permissions)
+      for (const convId of (permissionsData.groupChatIds || [])) {
+        selectedSet.add(convId);
+      }
+
+      // Map extension permissions to conversations
+      // If user has permission for an extension, select all conversations where that extension participates
+      const permittedExtIds = new Set<string>(permissionsData.extensionIds || []);
+      if (permittedExtIds.size > 0) {
+        for (const conv of allConversations) {
+          if (!conv.is_group_chat && conv.participants?.some(
+            p => p.extension_id && permittedExtIds.has(p.extension_id)
+          )) {
+            selectedSet.add(conv.id);
+          }
+        }
+      }
+
+      setSelectedConversations(selectedSet);
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Failed to load permissions data");
@@ -99,12 +110,33 @@ export function UserPermissionsModal({
     setError(null);
 
     try {
+      // Split selected into group chats and 1-on-1 chats
+      const selectedGroupChatIds: string[] = [];
+      const selectedExtensionIds = new Set<string>();
+
+      for (const convId of selectedConversations) {
+        const conv = conversations.find(c => c.id === convId);
+        if (!conv) continue;
+
+        if (conv.is_group_chat) {
+          selectedGroupChatIds.push(convId);
+        } else {
+          // For 1-on-1 chats, add participant extension IDs
+          selectedGroupChatIds.push(convId); // Also store as conversation permission
+          for (const p of (conv.participants || [])) {
+            if (p.extension_id) {
+              selectedExtensionIds.add(p.extension_id);
+            }
+          }
+        }
+      }
+
       const response = await fetch(`/api/admin/users/${userId}/permissions`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          extensionIds: Array.from(selectedExtensions),
-          groupChatIds: Array.from(selectedGroupChats),
+          extensionIds: Array.from(selectedExtensionIds),
+          groupChatIds: selectedGroupChatIds,
         }),
       });
 
@@ -123,8 +155,8 @@ export function UserPermissionsModal({
     }
   };
 
-  const toggleExtension = (id: string) => {
-    setSelectedExtensions((prev) => {
+  const toggleConversation = (id: string) => {
+    setSelectedConversations(prev => {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
@@ -135,50 +167,53 @@ export function UserPermissionsModal({
     });
   };
 
-  const toggleGroupChat = (id: string) => {
-    setSelectedGroupChats((prev) => {
+  const oneOnOneChats = conversations.filter(c => !c.is_group_chat);
+  const groupChats = conversations.filter(c => c.is_group_chat);
+
+  const filteredOneOnOne = oneOnOneChats.filter(c =>
+    !searchQuery ||
+    c.conversation_name?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredGroupChats = groupChats.filter(c =>
+    !searchQuery ||
+    c.conversation_name?.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const selectAllOneOnOne = () => {
+    setSelectedConversations(prev => {
       const next = new Set(prev);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
+      oneOnOneChats.forEach(c => next.add(c.id));
       return next;
     });
   };
 
-  const selectAllExtensions = () => {
-    setSelectedExtensions(new Set(extensions.map((e) => e.id)));
-  };
-
-  const deselectAllExtensions = () => {
-    setSelectedExtensions(new Set());
+  const deselectAllOneOnOne = () => {
+    setSelectedConversations(prev => {
+      const next = new Set(prev);
+      oneOnOneChats.forEach(c => next.delete(c.id));
+      return next;
+    });
   };
 
   const selectAllGroupChats = () => {
-    setSelectedGroupChats(new Set(groupChats.map((g) => g.id)));
+    setSelectedConversations(prev => {
+      const next = new Set(prev);
+      groupChats.forEach(c => next.add(c.id));
+      return next;
+    });
   };
 
   const deselectAllGroupChats = () => {
-    setSelectedGroupChats(new Set());
+    setSelectedConversations(prev => {
+      const next = new Set(prev);
+      groupChats.forEach(c => next.delete(c.id));
+      return next;
+    });
   };
 
-  const getExtensionDisplayName = (ext: Extension) => {
-    if (ext.display_name) return ext.display_name;
-    if (ext.first_name || ext.last_name) {
-      return `${ext.first_name || ""} ${ext.last_name || ""}`.trim();
-    }
-    return `Extension ${ext.extension_number}`;
-  };
-
-  const getGroupChatDisplayName = (chat: GroupChat) => {
-    if (chat.conversation_name) return chat.conversation_name;
-    const participantNames = chat.participants
-      ?.slice(0, 3)
-      .map((p) => p.participant_name || p.participant_identifier)
-      .join(", ");
-    return participantNames || `Group (${chat.participant_count} participants)`;
-  };
+  const selectedOneOnOneCount = oneOnOneChats.filter(c => selectedConversations.has(c.id)).length;
+  const selectedGroupChatCount = groupChats.filter(c => selectedConversations.has(c.id)).length;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`Permissions for ${userName}`} size="lg">
@@ -194,17 +229,28 @@ export function UserPermissionsModal({
         </div>
       ) : (
         <div className="space-y-6">
-          {/* Extensions Section */}
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+            <Input
+              placeholder="Search conversations..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9 text-sm"
+            />
+          </div>
+
+          {/* 1-on-1 Chats Section */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                <Phone className="h-4 w-4" />
-                Extensions ({selectedExtensions.size}/{extensions.length} selected)
+                <MessageSquare className="h-4 w-4" />
+                1-on-1 Chats ({selectedOneOnOneCount}/{oneOnOneChats.length} selected)
               </h3>
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={selectAllExtensions}
+                  onClick={selectAllOneOnOne}
                   className="text-xs text-blue-600 hover:text-blue-800"
                 >
                   Select All
@@ -212,7 +258,7 @@ export function UserPermissionsModal({
                 <span className="text-gray-300">|</span>
                 <button
                   type="button"
-                  onClick={deselectAllExtensions}
+                  onClick={deselectAllOneOnOne}
                   className="text-xs text-blue-600 hover:text-blue-800"
                 >
                   Deselect All
@@ -220,27 +266,29 @@ export function UserPermissionsModal({
               </div>
             </div>
 
-            {extensions.length === 0 ? (
-              <p className="text-sm text-gray-500 italic">No extensions available</p>
+            {filteredOneOnOne.length === 0 ? (
+              <p className="text-sm text-gray-500 italic">
+                {searchQuery ? "No matching chats" : "No 1-on-1 chats with messages"}
+              </p>
             ) : (
               <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
-                {extensions.map((ext) => (
+                {filteredOneOnOne.map(conv => (
                   <button
-                    key={ext.id}
+                    key={conv.id}
                     type="button"
-                    onClick={() => toggleExtension(ext.id)}
+                    onClick={() => toggleConversation(conv.id)}
                     className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 text-left"
                   >
-                    {selectedExtensions.has(ext.id) ? (
+                    {selectedConversations.has(conv.id) ? (
                       <CheckSquare className="h-4 w-4 text-blue-600 flex-shrink-0" />
                     ) : (
                       <Square className="h-4 w-4 text-gray-400 flex-shrink-0" />
                     )}
-                    <span className="font-mono text-sm text-gray-600 w-16">
-                      {ext.extension_number}
+                    <span className="text-sm text-gray-900 truncate flex-1">
+                      {conv.conversation_name || "Unnamed Chat"}
                     </span>
-                    <span className="text-sm text-gray-900 truncate">
-                      {getExtensionDisplayName(ext)}
+                    <span className="text-xs text-gray-400">
+                      {conv.message_count} msgs
                     </span>
                   </button>
                 ))}
@@ -253,7 +301,7 @@ export function UserPermissionsModal({
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                 <Users className="h-4 w-4" />
-                Group Chats ({selectedGroupChats.size}/{groupChats.length} selected)
+                Group Chats ({selectedGroupChatCount}/{groupChats.length} selected)
               </h3>
               <div className="flex gap-2">
                 <button
@@ -274,27 +322,29 @@ export function UserPermissionsModal({
               </div>
             </div>
 
-            {groupChats.length === 0 ? (
-              <p className="text-sm text-gray-500 italic">No group chats available</p>
+            {filteredGroupChats.length === 0 ? (
+              <p className="text-sm text-gray-500 italic">
+                {searchQuery ? "No matching group chats" : "No group chats with messages"}
+              </p>
             ) : (
               <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
-                {groupChats.map((chat) => (
+                {filteredGroupChats.map(conv => (
                   <button
-                    key={chat.id}
+                    key={conv.id}
                     type="button"
-                    onClick={() => toggleGroupChat(chat.id)}
+                    onClick={() => toggleConversation(conv.id)}
                     className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 text-left"
                   >
-                    {selectedGroupChats.has(chat.id) ? (
+                    {selectedConversations.has(conv.id) ? (
                       <CheckSquare className="h-4 w-4 text-blue-600 flex-shrink-0" />
                     ) : (
                       <Square className="h-4 w-4 text-gray-400 flex-shrink-0" />
                     )}
                     <span className="text-sm text-gray-900 truncate flex-1">
-                      {getGroupChatDisplayName(chat)}
+                      {conv.conversation_name || "Unnamed Group"}
                     </span>
-                    <span className="text-xs text-gray-500">
-                      {chat.participant_count} members
+                    <span className="text-xs text-gray-400">
+                      {conv.message_count} msgs
                     </span>
                   </button>
                 ))}
@@ -304,7 +354,7 @@ export function UserPermissionsModal({
 
           {/* Info message */}
           <p className="text-xs text-gray-500">
-            Users with no permissions selected will not see any conversations.
+            Users with no conversations selected will not see any chats.
             Admins bypass these restrictions.
           </p>
 

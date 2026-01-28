@@ -286,6 +286,33 @@ WHERE p.conversation_id = c.id
   AND p.external_id IS NOT NULL
   AND p.participant_type != 'external';`,
       },
+      // Create missing participant records from messages data
+      // This fixes conversations that were created by syncAllConversations (which skips participants)
+      {
+        name: "Backfill missing participants from messages",
+        sql: `INSERT INTO participants (conversation_id, external_id, external_name, participant_type, extension_id, joined_at)
+SELECT DISTINCT ON (m.conversation_id, m.sender_identifier)
+  m.conversation_id,
+  m.sender_identifier as external_id,
+  m.sender_name as external_name,
+  CASE
+    WHEN e.id IS NOT NULL THEN 'extension'
+    ELSE 'external'
+  END as participant_type,
+  e.id as extension_id,
+  MIN(m.sent_at) OVER (PARTITION BY m.conversation_id, m.sender_identifier) as joined_at
+FROM messages m
+JOIN conversations c ON c.id = m.conversation_id
+LEFT JOIN extensions e ON e.extension_number = m.sender_identifier AND e.tenant_id = c.tenant_id
+WHERE m.sender_identifier IS NOT NULL
+  AND m.sender_identifier != ''
+  AND NOT EXISTS (
+    SELECT 1 FROM participants p
+    WHERE p.conversation_id = m.conversation_id
+    AND p.external_id = m.sender_identifier
+  )
+ORDER BY m.conversation_id, m.sender_identifier, m.sent_at ASC;`,
+      },
     ];
 
     for (const migration of migrations) {
