@@ -7,9 +7,13 @@ export async function GET(request: Request) {
   const code = searchParams.get("code");
   const next = searchParams.get("next") ?? "/";
 
+  console.log("Auth callback - code:", code ? "present" : "missing", "next:", next, "full URL:", request.url);
+
   if (code) {
     const supabase = await createClient();
     const { error } = await supabase.auth.exchangeCodeForSession(code);
+
+    console.log("Auth callback - code exchange result:", error ? `error: ${error.message}` : "success");
 
     if (!error) {
       // Get the authenticated user
@@ -43,6 +47,13 @@ export async function GET(request: Request) {
             is_active: true,
           });
         }
+
+        // Check if this user needs to change their password
+        const needsPasswordChange = user.user_metadata?.password_change_required === true;
+        const redirectTo = needsPasswordChange ? "/auth/reset-password" : next;
+
+        console.log("Auth callback - redirecting to:", redirectTo, "needsPasswordChange:", needsPasswordChange);
+        return NextResponse.redirect(`${origin}${redirectTo}`);
       }
 
       return NextResponse.redirect(`${origin}${next}`);
@@ -50,5 +61,6 @@ export async function GET(request: Request) {
   }
 
   // Return the user to an error page with instructions
+  console.log("Auth callback - failed, redirecting to login");
   return NextResponse.redirect(`${origin}/login?error=Could not authenticate user`);
 }

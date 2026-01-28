@@ -165,7 +165,7 @@ export async function POST(request: NextRequest) {
         type: "recovery",
         email: email,
         options: {
-          redirectTo: `${appUrl}/auth/reset-password`,
+          redirectTo: `${appUrl}/auth/callback?next=/auth/reset-password`,
         },
       });
 
@@ -309,7 +309,7 @@ export async function POST(request: NextRequest) {
         type: "recovery",
         email: email,
         options: {
-          redirectTo: `${appUrl}/auth/reset-password`,
+          redirectTo: `${appUrl}/auth/callback?next=/auth/reset-password`,
         },
       });
 
