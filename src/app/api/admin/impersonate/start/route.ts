@@ -6,19 +6,23 @@ import { cookies } from "next/headers";
 
 export async function POST(request: NextRequest) {
   try {
+    console.log("[Impersonate] Starting impersonation request");
     const context = await getTenantContext();
 
     if (!context.isAuthenticated) {
+      console.log("[Impersonate] Not authenticated");
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
     // Only super admins can impersonate
     if (context.role !== "super_admin") {
+      console.log("[Impersonate] Not super admin:", context.role);
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const body = await request.json();
     const { userId, reason } = body;
+    console.log("[Impersonate] Request for user:", userId);
 
     if (!userId) {
       return NextResponse.json({ error: "User ID is required" }, { status: 400 });
@@ -34,8 +38,10 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (userError || !targetUser) {
+      console.error("[Impersonate] User not found:", userId, userError);
       return NextResponse.json({ error: "User not found" }, { status: 404 });
     }
+    console.log("[Impersonate] Found user:", targetUser.email);
 
     // Cannot impersonate other super admins
     if (targetUser.role === "super_admin") {
@@ -95,12 +101,20 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (sessionError) {
-      console.error("Error creating impersonation session:", sessionError);
+      console.error("[Impersonate] Error creating session:", sessionError);
+      // Check if it's a table not found error
+      if (sessionError.message?.includes("relation") && sessionError.message?.includes("does not exist")) {
+        return NextResponse.json(
+          { error: "Impersonation not available - database table not created" },
+          { status: 503 }
+        );
+      }
       return NextResponse.json(
         { error: "Failed to create impersonation session" },
         { status: 500 }
       );
     }
+    console.log("[Impersonate] Session created:", session.id);
 
     // Set impersonation cookies
     const cookieStore = await cookies();
