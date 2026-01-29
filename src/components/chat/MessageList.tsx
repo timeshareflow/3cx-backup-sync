@@ -18,15 +18,16 @@ export function MessageList({ conversationId, initialMessages }: MessageListProp
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
+  const [newestTimestamp, setNewestTimestamp] = useState<string | null>(null);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  const fetchMessages = useCallback(async (before?: string) => {
+  const fetchMessages = useCallback(async (before?: string, isPolling?: boolean) => {
     try {
       if (before) {
         setIsLoadingMore(true);
-      } else {
+      } else if (!isPolling) {
         setIsLoading(true);
       }
 
@@ -35,6 +36,9 @@ export function MessageList({ conversationId, initialMessages }: MessageListProp
       url.searchParams.set("limit", "50");
       if (before) {
         url.searchParams.set("before", before);
+      } else {
+        // Initial load: get the latest messages
+        url.searchParams.set("latest", "true");
       }
 
       const response = await fetch(url.toString());
@@ -50,18 +54,23 @@ export function MessageList({ conversationId, initialMessages }: MessageListProp
       } else {
         setMessages(data.data);
         // Scroll to bottom on initial load
-        setTimeout(() => {
-          bottomRef.current?.scrollIntoView();
-        }, 100);
+        if (!isPolling) {
+          setTimeout(() => {
+            bottomRef.current?.scrollIntoView();
+          }, 100);
+        }
       }
 
       setHasMore(data.has_more);
 
       if (data.data.length > 0) {
         setOldestTimestamp(data.data[0].sent_at);
+        setNewestTimestamp(data.data[data.data.length - 1].sent_at);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "An error occurred");
+      if (!isPolling) {
+        setError(err instanceof Error ? err.message : "An error occurred");
+      }
     } finally {
       setIsLoading(false);
       setIsLoadingMore(false);

@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
   const conversationId = searchParams.get("conversation_id");
   const before = searchParams.get("before");
   const after = searchParams.get("after");
+  const latest = searchParams.get("latest"); // Fetch most recent messages
   const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
 
   if (!conversationId) {
@@ -57,6 +58,11 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // When "latest" is set, fetch the most recent messages (for initial monitor load)
+    // When "before" is set, fetch older messages (for infinite scroll up)
+    // When "after" is set, fetch newer messages (for polling new messages)
+    const isLatestMode = latest === "true" && !before && !after;
+
     let query = supabase
       .from("messages")
       .select(
@@ -75,9 +81,7 @@ export async function GET(request: NextRequest) {
       `,
         { count: "exact" }
       )
-      .eq("conversation_id", conversationId)
-      .order("sent_at", { ascending: true })
-      .limit(limit);
+      .eq("conversation_id", conversationId);
 
     // Handle pagination
     if (before) {
@@ -87,7 +91,21 @@ export async function GET(request: NextRequest) {
       query = query.gt("sent_at", after);
     }
 
+    // Order: descending for latest mode (to get newest first), then we'll reverse
+    // For before/after pagination, use appropriate order
+    if (isLatestMode || before) {
+      query = query.order("sent_at", { ascending: false }).limit(limit);
+    } else {
+      query = query.order("sent_at", { ascending: true }).limit(limit);
+    }
+
     const { data, error, count } = await query;
+
+    // For latest mode or "before" pagination, reverse to chronological order
+    let messages = (data || []) as unknown as MessageWithMedia[];
+    if (isLatestMode || before) {
+      messages = messages.reverse();
+    }
 
     if (error) {
       console.error("Error fetching messages:", error);
@@ -97,9 +115,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const messages = (data || []) as unknown as MessageWithMedia[];
-
-    // Check if there are more messages
+    // Check if there are older messages (for infinite scroll up)
     let hasMore = false;
     if (messages.length > 0) {
       const firstMessageTime = messages[0].sent_at;
@@ -112,10 +128,24 @@ export async function GET(request: NextRequest) {
       hasMore = (olderCount || 0) > 0;
     }
 
+    // Check if there are newer messages (for polling)
+    let hasNewer = false;
+    if (messages.length > 0) {
+      const lastMessageTime = messages[messages.length - 1].sent_at;
+      const { count: newerCount } = await supabase
+        .from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("conversation_id", conversationId)
+        .gt("sent_at", lastMessageTime);
+
+      hasNewer = (newerCount || 0) > 0;
+    }
+
     return NextResponse.json({
       data: messages,
       total: count || 0,
       has_more: hasMore,
+      has_newer: hasNewer,
     });
   } catch (error) {
     console.error("Error in messages API:", error);
