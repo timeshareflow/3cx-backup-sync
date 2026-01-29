@@ -7,9 +7,9 @@ export const dynamic = "force-dynamic";
 interface Message {
   id: string;
   conversation_id: string;
-  sender_extension: string | null;
+  sender_identifier: string | null;
   sender_name: string | null;
-  message_text: string | null;
+  content: string | null;
   message_type: string;
   sent_at: string;
   has_media: boolean;
@@ -120,9 +120,9 @@ export async function GET(request: NextRequest) {
       .select(`
         id,
         conversation_id,
-        sender_extension,
+        sender_identifier,
         sender_name,
-        message_text,
+        content,
         message_type,
         sent_at,
         has_media,
@@ -181,9 +181,9 @@ export async function GET(request: NextRequest) {
         conversationName: conv?.conversation_name || "Unknown",
         isGroupChat: conv?.is_group_chat || false,
         isExternal: conv?.is_external || false,
-        senderExtension: msg.sender_extension,
+        senderExtension: msg.sender_identifier,
         senderName: msg.sender_name,
-        messageText: msg.message_text,
+        messageText: msg.content,
         messageType: msg.message_type,
         sentAt: msg.sent_at,
         hasMedia: msg.has_media,
