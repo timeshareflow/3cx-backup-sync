@@ -5,7 +5,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Input } from "@/components/ui/Input";
-import { CheckSquare, Square, Users, MessageSquare, Search } from "lucide-react";
+import { CheckSquare, Square, Users, MessageSquare, Search, Phone, Mic, Video, Voicemail, FileText, ToggleLeft, ToggleRight } from "lucide-react";
 
 interface Conversation {
   id: string;
@@ -19,6 +19,14 @@ interface Conversation {
     extension_id: string | null;
     participant_type: string;
   }>;
+}
+
+interface FeaturePermissions {
+  canViewCdr: boolean;
+  canViewRecordings: boolean;
+  canViewMeetings: boolean;
+  canViewVoicemails: boolean;
+  canViewFaxes: boolean;
 }
 
 interface UserPermissionsModalProps {
@@ -43,6 +51,13 @@ export function UserPermissionsModal({
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversations, setSelectedConversations] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
+  const [featurePermissions, setFeaturePermissions] = useState<FeaturePermissions>({
+    canViewCdr: true,
+    canViewRecordings: true,
+    canViewMeetings: true,
+    canViewVoicemails: true,
+    canViewFaxes: true,
+  });
 
   // Fetch data when modal opens
   useEffect(() => {
@@ -97,6 +112,11 @@ export function UserPermissionsModal({
       }
 
       setSelectedConversations(selectedSet);
+
+      // Set feature permissions from API response
+      if (permissionsData.featurePermissions) {
+        setFeaturePermissions(permissionsData.featurePermissions);
+      }
     } catch (err) {
       console.error("Error fetching data:", err);
       setError("Failed to load permissions data");
@@ -137,6 +157,7 @@ export function UserPermissionsModal({
         body: JSON.stringify({
           extensionIds: Array.from(selectedExtensionIds),
           groupChatIds: selectedGroupChatIds,
+          featurePermissions,
         }),
       });
 
@@ -229,15 +250,101 @@ export function UserPermissionsModal({
         </div>
       ) : (
         <div className="space-y-6">
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <Input
-              placeholder="Search conversations..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="pl-9 text-sm"
-            />
+          {/* Feature Permissions Section */}
+          <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Feature Access</h3>
+            <div className="grid grid-cols-2 gap-3">
+              {/* CDR */}
+              <button
+                type="button"
+                onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewCdr: !prev.canViewCdr }))}
+                className="flex items-center gap-2 p-2 rounded-lg hover:bg-white transition-colors text-left"
+              >
+                {featurePermissions.canViewCdr ? (
+                  <ToggleRight className="h-5 w-5 text-green-600" />
+                ) : (
+                  <ToggleLeft className="h-5 w-5 text-gray-400" />
+                )}
+                <Phone className="h-4 w-4 text-gray-600" />
+                <span className="text-sm text-gray-700">Call History (CDR)</span>
+              </button>
+
+              {/* Recordings */}
+              <button
+                type="button"
+                onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewRecordings: !prev.canViewRecordings }))}
+                className="flex items-center gap-2 p-2 rounded-lg hover:bg-white transition-colors text-left"
+              >
+                {featurePermissions.canViewRecordings ? (
+                  <ToggleRight className="h-5 w-5 text-green-600" />
+                ) : (
+                  <ToggleLeft className="h-5 w-5 text-gray-400" />
+                )}
+                <Mic className="h-4 w-4 text-gray-600" />
+                <span className="text-sm text-gray-700">Call Recordings</span>
+              </button>
+
+              {/* Meetings */}
+              <button
+                type="button"
+                onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewMeetings: !prev.canViewMeetings }))}
+                className="flex items-center gap-2 p-2 rounded-lg hover:bg-white transition-colors text-left"
+              >
+                {featurePermissions.canViewMeetings ? (
+                  <ToggleRight className="h-5 w-5 text-green-600" />
+                ) : (
+                  <ToggleLeft className="h-5 w-5 text-gray-400" />
+                )}
+                <Video className="h-4 w-4 text-gray-600" />
+                <span className="text-sm text-gray-700">Meetings</span>
+              </button>
+
+              {/* Voicemails */}
+              <button
+                type="button"
+                onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewVoicemails: !prev.canViewVoicemails }))}
+                className="flex items-center gap-2 p-2 rounded-lg hover:bg-white transition-colors text-left"
+              >
+                {featurePermissions.canViewVoicemails ? (
+                  <ToggleRight className="h-5 w-5 text-green-600" />
+                ) : (
+                  <ToggleLeft className="h-5 w-5 text-gray-400" />
+                )}
+                <Voicemail className="h-4 w-4 text-gray-600" />
+                <span className="text-sm text-gray-700">Voicemails</span>
+              </button>
+
+              {/* Faxes */}
+              <button
+                type="button"
+                onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewFaxes: !prev.canViewFaxes }))}
+                className="flex items-center gap-2 p-2 rounded-lg hover:bg-white transition-colors text-left"
+              >
+                {featurePermissions.canViewFaxes ? (
+                  <ToggleRight className="h-5 w-5 text-green-600" />
+                ) : (
+                  <ToggleLeft className="h-5 w-5 text-gray-400" />
+                )}
+                <FileText className="h-4 w-4 text-gray-600" />
+                <span className="text-sm text-gray-700">Faxes</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Conversation Permissions Header */}
+          <div>
+            <h3 className="text-sm font-semibold text-gray-900 mb-3">Chat Access</h3>
+
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+              <Input
+                placeholder="Search conversations..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="pl-9 text-sm"
+              />
+            </div>
           </div>
 
           {/* 1-on-1 Chats Section */}

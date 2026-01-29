@@ -6,9 +6,18 @@ interface RouteParams {
   params: Promise<{ id: string }>;
 }
 
+interface FeaturePermissions {
+  canViewCdr: boolean;
+  canViewRecordings: boolean;
+  canViewMeetings: boolean;
+  canViewVoicemails: boolean;
+  canViewFaxes: boolean;
+}
+
 interface PermissionsPayload {
   extensionIds: string[];
   groupChatIds: string[];
+  featurePermissions?: FeaturePermissions;
 }
 
 // GET: Fetch user's current permissions
@@ -102,9 +111,31 @@ export async function GET(request: Request, { params }: RouteParams) {
       .eq("user_id", targetUserId)
       .eq("tenant_id", targetTenantId);
 
+    // Get user's feature permissions (or defaults if none exist)
+    const { data: featurePermissions } = await supabase
+      .from("user_feature_permissions")
+      .select("can_view_cdr, can_view_recordings, can_view_meetings, can_view_voicemails, can_view_faxes")
+      .eq("user_id", targetUserId)
+      .eq("tenant_id", targetTenantId)
+      .single();
+
     return NextResponse.json({
       extensionIds: (extensionPermissions || []).map(p => p.extension_id),
       groupChatIds: (groupChatPermissions || []).map(p => p.conversation_id),
+      featurePermissions: featurePermissions ? {
+        canViewCdr: featurePermissions.can_view_cdr ?? true,
+        canViewRecordings: featurePermissions.can_view_recordings ?? true,
+        canViewMeetings: featurePermissions.can_view_meetings ?? true,
+        canViewVoicemails: featurePermissions.can_view_voicemails ?? true,
+        canViewFaxes: featurePermissions.can_view_faxes ?? true,
+      } : {
+        // Defaults: all features enabled
+        canViewCdr: true,
+        canViewRecordings: true,
+        canViewMeetings: true,
+        canViewVoicemails: true,
+        canViewFaxes: true,
+      },
     });
   } catch (error) {
     console.error("Error fetching user permissions:", error);
@@ -186,7 +217,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     }
 
     const body: PermissionsPayload = await request.json();
-    const { extensionIds = [], groupChatIds = [] } = body;
+    const { extensionIds = [], groupChatIds = [], featurePermissions } = body;
 
     // Delete existing extension permissions for this user/tenant
     const { error: delExtError } = await supabase
@@ -247,6 +278,30 @@ export async function PUT(request: Request, { params }: RouteParams) {
       if (chatError) {
         console.error("Error inserting group chat permissions:", chatError);
         return NextResponse.json({ error: `Failed to save group chat permissions: ${chatError.message}` }, { status: 500 });
+      }
+    }
+
+    // Update or insert feature permissions
+    if (featurePermissions) {
+      const { error: featureError } = await supabase
+        .from("user_feature_permissions")
+        .upsert({
+          user_id: targetUserId,
+          tenant_id: targetTenantId,
+          can_view_cdr: featurePermissions.canViewCdr,
+          can_view_recordings: featurePermissions.canViewRecordings,
+          can_view_meetings: featurePermissions.canViewMeetings,
+          can_view_voicemails: featurePermissions.canViewVoicemails,
+          can_view_faxes: featurePermissions.canViewFaxes,
+          updated_at: new Date().toISOString(),
+          created_by: context.userId,
+        }, {
+          onConflict: "user_id,tenant_id",
+        });
+
+      if (featureError) {
+        console.error("Error saving feature permissions:", featureError);
+        return NextResponse.json({ error: `Failed to save feature permissions: ${featureError.message}` }, { status: 500 });
       }
     }
 

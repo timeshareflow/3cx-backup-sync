@@ -613,6 +613,32 @@ export const userGroupChatPermissions = pgTable(
 );
 
 // ============================================
+// USER FEATURE PERMISSIONS
+// Feature-level access control for CDR, Recordings, Meetings, etc.
+// ============================================
+export const userFeaturePermissions = pgTable(
+  "user_feature_permissions",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    userId: uuid("user_id").notNull().references(() => userProfiles.id, { onDelete: "cascade" }),
+    tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
+    canViewCdr: boolean("can_view_cdr").default(true),
+    canViewRecordings: boolean("can_view_recordings").default(true),
+    canViewMeetings: boolean("can_view_meetings").default(true),
+    canViewVoicemails: boolean("can_view_voicemails").default(true),
+    canViewFaxes: boolean("can_view_faxes").default(true),
+    createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
+    createdBy: uuid("created_by").references(() => userProfiles.id),
+  },
+  (table) => ({
+    userIdx: index("idx_user_feature_permissions_user").on(table.userId),
+    tenantIdx: index("idx_user_feature_permissions_tenant").on(table.tenantId),
+    uniqueUserTenant: uniqueIndex("user_feature_permissions_user_tenant_key").on(table.userId, table.tenantId),
+  })
+);
+
+// ============================================
 // RETENTION POLICIES
 // ============================================
 export const retentionPolicies = pgTable(

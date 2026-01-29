@@ -539,7 +539,7 @@ export async function updateSyncLog(
 export async function insertCallRecording(recording: {
   tenant_id: string;
   threecx_recording_id?: string;
-  call_id?: string;
+  threecx_call_id?: string;
   caller_number?: string;
   caller_name?: string;
   callee_number?: string;
@@ -558,10 +558,27 @@ export async function insertCallRecording(recording: {
 }): Promise<string> {
   const client = getSupabaseClient();
 
+  // Map to actual database column names
+  const dbRecord = {
+    tenant_id: recording.tenant_id,
+    threecx_call_id: recording.threecx_recording_id || recording.threecx_call_id,
+    file_name: recording.original_filename || "recording.wav",
+    file_size: recording.file_size,
+    storage_path: recording.storage_path,
+    caller_number: recording.caller_number,
+    caller_name: recording.caller_name,
+    callee_number: recording.callee_number,
+    callee_name: recording.callee_name,
+    direction: recording.direction,
+    duration_seconds: recording.duration_seconds,
+    started_at: recording.recorded_at || recording.call_started_at || new Date().toISOString(),
+    ended_at: recording.call_ended_at,
+  };
+
   const { data, error } = await client
     .from("call_recordings")
-    .upsert(recording, {
-      onConflict: "tenant_id,threecx_recording_id",
+    .upsert(dbRecord, {
+      onConflict: "tenant_id,threecx_call_id",
       ignoreDuplicates: true,
     })
     .select("id")
@@ -574,7 +591,7 @@ export async function insertCallRecording(recording: {
         .from("call_recordings")
         .select("id")
         .eq("tenant_id", recording.tenant_id)
-        .eq("threecx_recording_id", recording.threecx_recording_id)
+        .eq("threecx_call_id", dbRecord.threecx_call_id)
         .single();
       return existing?.id || "";
     }
@@ -582,6 +599,23 @@ export async function insertCallRecording(recording: {
   }
 
   return data?.id || "";
+}
+
+// Check if a recording already exists in database
+export async function recordingExists(tenantId: string, recordingId: string): Promise<boolean> {
+  const client = getSupabaseClient();
+
+  const { count, error } = await client
+    .from("call_recordings")
+    .select("*", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("threecx_call_id", recordingId);
+
+  if (error) {
+    return false;
+  }
+
+  return (count || 0) > 0;
 }
 
 // ============================================

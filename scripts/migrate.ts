@@ -371,6 +371,33 @@ WHERE has_media = false
   AND content IS NOT NULL
   AND TRIM(content) ~* '\\.(jpe?g|png|gif|webp|heic|mp4|mov|avi|webm|3gp|wav|mp3|ogg|aac|pdf|doc|docx)$';`,
       },
+      // User feature permissions table for CDR, Recordings, Meetings, etc.
+      {
+        name: "Create user_feature_permissions table",
+        sql: `CREATE TABLE IF NOT EXISTS user_feature_permissions (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          user_id UUID NOT NULL REFERENCES user_profiles(id) ON DELETE CASCADE,
+          tenant_id UUID NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+          can_view_cdr BOOLEAN DEFAULT true,
+          can_view_recordings BOOLEAN DEFAULT true,
+          can_view_meetings BOOLEAN DEFAULT true,
+          can_view_voicemails BOOLEAN DEFAULT true,
+          can_view_faxes BOOLEAN DEFAULT true,
+          created_at TIMESTAMPTZ DEFAULT NOW(),
+          updated_at TIMESTAMPTZ DEFAULT NOW(),
+          created_by UUID REFERENCES user_profiles(id),
+          UNIQUE(user_id, tenant_id)
+        );`,
+      },
+      {
+        name: "Create indexes on user_feature_permissions",
+        sql: `CREATE INDEX IF NOT EXISTS idx_user_feature_permissions_user ON user_feature_permissions(user_id);
+              CREATE INDEX IF NOT EXISTS idx_user_feature_permissions_tenant ON user_feature_permissions(tenant_id);`,
+      },
+      {
+        name: "Grant permissions on user_feature_permissions",
+        sql: `GRANT ALL ON user_feature_permissions TO anon, authenticated, service_role;`,
+      },
     ];
 
     for (const migration of migrations) {

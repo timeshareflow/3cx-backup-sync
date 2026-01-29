@@ -13,6 +13,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
+    // CRITICAL: Non-super-admins MUST have a tenantId - reject if missing
+    // This prevents accidental data leakage across tenants
+    if (!context.tenantId && context.role !== "super_admin") {
+      console.error("[SyncStatus] Non-super-admin without tenantId! User:", context.userId, "Role:", context.role);
+      return NextResponse.json({
+        error: "No tenant access. Please contact your administrator.",
+        _debug: {
+          issue: "missing_tenant_id",
+          userId: context.userId,
+          role: context.role,
+        }
+      }, { status: 403 });
+    }
+
     // Use admin client to bypass RLS after validating user access
     const supabase = createAdminClient();
 
@@ -44,8 +58,9 @@ export async function GET(request: NextRequest) {
 
     if (context.tenantId) {
       conversationQuery = conversationQuery.eq("tenant_id", context.tenantId);
+      messageQuery = messageQuery.eq("tenant_id", context.tenantId);
+      mediaQuery = mediaQuery.eq("tenant_id", context.tenantId);
       extensionQuery = extensionQuery.eq("tenant_id", context.tenantId);
-      // Messages and media are filtered through conversation join for tenant
     }
 
     const [
@@ -95,7 +110,22 @@ export async function GET(request: NextRequest) {
       response.logs = logs || [];
     }
 
-    return NextResponse.json(response);
+    // Add debug info to response
+    const debugInfo = {
+      tenantId: context.tenantId,
+      userId: context.userId,
+      role: context.role,
+      isSystemWide: context.isSystemWide,
+      timestamp: new Date().toISOString(),
+    };
+    console.log("[SyncStatus] Returning stats for context:", debugInfo);
+
+    // Create response with cache-control headers to prevent caching
+    const res = NextResponse.json({ ...response, _debug: debugInfo });
+    res.headers.set("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+    res.headers.set("Pragma", "no-cache");
+    res.headers.set("Expires", "0");
+    return res;
   } catch (error) {
     console.error("Error in sync status API:", error);
     return NextResponse.json(

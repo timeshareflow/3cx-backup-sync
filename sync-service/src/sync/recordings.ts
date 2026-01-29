@@ -136,67 +136,85 @@ export async function syncRecordings(
         // Generate storage path
         const storagePath = generateStoragePath(tenant.id, "recordings", filename);
 
-        // Check if already uploaded
-        const exists = await fileExists(storagePath);
-        if (exists) {
+        // Check if already in database (not just storage) to handle partial syncs
+        const { recordingExists } = await import("../storage/supabase");
+        const existsInDb = await recordingExists(tenant.id, recording.recording_id);
+        if (existsInDb) {
           result.filesSkipped++;
           continue;
         }
 
-        // Download the recording via SFTP
-        logger.debug("Downloading recording via SFTP", {
-          tenantId: tenant.id,
-          recordingId: recording.recording_id,
-          remotePath,
-        });
+        // Also check storage in case file was uploaded but DB insert failed
+        const existsInStorage = await fileExists(storagePath);
 
-        let buffer: Buffer;
-        try {
-          buffer = await downloadFile(sftp, remotePath);
-        } catch (downloadError) {
-          // Try alternate path patterns if the first one fails
-          const altPaths = [
-            // Try with Recordings subfolder
-            path.posix.join(recordingsBasePath, recording.extension_number || "", "Recordings", filename),
-            // Try directly under extension
-            path.posix.join(recordingsBasePath, recording.extension_number || "", filename),
-            // Try just the filename in base path
-            path.posix.join(recordingsBasePath, filename),
-          ];
+        let uploadResult: { path: string; size: number; newMimeType: string; wasCompressed: boolean; originalSize: number; compressionRatio: number };
 
-          let downloaded = false;
-          for (const altPath of altPaths) {
-            if (altPath === remotePath) continue; // Skip if same as original
-            try {
-              logger.debug("Trying alternate path", { altPath });
-              buffer = await downloadFile(sftp, altPath);
-              downloaded = true;
-              break;
-            } catch {
-              // Continue to next path
+        if (existsInStorage) {
+          // File exists in storage but not in DB - just create DB record
+          logger.debug("File exists in storage, creating DB record only", {
+            tenantId: tenant.id,
+            recordingId: recording.recording_id,
+            storagePath,
+          });
+          uploadResult = {
+            path: storagePath,
+            size: 0,
+            newMimeType: "audio/wav",
+            wasCompressed: false,
+            originalSize: 0,
+            compressionRatio: 0,
+          };
+        } else {
+          // Download the recording via SFTP
+          logger.debug("Downloading recording via SFTP", {
+            tenantId: tenant.id,
+            recordingId: recording.recording_id,
+            remotePath,
+          });
+
+          let buffer: Buffer;
+          try {
+            buffer = await downloadFile(sftp, remotePath);
+          } catch (downloadError) {
+            // Try alternate path patterns if the first one fails
+            const altPaths = [
+              path.posix.join(recordingsBasePath, recording.extension_number || "", "Recordings", filename),
+              path.posix.join(recordingsBasePath, recording.extension_number || "", filename),
+              path.posix.join(recordingsBasePath, filename),
+            ];
+
+            let downloaded = false;
+            for (const altPath of altPaths) {
+              if (altPath === remotePath) continue;
+              try {
+                logger.debug("Trying alternate path", { altPath });
+                buffer = await downloadFile(sftp, altPath);
+                downloaded = true;
+                break;
+              } catch {
+                // Continue to next path
+              }
+            }
+
+            if (!downloaded) {
+              result.errors.push({
+                recordingId: recording.recording_id,
+                error: `Failed to download: file not found at ${remotePath}`,
+              });
+              continue;
             }
           }
 
-          if (!downloaded) {
-            result.errors.push({
-              recordingId: recording.recording_id,
-              error: `Failed to download: file not found at ${remotePath}`,
-            });
-            continue;
-          }
+          // Detect content type and upload with compression
+          const { fileType, extension } = detectFileType(buffer!);
+          uploadResult = await uploadBufferWithCompression(
+            buffer!,
+            storagePath,
+            fileType,
+            extension,
+            DEFAULT_COMPRESSION_SETTINGS
+          );
         }
-
-        // Detect content type
-        const { fileType, mimeType, extension } = detectFileType(buffer!);
-
-        // Upload to Supabase Storage with compression (WAV -> MP3)
-        const uploadResult = await uploadBufferWithCompression(
-          buffer!,
-          storagePath,
-          fileType,
-          extension,
-          DEFAULT_COMPRESSION_SETTINGS
-        );
 
         // Calculate duration
         const durationSeconds = recording.duration_seconds ||
