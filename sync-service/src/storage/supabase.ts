@@ -83,6 +83,52 @@ export async function upsertConversation(conversation: {
   return data.id;
 }
 
+// Update conversation name from participant names (for 1-on-1 chats)
+export async function updateConversationNameFromParticipants(
+  conversationId: string
+): Promise<void> {
+  const client = getSupabaseClient();
+
+  // Get conversation info
+  const { data: conv } = await client
+    .from("conversations")
+    .select("is_group_chat")
+    .eq("id", conversationId)
+    .single();
+
+  // Only update 1-on-1 chats (group chats have their own names)
+  if (conv?.is_group_chat) {
+    return;
+  }
+
+  // Get participants
+  const { data: participants } = await client
+    .from("participants")
+    .select("external_name")
+    .eq("conversation_id", conversationId);
+
+  if (!participants || participants.length < 2) {
+    return;
+  }
+
+  // Build name from all participant names
+  const names = participants
+    .map(p => p.external_name)
+    .filter(Boolean)
+    .sort()
+    .join(", ");
+
+  if (!names) {
+    return;
+  }
+
+  // Update the conversation name
+  await client
+    .from("conversations")
+    .update({ conversation_name: names })
+    .eq("id", conversationId);
+}
+
 // Upsert participant
 export async function upsertParticipant(participant: {
   conversation_id: string;

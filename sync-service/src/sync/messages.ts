@@ -11,6 +11,7 @@ import {
 import {
   upsertConversation,
   upsertParticipant,
+  updateConversationNameFromParticipants,
   insertMessage,
   getConversationId,
   updateSyncStatus,
@@ -281,6 +282,9 @@ export async function syncMessages(
                   tenant_id: tenantId,
                 });
               }
+
+              // Update conversation name from participant names (for 1-on-1 chats)
+              await updateConversationNameFromParticipants(supabaseConversationId);
             }
           }
 
@@ -294,6 +298,9 @@ export async function syncMessages(
               participant_type: msg.is_external ? "external" : "extension",
               tenant_id: tenantId,
             });
+
+            // Update conversation name from participant names (for 1-on-1 chats)
+            await updateConversationNameFromParticipants(supabaseConversationId);
           }
 
           // Detect media
