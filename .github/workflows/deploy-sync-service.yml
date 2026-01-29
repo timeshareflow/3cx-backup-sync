@@ -1,0 +1,25 @@
+name: Deploy Sync Service
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'sync-service/**'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to Droplet
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DROPLET_HOST }}
+          username: ${{ secrets.DROPLET_USER }}
+          key: ${{ secrets.DROPLET_SSH_KEY }}
+          script: |
+            cd /opt/sync-service
+            git pull origin main
+            npm install
+            npm run build
+            pm2 restart 3cx-sync-service
+            echo "Deploy complete!"
