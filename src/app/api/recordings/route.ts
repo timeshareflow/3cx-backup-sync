@@ -93,9 +93,10 @@ export async function GET(request: NextRequest) {
       .range(offset, offset + pageSize - 1);
 
     // Filter by permitted extensions if not admin
+    // Note: call_recordings uses caller_number for the extension that made/received the call
     if (permittedExtensionNumbers && permittedExtensionNumbers.size > 0) {
       const extArray = Array.from(permittedExtensionNumbers);
-      query = query.in("extension_number", extArray);
+      query = query.in("caller_number", extArray);
     }
 
     // Filter by extension if specified (and user has access)
@@ -110,7 +111,7 @@ export async function GET(request: NextRequest) {
           message: "No access to this extension's recordings.",
         });
       }
-      query = query.eq("extension_number", extensionNumber);
+      query = query.eq("caller_number", extensionNumber);
     }
 
     // Filter by direction if specified

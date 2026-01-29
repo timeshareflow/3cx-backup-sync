@@ -222,6 +222,23 @@ export async function syncRecordings(
             ? Math.floor((new Date(recording.end_time).getTime() - new Date(recording.start_time).getTime()) / 1000)
             : null);
 
+        // Determine direction from caller/callee numbers
+        let direction: "inbound" | "outbound" | "internal" | undefined;
+        const callerNum = recording.caller_number || "";
+        const calleeNum = recording.callee_number || "";
+        const isCallerExtension = /^\d{2,4}$/.test(callerNum);
+        const isCalleeExtension = /^\d{2,4}$/.test(calleeNum);
+        const isCallerExternal = callerNum.length >= 10 || callerNum.startsWith("+");
+        const isCalleeExternal = calleeNum.length >= 10 || calleeNum.startsWith("+");
+
+        if (isCallerExtension && isCalleeExternal) {
+          direction = "outbound";
+        } else if (isCallerExternal && isCalleeExtension) {
+          direction = "inbound";
+        } else if (isCallerExtension && isCalleeExtension) {
+          direction = "internal";
+        }
+
         // Record in database with compressed file info
         await insertCallRecording({
           tenant_id: tenant.id,
@@ -234,6 +251,7 @@ export async function syncRecordings(
           storage_path: uploadResult.path,
           mime_type: uploadResult.newMimeType,
           duration_seconds: durationSeconds || undefined,
+          direction,
           transcription: recording.transcription || undefined,
           recorded_at: recording.start_time?.toISOString() || new Date().toISOString(),
           call_started_at: recording.start_time?.toISOString(),
