@@ -14,7 +14,7 @@ interface CallRecording {
   direction: string | null;
   duration_seconds: number | null;
   file_size: number | null;
-  recorded_at: string;
+  started_at: string;
   storage_path: string;
 }
 
@@ -229,7 +229,7 @@ export default function RecordingsPage() {
                   <td className="px-6 py-4 text-sm text-slate-600 font-mono">{formatDuration(recording.duration_seconds)}</td>
                   <td className="px-6 py-4 text-sm text-slate-600">{formatFileSize(recording.file_size)}</td>
                   <td className="px-6 py-4 text-sm text-slate-500">
-                    {formatDistanceToNow(new Date(recording.recorded_at), { addSuffix: true })}
+                    {formatDistanceToNow(new Date(recording.started_at), { addSuffix: true })}
                   </td>
                   <td className="px-6 py-4 text-right">
                     <div className="flex items-center justify-end gap-2">

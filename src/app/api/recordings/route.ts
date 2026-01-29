@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
       .from("call_recordings")
       .select("*", { count: "exact" })
       .eq("tenant_id", context.tenantId)
-      .order("recorded_at", { ascending: false })
+      .order("started_at", { ascending: false })
       .range(offset, offset + pageSize - 1);
 
     // Filter by extension if specified
