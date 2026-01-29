@@ -1,12 +1,32 @@
+// v1.0.1 - Auto-deploy test
 import dotenv from "dotenv";
+import http from "http";
 import { logger } from "./utils/logger";
 import { getSupabaseClient } from "./storage/supabase";
 import { startScheduler, stopScheduler } from "./scheduler";
 import { runMultiTenantSync } from "./sync";
-import { getActiveTenants, closeAllTenantPools } from "./tenant";
+import { getActiveTenants, closeAllTenantPools, testTenantConnection } from "./tenant";
 
 // Load environment variables
 dotenv.config();
+
+// Track service state
+let lastSyncTime: Date | null = null;
+let lastSyncResult: { successCount: number; failureCount: number; totalDuration: number } | null = null;
+let isSyncing = false;
+
+// Track per-tenant status
+interface TenantStatus {
+  id: string;
+  name: string;
+  host: string | null;
+  connected: boolean;
+  lastSyncTime: Date | null;
+  lastSyncSuccess: boolean | null;
+  lastError: string | null;
+  messagesSynced: number;
+}
+const tenantStatuses: Map<string, TenantStatus> = new Map();
 
 async function validateEnvironment(): Promise<void> {
   const required = [
@@ -54,7 +74,267 @@ async function initialize(): Promise<void> {
   } else {
     for (const tenant of tenants) {
       logger.info(`  - ${tenant.name}: ${tenant.threecx_host} (SSH port ${tenant.ssh_port || 22})`);
+
+      // Initialize tenant status
+      tenantStatuses.set(tenant.id, {
+        id: tenant.id,
+        name: tenant.name,
+        host: tenant.threecx_host,
+        connected: false,
+        lastSyncTime: null,
+        lastSyncSuccess: null,
+        lastError: null,
+        messagesSynced: 0,
+      });
+
+      // Test connection
+      const connected = await testTenantConnection(tenant);
+      const status = tenantStatuses.get(tenant.id)!;
+      status.connected = connected;
+      if (!connected) {
+        status.lastError = "Initial connection failed";
+      }
     }
+  }
+}
+
+// Control server for remote management
+function startControlServer(): void {
+  const port = parseInt(process.env.CONTROL_PORT || "3001", 10);
+  const authToken = process.env.CONTROL_AUTH_TOKEN;
+
+  if (!authToken) {
+    logger.warn("CONTROL_AUTH_TOKEN not set - control server disabled");
+    return;
+  }
+
+  const server = http.createServer(async (req, res) => {
+    // CORS headers
+    res.setHeader("Access-Control-Allow-Origin", "*");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Authorization, Content-Type");
+
+    if (req.method === "OPTIONS") {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    // Auth check
+    const authHeader = req.headers.authorization;
+    if (authHeader !== `Bearer ${authToken}`) {
+      res.writeHead(401, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ error: "Unauthorized" }));
+      return;
+    }
+
+    const url = new URL(req.url || "/", `http://localhost:${port}`);
+
+    // Status endpoint
+    if (url.pathname === "/status" && req.method === "GET") {
+      const tenants = Array.from(tenantStatuses.values()).map(t => ({
+        id: t.id,
+        name: t.name,
+        host: t.host,
+        connected: t.connected,
+        lastSyncTime: t.lastSyncTime?.toISOString() || null,
+        lastSyncSuccess: t.lastSyncSuccess,
+        lastError: t.lastError,
+        messagesSynced: t.messagesSynced,
+      }));
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({
+        status: "running",
+        isSyncing,
+        lastSyncTime: lastSyncTime?.toISOString() || null,
+        lastSyncResult,
+        uptime: process.uptime(),
+        tenants,
+        configuredTenants: tenants.length,
+        connectedTenants: tenants.filter(t => t.connected).length,
+      }));
+      return;
+    }
+
+    // Tenants endpoint - detailed tenant info
+    if (url.pathname === "/tenants" && req.method === "GET") {
+      const tenants = Array.from(tenantStatuses.values()).map(t => ({
+        id: t.id,
+        name: t.name,
+        host: t.host,
+        connected: t.connected,
+        lastSyncTime: t.lastSyncTime?.toISOString() || null,
+        lastSyncSuccess: t.lastSyncSuccess,
+        lastError: t.lastError,
+        messagesSynced: t.messagesSynced,
+      }));
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ tenants }));
+      return;
+    }
+
+    // Test connection endpoint
+    if (url.pathname === "/test-connections" && req.method === "POST") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Testing connections..." }));
+
+      // Test all connections in background
+      testAllConnections();
+      return;
+    }
+
+    // Manual sync trigger
+    if (url.pathname === "/sync" && req.method === "POST") {
+      if (isSyncing) {
+        res.writeHead(409, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "Sync already in progress" }));
+        return;
+      }
+
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Sync started" }));
+
+      // Run sync in background
+      runManualSync();
+      return;
+    }
+
+    // Restart endpoint - PM2 will auto-restart
+    if (url.pathname === "/restart" && req.method === "POST") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ message: "Restarting..." }));
+
+      logger.info("Restart requested via control API");
+      setTimeout(() => process.exit(0), 500);
+      return;
+    }
+
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ error: "Not found" }));
+  });
+
+  server.listen(port, () => {
+    logger.info(`Control server listening on port ${port}`);
+  });
+}
+
+async function testAllConnections(): Promise<void> {
+  logger.info("Testing all tenant connections...");
+  const tenants = await getActiveTenants();
+
+  for (const tenant of tenants) {
+    const connected = await testTenantConnection(tenant);
+    let status = tenantStatuses.get(tenant.id);
+
+    if (!status) {
+      status = {
+        id: tenant.id,
+        name: tenant.name,
+        host: tenant.threecx_host,
+        connected: false,
+        lastSyncTime: null,
+        lastSyncSuccess: null,
+        lastError: null,
+        messagesSynced: 0,
+      };
+      tenantStatuses.set(tenant.id, status);
+    }
+
+    status.connected = connected;
+    if (!connected) {
+      status.lastError = "Connection test failed";
+    } else {
+      status.lastError = null;
+    }
+
+    logger.info(`Tenant ${tenant.name}: ${connected ? "connected" : "failed"}`);
+  }
+}
+
+// Update tenant status after sync (called from sync module)
+export function updateTenantSyncStatus(
+  tenantId: string,
+  success: boolean,
+  messagesSynced: number,
+  error?: string
+): void {
+  const status = tenantStatuses.get(tenantId);
+  if (status) {
+    status.lastSyncTime = new Date();
+    status.lastSyncSuccess = success;
+    status.connected = success;
+    if (success) {
+      status.messagesSynced += messagesSynced;
+      status.lastError = null;
+    } else {
+      status.lastError = error || "Sync failed";
+    }
+  }
+}
+
+// Update tenant statuses from sync results
+function updateTenantStatusesFromResults(results: Array<{
+  tenantId: string;
+  tenantName: string;
+  success: boolean;
+  error?: string;
+  messages: { messagesSynced: number };
+}>): void {
+  for (const result of results) {
+    let status = tenantStatuses.get(result.tenantId);
+
+    if (!status) {
+      status = {
+        id: result.tenantId,
+        name: result.tenantName,
+        host: null,
+        connected: false,
+        lastSyncTime: null,
+        lastSyncSuccess: null,
+        lastError: null,
+        messagesSynced: 0,
+      };
+      tenantStatuses.set(result.tenantId, status);
+    }
+
+    status.lastSyncTime = new Date();
+    status.lastSyncSuccess = result.success;
+    status.connected = result.success;
+
+    if (result.success) {
+      status.messagesSynced += result.messages.messagesSynced;
+      status.lastError = null;
+    } else {
+      status.lastError = result.error || "Sync failed";
+    }
+  }
+}
+
+async function runManualSync(): Promise<void> {
+  if (isSyncing) return;
+
+  isSyncing = true;
+  logger.info("Manual sync triggered");
+
+  try {
+    const result = await runMultiTenantSync();
+    lastSyncTime = new Date();
+    lastSyncResult = result;
+
+    // Update per-tenant statuses
+    updateTenantStatusesFromResults(result.results);
+
+    logger.info("Manual sync completed", {
+      successCount: result.successCount,
+      failureCount: result.failureCount,
+      duration: `${result.totalDuration}ms`,
+    });
+  } catch (error) {
+    logger.error("Manual sync failed", { error: (error as Error).message });
+  } finally {
+    isSyncing = false;
   }
 }
 
@@ -62,11 +342,23 @@ async function main(): Promise<void> {
   try {
     await initialize();
 
+    // Start control server
+    startControlServer();
+
     // Run initial sync
     logger.info("");
     logger.info("Running initial sync...");
 
+    isSyncing = true;
     const result = await runMultiTenantSync();
+    lastSyncTime = new Date();
+    lastSyncResult = result;
+
+    // Update per-tenant statuses
+    updateTenantStatusesFromResults(result.results);
+
+    isSyncing = false;
+
     logger.info("Initial sync completed", {
       successCount: result.successCount,
       failureCount: result.failureCount,
