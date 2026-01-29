@@ -15,9 +15,9 @@ export default function DashboardLayout({
         <ImpersonationBanner />
         <div className="flex h-screen bg-gradient-to-br from-slate-50 via-gray-50 to-slate-100">
           <Sidebar />
-          <div className="flex flex-1 flex-col overflow-hidden">
+          <div className="flex flex-1 flex-col min-w-0 overflow-hidden">
             <Header />
-            <main className="flex-1 overflow-auto">
+            <main className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
               {children}
             </main>
           </div>

@@ -65,18 +65,19 @@ export async function upsertConversation(conversation: {
     insertData.tenant_id = conversation.tenant_id;
   }
 
+  // Use correct column order to match the unique index: (tenant_id, threecx_conversation_id)
   const { data, error } = await client
     .from("conversations")
     .upsert(insertData, {
       onConflict: conversation.tenant_id
-        ? "threecx_conversation_id,tenant_id"
+        ? "tenant_id,threecx_conversation_id"
         : "threecx_conversation_id"
     })
     .select("id")
     .single();
 
   if (error) {
-    throw new SupabaseError("Failed to upsert conversation", { error });
+    throw new SupabaseError("Failed to upsert conversation", { error, insertData });
   }
 
   return data.id;
@@ -116,11 +117,22 @@ export async function upsertParticipant(participant: {
   }
 
   if (existing) {
-    // Update extension_id if it was missing
+    // Update extension_id if it was missing, and always update display name
+    const updates: Record<string, unknown> = {};
+
     if (!existing.extension_id && extensionId) {
+      updates.extension_id = extensionId;
+    }
+
+    // Always update the display name if provided (to capture name changes)
+    if (participant.display_name) {
+      updates.external_name = participant.display_name;
+    }
+
+    if (Object.keys(updates).length > 0) {
       await client
         .from("participants")
-        .update({ extension_id: extensionId })
+        .update(updates)
         .eq("id", existing.id);
     }
     return;
@@ -264,27 +276,36 @@ export async function upsertExtension(extension: {
     [extension.first_name, extension.last_name].filter(Boolean).join(" ") ||
     null;
 
+  const now = new Date().toISOString();
   const insertData: Record<string, unknown> = {
     extension_number: extension.extension_number,
     first_name: extension.first_name,
     last_name: extension.last_name,
     display_name: displayName,
     email: extension.email,
-    last_synced_at: new Date().toISOString(),
+    last_synced_at: now,
+    updated_at: now,
   };
 
   if (extension.tenant_id) {
     insertData.tenant_id = extension.tenant_id;
   }
 
+  // Use correct column order to match the unique index: (tenant_id, extension_number)
   const { error } = await client.from("extensions").upsert(insertData, {
     onConflict: extension.tenant_id
-      ? "extension_number,tenant_id"
-      : "extension_number"
+      ? "tenant_id,extension_number"
+      : "extension_number",
+    // ignoreDuplicates: false is the default, ensuring updates happen
   });
 
   if (error) {
-    logger.warn("Failed to upsert extension", { error, extension });
+    logger.warn("Failed to upsert extension", {
+      error,
+      extension,
+      onConflict: extension.tenant_id ? "tenant_id,extension_number" : "extension_number"
+    });
+    throw new Error(`Failed to upsert extension ${extension.extension_number}: ${error.message}`);
   }
 }
 
