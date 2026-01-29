@@ -9,9 +9,10 @@ import type { MessageWithMedia } from "@/types";
 interface MessageListProps {
   conversationId: string;
   initialMessages?: MessageWithMedia[];
+  loadAll?: boolean; // If true, automatically loads all messages for full history access
 }
 
-export function MessageList({ conversationId, initialMessages }: MessageListProps) {
+export function MessageList({ conversationId, initialMessages, loadAll = false }: MessageListProps) {
   const [messages, setMessages] = useState<MessageWithMedia[]>(initialMessages || []);
   const [isLoading, setIsLoading] = useState(!initialMessages);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -85,6 +86,13 @@ export function MessageList({ conversationId, initialMessages }: MessageListProp
     }
   }, [conversationId, initialMessages, fetchMessages]);
 
+  // Auto-load all messages when loadAll is true
+  useEffect(() => {
+    if (loadAll && hasMore && !isLoadingMore && !isLoading && oldestTimestamp) {
+      fetchMessages(oldestTimestamp);
+    }
+  }, [loadAll, hasMore, isLoadingMore, isLoading, oldestTimestamp, fetchMessages]);
+
   const handleScroll = () => {
     if (!containerRef.current || isLoadingMore || !hasMore) return;
 
@@ -153,8 +161,11 @@ export function MessageList({ conversationId, initialMessages }: MessageListProp
       className="flex-1 overflow-y-auto p-4 space-y-4"
     >
       {isLoadingMore && (
-        <div className="flex justify-center py-4">
+        <div className="flex justify-center items-center gap-2 py-4">
           <Spinner size="sm" />
+          {loadAll && hasMore && (
+            <span className="text-sm text-gray-500">Loading full history...</span>
+          )}
         </div>
       )}
 
