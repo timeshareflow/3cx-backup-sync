@@ -21,10 +21,6 @@ export async function GET(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!context.tenantId) {
-      return NextResponse.json({ error: "No tenant context" }, { status: 403 });
-    }
-
     const supabase = createAdminClient();
 
     // Check if current user is admin or super_admin
@@ -34,9 +30,13 @@ export async function GET(request: Request, { params }: RouteParams) {
       .eq("id", context.userId)
       .single();
 
-    const isAdmin = currentProfile?.role === "admin" || currentProfile?.role === "super_admin";
+    const isSuperAdmin = currentProfile?.role === "super_admin";
+    const isAdmin = currentProfile?.role === "admin" || isSuperAdmin;
 
     if (!isAdmin) {
+      if (!context.tenantId) {
+        return NextResponse.json({ error: "No tenant context" }, { status: 403 });
+      }
       // Check if user is a tenant admin
       const { data: tenantRole } = await supabase
         .from("user_tenants")
@@ -50,16 +50,42 @@ export async function GET(request: Request, { params }: RouteParams) {
       }
     }
 
-    // Verify target user belongs to this tenant
-    const { data: targetTenant } = await supabase
-      .from("user_tenants")
-      .select("tenant_id")
-      .eq("user_id", targetUserId)
-      .eq("tenant_id", context.tenantId)
-      .single();
+    // For super admins without tenant context, get the user's first tenant
+    // For regular admins, use the current tenant context
+    let targetTenantId: string | null = context.tenantId;
 
-    if (!targetTenant) {
-      return NextResponse.json({ error: "User not found in this tenant" }, { status: 404 });
+    if (isSuperAdmin && !targetTenantId) {
+      // Super admin without tenant context - get the user's first tenant
+      const { data: userTenants } = await supabase
+        .from("user_tenants")
+        .select("tenant_id")
+        .eq("user_id", targetUserId)
+        .limit(1);
+
+      if (!userTenants || userTenants.length === 0) {
+        // User has no tenant, return empty permissions
+        return NextResponse.json({
+          extensionIds: [],
+          groupChatIds: [],
+        });
+      }
+      targetTenantId = userTenants[0].tenant_id;
+    } else if (!isSuperAdmin && context.tenantId) {
+      // Regular admin - verify target user belongs to this tenant
+      const { data: targetTenant } = await supabase
+        .from("user_tenants")
+        .select("tenant_id")
+        .eq("user_id", targetUserId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      if (!targetTenant) {
+        return NextResponse.json({ error: "User not found in this tenant" }, { status: 404 });
+      }
+    }
+
+    if (!targetTenantId) {
+      return NextResponse.json({ error: "No tenant context available" }, { status: 403 });
     }
 
     // Get user's extension permissions
@@ -67,14 +93,14 @@ export async function GET(request: Request, { params }: RouteParams) {
       .from("user_extension_permissions")
       .select("extension_id")
       .eq("user_id", targetUserId)
-      .eq("tenant_id", context.tenantId);
+      .eq("tenant_id", targetTenantId);
 
     // Get user's group chat permissions
     const { data: groupChatPermissions } = await supabase
       .from("user_group_chat_permissions")
       .select("conversation_id")
       .eq("user_id", targetUserId)
-      .eq("tenant_id", context.tenantId);
+      .eq("tenant_id", targetTenantId);
 
     return NextResponse.json({
       extensionIds: (extensionPermissions || []).map(p => p.extension_id),
@@ -96,10 +122,6 @@ export async function PUT(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    if (!context.tenantId) {
-      return NextResponse.json({ error: "No tenant context" }, { status: 403 });
-    }
-
     const supabase = createAdminClient();
 
     // Check if current user is admin or super_admin
@@ -113,6 +135,9 @@ export async function PUT(request: Request, { params }: RouteParams) {
     const isAdmin = currentProfile?.role === "admin" || isSuperAdmin;
 
     if (!isAdmin) {
+      if (!context.tenantId) {
+        return NextResponse.json({ error: "No tenant context" }, { status: 403 });
+      }
       // Check if user is a tenant admin
       const { data: tenantRole } = await supabase
         .from("user_tenants")
@@ -126,16 +151,38 @@ export async function PUT(request: Request, { params }: RouteParams) {
       }
     }
 
-    // Verify target user belongs to this tenant
-    const { data: targetTenant } = await supabase
-      .from("user_tenants")
-      .select("tenant_id")
-      .eq("user_id", targetUserId)
-      .eq("tenant_id", context.tenantId)
-      .single();
+    // For super admins without tenant context, get the user's first tenant
+    // For regular admins, use the current tenant context
+    let targetTenantId: string | null = context.tenantId;
 
-    if (!targetTenant) {
-      return NextResponse.json({ error: "User not found in this tenant" }, { status: 404 });
+    if (isSuperAdmin && !targetTenantId) {
+      // Super admin without tenant context - get the user's first tenant
+      const { data: userTenants } = await supabase
+        .from("user_tenants")
+        .select("tenant_id")
+        .eq("user_id", targetUserId)
+        .limit(1);
+
+      if (!userTenants || userTenants.length === 0) {
+        return NextResponse.json({ error: "User has no tenant access" }, { status: 400 });
+      }
+      targetTenantId = userTenants[0].tenant_id;
+    } else if (!isSuperAdmin && context.tenantId) {
+      // Regular admin - verify target user belongs to this tenant
+      const { data: targetTenant } = await supabase
+        .from("user_tenants")
+        .select("tenant_id")
+        .eq("user_id", targetUserId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      if (!targetTenant) {
+        return NextResponse.json({ error: "User not found in this tenant" }, { status: 404 });
+      }
+    }
+
+    if (!targetTenantId) {
+      return NextResponse.json({ error: "No tenant context available" }, { status: 403 });
     }
 
     const body: PermissionsPayload = await request.json();
@@ -146,7 +193,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       .from("user_extension_permissions")
       .delete()
       .eq("user_id", targetUserId)
-      .eq("tenant_id", context.tenantId);
+      .eq("tenant_id", targetTenantId);
 
     if (delExtError) {
       console.error("Error deleting extension permissions:", delExtError);
@@ -157,7 +204,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     if (extensionIds.length > 0) {
       const extensionPermissions = extensionIds.map(extensionId => ({
         user_id: targetUserId,
-        tenant_id: context.tenantId,
+        tenant_id: targetTenantId,
         extension_id: extensionId,
         created_by: context.userId,
       }));
@@ -177,7 +224,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
       .from("user_group_chat_permissions")
       .delete()
       .eq("user_id", targetUserId)
-      .eq("tenant_id", context.tenantId);
+      .eq("tenant_id", targetTenantId);
 
     if (delChatError) {
       console.error("Error deleting group chat permissions:", delChatError);
@@ -188,7 +235,7 @@ export async function PUT(request: Request, { params }: RouteParams) {
     if (groupChatIds.length > 0) {
       const groupChatPermissions = groupChatIds.map(conversationId => ({
         user_id: targetUserId,
-        tenant_id: context.tenantId,
+        tenant_id: targetTenantId,
         conversation_id: conversationId,
         created_by: context.userId,
       }));
