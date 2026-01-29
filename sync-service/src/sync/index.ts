@@ -11,6 +11,9 @@ import { syncCdr, CdrSyncResult } from "./cdr";
 import { createSyncLog, updateSyncLog } from "../storage/supabase";
 import { TenantConfig, getActiveTenants, getTenantPool, testTenantConnection } from "../tenant";
 
+// Sync types for granular scheduling
+export type SyncType = "messages" | "media" | "recordings" | "voicemails" | "faxes" | "meetings" | "cdr" | "extensions";
+
 // Global timeout for entire tenant sync operation (10 minutes)
 const TENANT_SYNC_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -344,4 +347,117 @@ export async function runMultiTenantSync(options?: {
     skippedCount,
     circuitStates,
   };
+}
+
+// Run specific sync types for granular scheduling
+export async function runMultiTenantSyncByType(
+  syncTypes: SyncType[],
+  tenantIds?: string[]
+): Promise<void> {
+  const startTime = Date.now();
+
+  // Get all active tenants with configured 3CX connections
+  let tenants = await getActiveTenants();
+
+  // Filter to specific tenants if provided
+  if (tenantIds && tenantIds.length > 0) {
+    const tenantIdSet = new Set(tenantIds);
+    tenants = tenants.filter((t) => tenantIdSet.has(t.id));
+  }
+
+  if (tenants.length === 0) {
+    return;
+  }
+
+  const syncTypesStr = syncTypes.join(", ");
+
+  for (const tenant of tenants) {
+    // Check circuit breaker
+    const circuitCheck = canExecute(tenant.id);
+    if (!circuitCheck.allowed) {
+      logger.debug(`Skipping ${syncTypesStr} sync for ${tenant.name} - circuit breaker open`);
+      continue;
+    }
+
+    try {
+      // Test connection with short timeout
+      const connected = await withTimeout(
+        testTenantConnection(tenant),
+        15000,
+        `Connection test for ${tenant.name}`
+      );
+
+      if (!connected) {
+        recordFailure(tenant.id, `Connection failed for ${syncTypesStr} sync`);
+        continue;
+      }
+
+      // Get database pool
+      const pool = await getTenantPool(tenant);
+      if (!pool) {
+        logger.warn(`No pool available for tenant ${tenant.name}`);
+        continue;
+      }
+
+      // Run requested sync types
+      for (const syncType of syncTypes) {
+        try {
+          switch (syncType) {
+            case "messages":
+              if (tenant.backup_chats) {
+                await syncMessages(100, pool, tenant.id);
+              }
+              break;
+
+            case "media":
+              await syncMedia(tenant);
+              break;
+
+            case "recordings":
+              await syncRecordings(tenant, pool);
+              break;
+
+            case "voicemails":
+              await syncVoicemails(tenant);
+              break;
+
+            case "faxes":
+              await syncFaxes(tenant);
+              break;
+
+            case "meetings":
+              await syncMeetings(tenant);
+              break;
+
+            case "cdr":
+              if (tenant.backup_cdr) {
+                await syncCdr(pool, tenant.id);
+              }
+              break;
+
+            case "extensions":
+              await syncExtensions(pool, tenant.id);
+              break;
+          }
+        } catch (err) {
+          logger.warn(`${syncType} sync failed for ${tenant.name}`, {
+            error: (err as Error).message,
+          });
+        }
+      }
+
+      recordSuccess(tenant.id);
+    } catch (error) {
+      const err = error as Error;
+      recordFailure(tenant.id, err.message);
+      logger.error(`${syncTypesStr} sync failed for ${tenant.name}`, {
+        error: err.message,
+      });
+    }
+  }
+
+  const duration = Date.now() - startTime;
+  if (duration > 5000) {
+    logger.debug(`${syncTypesStr} sync completed in ${duration}ms for ${tenants.length} tenants`);
+  }
 }

@@ -14,8 +14,14 @@ interface FeaturePermissions {
   canViewFaxes: boolean;
 }
 
+interface ExtensionPermission {
+  extensionId: string;
+  canAccessRecordings: boolean;
+}
+
 interface PermissionsPayload {
-  extensionIds: string[];
+  extensionIds?: string[]; // Legacy support
+  extensionPermissions?: ExtensionPermission[]; // New format with recording toggle
   groupChatIds: string[];
   featurePermissions?: FeaturePermissions;
 }
@@ -97,10 +103,10 @@ export async function GET(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: "No tenant context available" }, { status: 403 });
     }
 
-    // Get user's extension permissions
+    // Get user's extension permissions with recording toggle
     const { data: extensionPermissions } = await supabase
       .from("user_extension_permissions")
-      .select("extension_id")
+      .select("extension_id, can_access_recordings")
       .eq("user_id", targetUserId)
       .eq("tenant_id", targetTenantId);
 
@@ -120,7 +126,13 @@ export async function GET(request: Request, { params }: RouteParams) {
       .single();
 
     return NextResponse.json({
+      // Legacy format for backwards compatibility
       extensionIds: (extensionPermissions || []).map(p => p.extension_id),
+      // New format with recording toggle
+      extensionPermissions: (extensionPermissions || []).map(p => ({
+        extensionId: p.extension_id,
+        canAccessRecordings: p.can_access_recordings ?? false,
+      })),
       groupChatIds: (groupChatPermissions || []).map(p => p.conversation_id),
       featurePermissions: featurePermissions ? {
         canViewCdr: featurePermissions.can_view_cdr ?? true,
@@ -217,7 +229,23 @@ export async function PUT(request: Request, { params }: RouteParams) {
     }
 
     const body: PermissionsPayload = await request.json();
-    const { extensionIds = [], groupChatIds = [], featurePermissions } = body;
+    const { extensionIds = [], extensionPermissions: extPerms = [], groupChatIds = [], featurePermissions } = body;
+
+    // Normalize extension permissions - support both old and new format
+    // Old format: extensionIds: string[]
+    // New format: extensionPermissions: Array<{ extensionId: string; canAccessRecordings: boolean }>
+    let normalizedExtPermissions: ExtensionPermission[] = [];
+
+    if (extPerms.length > 0) {
+      // New format provided
+      normalizedExtPermissions = extPerms;
+    } else if (extensionIds.length > 0) {
+      // Legacy format - convert to new format with recordings disabled by default
+      normalizedExtPermissions = extensionIds.map(id => ({
+        extensionId: id,
+        canAccessRecordings: false,
+      }));
+    }
 
     // Delete existing extension permissions for this user/tenant
     const { error: delExtError } = await supabase
@@ -231,18 +259,19 @@ export async function PUT(request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: `Failed to clear extension permissions: ${delExtError.message}` }, { status: 500 });
     }
 
-    // Insert new extension permissions
-    if (extensionIds.length > 0) {
-      const extensionPermissions = extensionIds.map(extensionId => ({
+    // Insert new extension permissions with recording toggle
+    if (normalizedExtPermissions.length > 0) {
+      const extensionPermissionsData = normalizedExtPermissions.map(perm => ({
         user_id: targetUserId,
         tenant_id: targetTenantId,
-        extension_id: extensionId,
+        extension_id: perm.extensionId,
+        can_access_recordings: perm.canAccessRecordings,
         created_by: context.userId,
       }));
 
       const { error: extError } = await supabase
         .from("user_extension_permissions")
-        .insert(extensionPermissions);
+        .insert(extensionPermissionsData);
 
       if (extError) {
         console.error("Error inserting extension permissions:", extError);

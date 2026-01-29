@@ -398,6 +398,11 @@ WHERE has_media = false
         name: "Grant permissions on user_feature_permissions",
         sql: `GRANT ALL ON user_feature_permissions TO anon, authenticated, service_role;`,
       },
+      // Add can_access_recordings to user_extension_permissions for per-extension recording control
+      {
+        name: "Add can_access_recordings column to user_extension_permissions",
+        sql: `ALTER TABLE user_extension_permissions ADD COLUMN IF NOT EXISTS can_access_recordings BOOLEAN NOT NULL DEFAULT false;`,
+      },
     ];
 
     for (const migration of migrations) {

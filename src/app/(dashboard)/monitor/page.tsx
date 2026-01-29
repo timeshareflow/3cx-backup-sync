@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Navigation } from "@/components/layout/Navigation";
 import { MessageList } from "@/components/chat/MessageList";
+import { ActivityFeed } from "@/components/monitor/ActivityFeed";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { Plus, X, Columns, Maximize2, Minimize2 } from "lucide-react";
+import { Plus, X, Columns, Maximize2, Minimize2, LayoutGrid, List } from "lucide-react";
 
 interface Conversation {
   id: string;
@@ -27,7 +28,10 @@ interface MonitorPanel {
   isMaximized: boolean;
 }
 
+type ViewMode = "grid" | "feed";
+
 export default function MonitorPage() {
+  const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [panels, setPanels] = useState<MonitorPanel[]>([]);
   const [showSelector, setShowSelector] = useState(false);
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -37,23 +41,35 @@ export default function MonitorPage() {
   const initialLoadDone = useRef(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Save selected conversation IDs to user preferences (debounced)
-  const saveMonitorPreferences = useCallback((conversationIds: string[]) => {
+  // Save selected conversation IDs and view mode to user preferences (debounced)
+  const saveMonitorPreferences = useCallback((conversationIds: string[], mode?: ViewMode) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
     saveTimeoutRef.current = setTimeout(async () => {
       try {
+        const body: { monitorConversationIds: string[]; monitorViewMode?: ViewMode } = {
+          monitorConversationIds: conversationIds,
+        };
+        if (mode !== undefined) {
+          body.monitorViewMode = mode;
+        }
         await fetch("/api/user/preferences", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ monitorConversationIds: conversationIds }),
+          body: JSON.stringify(body),
         });
       } catch (error) {
         console.error("Failed to save monitor preferences:", error);
       }
     }, 500);
   }, []);
+
+  // Save view mode change
+  const handleViewModeChange = useCallback((mode: ViewMode) => {
+    setViewMode(mode);
+    saveMonitorPreferences(panels.map((p) => p.conversation.id), mode);
+  }, [panels, saveMonitorPreferences]);
 
   const fetchConversations = useCallback(async (): Promise<Conversation[]> => {
     setIsLoadingConversations(true);
@@ -89,6 +105,10 @@ export default function MonitorPage() {
           const prefsData = await prefsResponse.json();
           const savedIds: string[] =
             prefsData.preferences?.monitorConversationIds || [];
+          const savedViewMode: ViewMode =
+            prefsData.preferences?.monitorViewMode || "grid";
+
+          setViewMode(savedViewMode);
 
           if (savedIds.length > 0 && convList.length > 0) {
             const savedPanels: MonitorPanel[] = [];
@@ -207,22 +227,56 @@ export default function MonitorPage() {
               Multi-Chat Monitor
             </h1>
             <p className="text-sm text-gray-500 mt-1">
-              View multiple conversations simultaneously
+              {viewMode === "grid"
+                ? "View multiple conversations simultaneously"
+                : "Live activity feed from all conversations"}
             </p>
           </div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-500 flex items-center gap-1">
-              <Columns className="h-4 w-4" />
-              {panels.length} active
-            </span>
-            <Button
-              onClick={() => setShowSelector(true)}
-              className="flex items-center gap-2"
-              disabled={showSelector}
-            >
-              <Plus className="h-4 w-4" />
-              Add Conversation
-            </Button>
+          <div className="flex items-center gap-3">
+            {/* View Toggle */}
+            <div className="flex items-center bg-slate-100 rounded-lg p-1">
+              <button
+                onClick={() => handleViewModeChange("grid")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  viewMode === "grid"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+                title="Grid View"
+              >
+                <LayoutGrid className="h-4 w-4" />
+                <span className="hidden sm:inline">Grid</span>
+              </button>
+              <button
+                onClick={() => handleViewModeChange("feed")}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  viewMode === "feed"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                }`}
+                title="Feed View"
+              >
+                <List className="h-4 w-4" />
+                <span className="hidden sm:inline">Feed</span>
+              </button>
+            </div>
+
+            {viewMode === "grid" && (
+              <>
+                <span className="text-sm text-gray-500 flex items-center gap-1">
+                  <Columns className="h-4 w-4" />
+                  {panels.length} active
+                </span>
+                <Button
+                  onClick={() => setShowSelector(true)}
+                  className="flex items-center gap-2"
+                  disabled={showSelector}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Conversation
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </div>
@@ -293,86 +347,96 @@ export default function MonitorPage() {
         </div>
       )}
 
-      {/* Chat Panels */}
-      {panels.length === 0 ? (
-        <div className="flex-1 bg-white rounded-lg shadow flex items-center justify-center">
-          <div className="text-center">
-            <Columns className="h-12 w-12 text-gray-300 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">
-              No conversations selected
-            </h3>
-            <p className="text-gray-500 mb-4">
-              Click &quot;Add Conversation&quot; to start monitoring chats
-            </p>
-            <Button onClick={() => setShowSelector(true)}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Conversation
-            </Button>
-          </div>
-        </div>
-      ) : maximizedPanel ? (
-        // Show only maximized panel
-        <div className="flex-1 bg-white rounded-lg shadow overflow-hidden flex flex-col">
-          <div className="p-3 border-b bg-gray-50 flex items-center justify-between">
-            <h3 className="font-medium text-gray-900 truncate">
-              {getConversationTitle(maximizedPanel.conversation)}
-            </h3>
-            <div className="flex items-center gap-1">
-              <button
-                onClick={() => toggleMaximize(maximizedPanel.id)}
-                className="p-1.5 hover:bg-gray-200 rounded"
-                title="Minimize"
-              >
-                <Minimize2 className="h-4 w-4" />
-              </button>
-              <button
-                onClick={() => removePanel(maximizedPanel.id)}
-                className="p-1.5 hover:bg-red-100 text-red-600 rounded"
-                title="Remove"
-              >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-          </div>
-          <div className="flex-1 overflow-auto min-h-0">
-            <MessageList conversationId={maximizedPanel.conversation.id} />
-          </div>
+      {/* Content based on view mode */}
+      {viewMode === "feed" ? (
+        // Feed View
+        <div className="flex-1 bg-white rounded-lg shadow overflow-hidden">
+          <ActivityFeed />
         </div>
       ) : (
-        // Show grid of panels
-        <div className={`flex-1 grid ${getGridCols()} gap-4 overflow-auto`}>
-          {panels.map((panel) => (
-            <div
-              key={panel.id}
-              className="bg-white rounded-lg shadow overflow-hidden flex flex-col min-h-0"
-            >
-              <div className="p-3 border-b bg-gray-50 flex items-center justify-between shrink-0">
-                <h3 className="font-medium text-gray-900 truncate text-sm">
-                  {getConversationTitle(panel.conversation)}
+        // Grid View
+        <>
+          {panels.length === 0 ? (
+            <div className="flex-1 bg-white rounded-lg shadow flex items-center justify-center">
+              <div className="text-center">
+                <Columns className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">
+                  No conversations selected
+                </h3>
+                <p className="text-gray-500 mb-4">
+                  Click &quot;Add Conversation&quot; to start monitoring chats
+                </p>
+                <Button onClick={() => setShowSelector(true)}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Conversation
+                </Button>
+              </div>
+            </div>
+          ) : maximizedPanel ? (
+            // Show only maximized panel
+            <div className="flex-1 bg-white rounded-lg shadow overflow-hidden flex flex-col">
+              <div className="p-3 border-b bg-gray-50 flex items-center justify-between">
+                <h3 className="font-medium text-gray-900 truncate">
+                  {getConversationTitle(maximizedPanel.conversation)}
                 </h3>
                 <div className="flex items-center gap-1">
                   <button
-                    onClick={() => toggleMaximize(panel.id)}
-                    className="p-1 hover:bg-gray-200 rounded"
-                    title="Maximize"
+                    onClick={() => toggleMaximize(maximizedPanel.id)}
+                    className="p-1.5 hover:bg-gray-200 rounded"
+                    title="Minimize"
                   >
-                    <Maximize2 className="h-3.5 w-3.5" />
+                    <Minimize2 className="h-4 w-4" />
                   </button>
                   <button
-                    onClick={() => removePanel(panel.id)}
-                    className="p-1 hover:bg-red-100 text-red-600 rounded"
+                    onClick={() => removePanel(maximizedPanel.id)}
+                    className="p-1.5 hover:bg-red-100 text-red-600 rounded"
                     title="Remove"
                   >
-                    <X className="h-3.5 w-3.5" />
+                    <X className="h-4 w-4" />
                   </button>
                 </div>
               </div>
               <div className="flex-1 overflow-auto min-h-0">
-                <MessageList conversationId={panel.conversation.id} />
+                <MessageList conversationId={maximizedPanel.conversation.id} />
               </div>
             </div>
-          ))}
-        </div>
+          ) : (
+            // Show grid of panels
+            <div className={`flex-1 grid ${getGridCols()} gap-4 overflow-auto`}>
+              {panels.map((panel) => (
+                <div
+                  key={panel.id}
+                  className="bg-white rounded-lg shadow overflow-hidden flex flex-col min-h-0"
+                >
+                  <div className="p-3 border-b bg-gray-50 flex items-center justify-between shrink-0">
+                    <h3 className="font-medium text-gray-900 truncate text-sm">
+                      {getConversationTitle(panel.conversation)}
+                    </h3>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => toggleMaximize(panel.id)}
+                        className="p-1 hover:bg-gray-200 rounded"
+                        title="Maximize"
+                      >
+                        <Maximize2 className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        onClick={() => removePanel(panel.id)}
+                        className="p-1 hover:bg-red-100 text-red-600 rounded"
+                        title="Remove"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1 overflow-auto min-h-0">
+                    <MessageList conversationId={panel.conversation.id} />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
       )}
     </div>
   );

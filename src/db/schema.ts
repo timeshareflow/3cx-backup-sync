@@ -580,6 +580,7 @@ export const userExtensionPermissions = pgTable(
     userId: uuid("user_id").notNull().references(() => userProfiles.id, { onDelete: "cascade" }),
     tenantId: uuid("tenant_id").notNull().references(() => tenants.id, { onDelete: "cascade" }),
     extensionId: uuid("extension_id").notNull().references(() => extensions.id, { onDelete: "cascade" }),
+    canAccessRecordings: boolean("can_access_recordings").notNull().default(false),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
     createdBy: uuid("created_by").references(() => userProfiles.id),
   },

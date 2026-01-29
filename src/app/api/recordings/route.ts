@@ -25,6 +25,65 @@ export async function GET(request: NextRequest) {
     const supabase = createAdminClient();
     const offset = (page - 1) * pageSize;
 
+    // Check if user is admin (bypass permission filtering)
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("role")
+      .eq("id", context.userId)
+      .single();
+
+    const isSuperAdmin = profile?.role === "super_admin";
+    const isGlobalAdmin = profile?.role === "admin";
+
+    // Check if user is a tenant admin
+    let isTenantAdmin = false;
+    if (!isSuperAdmin && !isGlobalAdmin) {
+      const { data: tenantRole } = await supabase
+        .from("user_tenants")
+        .select("role")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      isTenantAdmin = tenantRole?.role === "admin";
+    }
+
+    const bypassFiltering = isSuperAdmin || isGlobalAdmin || isTenantAdmin;
+
+    // Get permitted extensions for recordings (if not admin)
+    let permittedExtensionNumbers: Set<string> | null = null;
+
+    if (!bypassFiltering) {
+      // Get extensions user has recording access to
+      const { data: extensionPermissions } = await supabase
+        .from("user_extension_permissions")
+        .select("extension_id, can_access_recordings, extensions(extension_number)")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .eq("can_access_recordings", true);
+
+      if (!extensionPermissions || extensionPermissions.length === 0) {
+        // User has no recording permissions
+        return NextResponse.json({
+          data: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          has_more: false,
+          message: "No recording access. Contact your administrator.",
+        });
+      }
+
+      permittedExtensionNumbers = new Set(
+        extensionPermissions
+          .map((p) => {
+            const ext = p.extensions as unknown as { extension_number: string } | null;
+            return ext?.extension_number;
+          })
+          .filter((n): n is string => !!n)
+      );
+    }
+
     // Build query
     let query = supabase
       .from("call_recordings")
@@ -33,8 +92,24 @@ export async function GET(request: NextRequest) {
       .order("started_at", { ascending: false })
       .range(offset, offset + pageSize - 1);
 
-    // Filter by extension if specified
+    // Filter by permitted extensions if not admin
+    if (permittedExtensionNumbers && permittedExtensionNumbers.size > 0) {
+      const extArray = Array.from(permittedExtensionNumbers);
+      query = query.in("extension_number", extArray);
+    }
+
+    // Filter by extension if specified (and user has access)
     if (extensionNumber) {
+      if (permittedExtensionNumbers && !permittedExtensionNumbers.has(extensionNumber)) {
+        return NextResponse.json({
+          data: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          has_more: false,
+          message: "No access to this extension's recordings.",
+        });
+      }
       query = query.eq("extension_number", extensionNumber);
     }
 
