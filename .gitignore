@@ -43,4 +43,13 @@ next-env.d.ts
 /sync-service/node_modules
 /sync-service/dist
 /sync-service/.env
+/sync-service/logs/
+/sync-service/sync.log
+/sync-service/sync-error.log
+/sync-service/media-backup-*/
+
+# Local settings
+.claude/settings.local.json
+
+# Misc
 nul
