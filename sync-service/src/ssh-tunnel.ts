@@ -34,6 +34,13 @@ export interface SshTunnel {
 // Track active tunnels per tenant
 const activeTunnels: Map<string, SshTunnel> = new Map();
 
+// Callback for when a tunnel dies - allows tenant.ts to clean up stale pools
+let onTunnelDiedCallback: ((tenantId: string) => void) | null = null;
+
+export function setOnTunnelDiedCallback(callback: (tenantId: string) => void): void {
+  onTunnelDiedCallback = callback;
+}
+
 // Find an available local port
 function getAvailablePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -161,12 +168,21 @@ async function attemptSshConnection(
       clearTimeout(connectionTimeout);
       logger.error(`SSH connection error for tenant`, { tenantId, error: err.message });
       server.close();
+      activeTunnels.delete(tenantId);
+      // Notify that tunnel died so pool can be cleaned up
+      if (onTunnelDiedCallback) {
+        onTunnelDiedCallback(tenantId);
+      }
       reject(err);
     });
 
     sshClient.on("close", () => {
       logger.warn(`SSH connection closed for tenant`, { tenantId });
       activeTunnels.delete(tenantId);
+      // Notify that tunnel died so pool can be cleaned up
+      if (onTunnelDiedCallback) {
+        onTunnelDiedCallback(tenantId);
+      }
     });
 
     sshClient.connect(sshConfig);

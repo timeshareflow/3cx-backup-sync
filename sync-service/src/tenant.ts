@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { getSupabaseClient } from "./storage/supabase";
 import { logger } from "./utils/logger";
 import { SftpConfig } from "./storage/sftp";
-import { createSshTunnel, closeTunnel, closeAllTunnels as closeAllSshTunnels } from "./ssh-tunnel";
+import { createSshTunnel, closeTunnel, closeAllTunnels as closeAllSshTunnels, setOnTunnelDiedCallback } from "./ssh-tunnel";
 
 // Raw tenant data from database (includes both old and new columns)
 interface RawTenantData {
@@ -101,6 +101,18 @@ function normalizeTenant(raw: RawTenantData): TenantConfig {
 
 // Cache for tenant database pools
 const tenantPools: Map<string, Pool> = new Map();
+
+// Register callback to clean up stale pools when SSH tunnel dies
+setOnTunnelDiedCallback((tenantId: string) => {
+  const pool = tenantPools.get(tenantId);
+  if (pool) {
+    logger.info(`Invalidating stale database pool after SSH tunnel died`, { tenantId });
+    pool.end().catch((err) => {
+      logger.error(`Error ending stale pool`, { tenantId, error: err.message });
+    });
+    tenantPools.delete(tenantId);
+  }
+});
 
 // Active user threshold - 5 minutes
 const ACTIVE_USER_THRESHOLD_MS = 5 * 60 * 1000;
@@ -263,6 +275,11 @@ export async function testTenantConnection(tenant: TenantConfig): Promise<boolea
       host: tenant.threecx_host,
       error: err.message,
     });
+
+    // Clean up stale pool and tunnel so next attempt creates fresh ones
+    logger.info(`Cleaning up stale connection resources for retry`, { tenantId: tenant.id });
+    await closeTenantPool(tenant.id);
+
     return false;
   }
 }

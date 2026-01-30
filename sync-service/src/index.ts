@@ -6,6 +6,7 @@ import { getSupabaseClient } from "./storage/supabase";
 import { startScheduler, stopScheduler } from "./scheduler";
 import { runMultiTenantSync } from "./sync";
 import { getActiveTenants, closeAllTenantPools, testTenantConnection } from "./tenant";
+import { resetAllCircuits } from "./utils/circuit-breaker";
 
 // Load environment variables
 dotenv.config();
@@ -52,6 +53,10 @@ async function initialize(): Promise<void> {
   // Validate environment
   await validateEnvironment();
   logger.info("Environment validated");
+
+  // Reset all circuit breakers on startup for clean slate
+  resetAllCircuits();
+  logger.info("Circuit breakers reset");
 
   // Test Supabase connection
   const supabase = getSupabaseClient();

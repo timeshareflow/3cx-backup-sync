@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { logger } from "./utils/logger";
 import { runMultiTenantSync, runMultiTenantSyncByType, SyncType } from "./sync";
 import { getSupabaseClient } from "./storage/supabase";
-import { getActiveUserTenants, getInactiveTenants } from "./tenant";
+import { getActiveTenants, getActiveUserTenants, getInactiveTenants } from "./tenant";
 
 // Track which sync types are currently running
 const runningSync: Set<SyncType | "full"> = new Set();
@@ -189,7 +189,7 @@ async function runCdrSync(): Promise<void> {
   }
 }
 
-// Run extensions sync (every hour)
+// Run extensions sync (every hour) - runs for ALL active tenants, not just those with active users
 async function runExtensionsSync(): Promise<void> {
   if (runningSync.has("extensions") || runningSync.has("full")) {
     logger.debug("Extensions sync skipped - already running");
@@ -197,18 +197,20 @@ async function runExtensionsSync(): Promise<void> {
   }
 
   try {
-    const activeTenants = await getActiveUserTenants();
-    if (activeTenants.length === 0) {
+    // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
+    // Extensions should sync regardless of user activity to keep names up to date
+    const allTenants = await getActiveTenants();
+    if (allTenants.length === 0) {
       return;
     }
 
     runningSync.add("extensions");
 
-    logger.info(`Extensions sync for ${activeTenants.length} tenant(s)`);
+    logger.info(`Extensions sync for ${allTenants.length} tenant(s)`);
 
     await runMultiTenantSyncByType(
       ["extensions"],
-      activeTenants.map((t) => t.id)
+      allTenants.map((t) => t.id)
     );
   } catch (error) {
     logger.error("Extensions sync failed", { error: (error as Error).message });
