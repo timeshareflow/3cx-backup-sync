@@ -297,7 +297,7 @@ export default function SignupPage() {
                     value={formData.address}
                     onChange={(e) => updateFormData("address", e.target.value)}
                     placeholder="123 Main St, City, State 12345"
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 min-h-[80px] resize-none"
+                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 min-h-[80px] resize-none bg-white text-slate-900 placeholder:text-slate-400"
                   />
                 </div>
               </div>
@@ -392,7 +392,7 @@ export default function SignupPage() {
                     value={formData.businessAddress}
                     onChange={(e) => updateFormData("businessAddress", e.target.value)}
                     placeholder="123 Business Ave, Suite 100, City, State 12345"
-                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 min-h-[80px] resize-none"
+                    className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 min-h-[80px] resize-none bg-white text-slate-900 placeholder:text-slate-400"
                   />
                 </div>
               </div>

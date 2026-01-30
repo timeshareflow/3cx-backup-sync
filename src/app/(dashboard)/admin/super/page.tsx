@@ -124,6 +124,28 @@ export default function SuperAdminPage() {
   const [testingChannel, setTestingChannel] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{ channel: string; success: boolean; message: string } | null>(null);
 
+  // Sync control state
+  const [syncStatus, setSyncStatus] = useState<{
+    status: string;
+    isSyncing: boolean;
+    lastSyncTime: string | null;
+    lastSyncResult: { successCount: number; failureCount: number; totalDuration: number } | null;
+    uptime: number;
+    tenants?: Array<{
+      id: string;
+      name: string;
+      host: string | null;
+      connected: boolean;
+      lastSyncTime: string | null;
+      lastSyncSuccess: boolean | null;
+      lastError: string | null;
+      messagesSynced: number;
+    }>;
+    configuredTenants?: number;
+    connectedTenants?: number;
+  } | null>(null);
+  const [syncActionLoading, setSyncActionLoading] = useState<string | null>(null);
+
   useEffect(() => {
     // Wait for auth to finish loading
     if (authLoading) return;
@@ -139,7 +161,45 @@ export default function SuperAdminPage() {
     fetchStats();
     fetchStoragePlans();
     fetchNotificationSettings();
+    fetchSyncStatus();
   }, [profile, authLoading, router]);
+
+  const fetchSyncStatus = async () => {
+    try {
+      const response = await fetch("/api/admin/sync-control");
+      if (response.ok) {
+        const data = await response.json();
+        setSyncStatus(data);
+      }
+    } catch (error) {
+      console.error("Failed to fetch sync status:", error);
+    }
+  };
+
+  const performSyncAction = async (action: "sync" | "restart") => {
+    setSyncActionLoading(action);
+    try {
+      const response = await fetch("/api/admin/sync-control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        alert(data.error || `Failed to ${action}`);
+      } else {
+        // Refresh status after action
+        setTimeout(() => fetchSyncStatus(), 1000);
+      }
+    } catch (error) {
+      console.error(`Failed to ${action}:`, error);
+      alert(`Failed to ${action}`);
+    } finally {
+      setSyncActionLoading(null);
+    }
+  };
 
   const fetchStats = async () => {
     try {
@@ -460,34 +520,145 @@ export default function SuperAdminPage() {
           <CardContent>
             <div className="space-y-5">
               <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                <span className="text-gray-600 font-medium">Status</span>
+                <span className="text-gray-600 font-medium">Service Status</span>
                 <span className={`flex items-center gap-2 font-semibold px-3 py-1 rounded-full text-sm ${
-                  stats?.syncStatus === "running"
+                  syncStatus?.status === "running"
                     ? "text-emerald-700 bg-emerald-100"
-                    : stats?.syncStatus === "error"
+                    : syncStatus?.status === "offline"
                     ? "text-red-700 bg-red-100"
                     : "text-gray-700 bg-gray-200"
                 }`}>
                   <span className={`h-2 w-2 rounded-full ${
-                    stats?.syncStatus === "running" ? "bg-emerald-500 animate-pulse" :
-                    stats?.syncStatus === "error" ? "bg-red-500" : "bg-gray-400"
+                    syncStatus?.status === "running" ? "bg-emerald-500 animate-pulse" :
+                    syncStatus?.status === "offline" ? "bg-red-500" : "bg-gray-400"
                   }`} />
-                  {stats?.syncStatus === "running" ? "Running" : stats?.syncStatus === "error" ? "Error" : "Idle"}
+                  {syncStatus?.status === "running" ? "Online" : syncStatus?.status === "offline" ? "Offline" : "Unknown"}
+                </span>
+              </div>
+              <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                <span className="text-gray-600 font-medium">Sync Status</span>
+                <span className={`flex items-center gap-2 font-semibold px-3 py-1 rounded-full text-sm ${
+                  syncStatus?.isSyncing
+                    ? "text-blue-700 bg-blue-100"
+                    : "text-gray-700 bg-gray-200"
+                }`}>
+                  {syncStatus?.isSyncing ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Syncing...
+                    </>
+                  ) : "Idle"}
                 </span>
               </div>
               <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
                 <span className="text-gray-600 font-medium">Last Sync</span>
                 <span className="font-semibold flex items-center gap-2 text-gray-900">
                   <Clock className="h-4 w-4 text-gray-400" />
-                  {stats?.lastSyncTime || "Never"}
+                  {syncStatus?.lastSyncTime
+                    ? new Date(syncStatus.lastSyncTime).toLocaleString()
+                    : stats?.lastSyncTime || "Never"}
                 </span>
               </div>
+              {syncStatus?.lastSyncResult && (
+                <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                  <span className="text-gray-600 font-medium">Last Result</span>
+                  <span className="font-semibold text-gray-900">
+                    {syncStatus.lastSyncResult.successCount} success, {syncStatus.lastSyncResult.failureCount} failed
+                  </span>
+                </div>
+              )}
               <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
                 <span className="text-gray-600 font-medium">Media Files</span>
                 <span className="font-semibold text-gray-900">{stats?.totalMediaFiles || 0}</span>
               </div>
-              <Button variant="outline" className="w-full">
-                View Sync Logs
+
+              {/* 3CX Connections */}
+              {syncStatus?.tenants && syncStatus.tenants.length > 0 && (
+                <div className="border-t pt-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-gray-600 font-medium">3CX Connections</span>
+                    <span className="text-sm text-gray-500">
+                      {syncStatus.connectedTenants}/{syncStatus.configuredTenants} connected
+                    </span>
+                  </div>
+                  <div className="space-y-2 max-h-48 overflow-y-auto">
+                    {syncStatus.tenants.map((tenant) => (
+                      <div
+                        key={tenant.id}
+                        className={`p-3 rounded-lg text-sm ${
+                          tenant.connected
+                            ? "bg-emerald-50 border border-emerald-200"
+                            : "bg-red-50 border border-red-200"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <span
+                              className={`h-2 w-2 rounded-full ${
+                                tenant.connected ? "bg-emerald-500" : "bg-red-500"
+                              }`}
+                            />
+                            <span className="font-medium">{tenant.name}</span>
+                          </div>
+                          <span className="text-xs text-gray-500">{tenant.host}</span>
+                        </div>
+                        {tenant.lastError && (
+                          <p className="text-xs text-red-600 mt-1">{tenant.lastError}</p>
+                        )}
+                        {tenant.lastSyncTime && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Last sync: {new Date(tenant.lastSyncTime).toLocaleString()}
+                            {tenant.messagesSynced > 0 && ` (${tenant.messagesSynced.toLocaleString()} msgs)`}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {syncStatus?.status === "running" && (!syncStatus.tenants || syncStatus.tenants.length === 0) && (
+                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl">
+                  <p className="text-sm text-amber-700">
+                    No tenants configured for sync. Add 3CX credentials in Manage Tenants.
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <Button
+                  variant="outline"
+                  className="w-full"
+                  onClick={() => performSyncAction("sync")}
+                  disabled={syncActionLoading !== null || syncStatus?.isSyncing || syncStatus?.status === "offline"}
+                >
+                  {syncActionLoading === "sync" ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Activity className="h-4 w-4 mr-2" />
+                  )}
+                  Sync Now
+                </Button>
+                <Button
+                  variant="outline"
+                  className="w-full text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                  onClick={() => {
+                    if (confirm("Are you sure you want to restart the sync service?")) {
+                      performSyncAction("restart");
+                    }
+                  }}
+                  disabled={syncActionLoading !== null || syncStatus?.status === "offline"}
+                >
+                  {syncActionLoading === "restart" ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Activity className="h-4 w-4 mr-2" />
+                  )}
+                  Restart Service
+                </Button>
+              </div>
+              <Button variant="ghost" className="w-full text-gray-500" onClick={fetchSyncStatus}>
+                Refresh Status
               </Button>
             </div>
           </CardContent>
@@ -908,7 +1079,7 @@ function PlanEditor({
             type="text"
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             required
           />
         </div>
@@ -918,7 +1089,7 @@ function PlanEditor({
             type="number"
             value={formData.storage_limit_gb}
             onChange={(e) => setFormData({ ...formData, storage_limit_gb: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             min="0"
             required
           />
@@ -930,7 +1101,7 @@ function PlanEditor({
             step="0.01"
             value={formData.price_monthly}
             onChange={(e) => setFormData({ ...formData, price_monthly: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             min="0"
             required
           />
@@ -942,7 +1113,7 @@ function PlanEditor({
             step="0.01"
             value={formData.price_yearly}
             onChange={(e) => setFormData({ ...formData, price_yearly: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             min="0"
           />
         </div>
@@ -953,7 +1124,7 @@ function PlanEditor({
             step="0.01"
             value={formData.overage_price_per_gb}
             onChange={(e) => setFormData({ ...formData, overage_price_per_gb: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             min="0"
             placeholder="0.15"
           />
@@ -974,7 +1145,7 @@ function PlanEditor({
           <textarea
             value={formData.features}
             onChange={(e) => setFormData({ ...formData, features: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             rows={4}
             placeholder="5 GB Storage&#10;Up to 10 users&#10;Email support"
           />
@@ -985,7 +1156,7 @@ function PlanEditor({
             type="text"
             value={formData.stripe_price_id_monthly}
             onChange={(e) => setFormData({ ...formData, stripe_price_id_monthly: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             placeholder="price_..."
           />
         </div>
@@ -995,7 +1166,7 @@ function PlanEditor({
             type="text"
             value={formData.stripe_price_id_yearly}
             onChange={(e) => setFormData({ ...formData, stripe_price_id_yearly: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 bg-white text-gray-900"
             placeholder="price_..."
           />
         </div>
@@ -1071,7 +1242,7 @@ function SmtpEditor({
             type="text"
             value={formData.host}
             onChange={(e) => setFormData({ ...formData, host: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-gray-900"
             placeholder="smtp.example.com"
             required
           />
@@ -1082,7 +1253,7 @@ function SmtpEditor({
             type="number"
             value={formData.port}
             onChange={(e) => setFormData({ ...formData, port: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-gray-900"
             required
           />
         </div>
@@ -1092,7 +1263,7 @@ function SmtpEditor({
             type="text"
             value={formData.username}
             onChange={(e) => setFormData({ ...formData, username: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-gray-900"
           />
         </div>
         <div>
@@ -1103,7 +1274,7 @@ function SmtpEditor({
             type="password"
             value={formData.password}
             onChange={(e) => setFormData({ ...formData, password: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-gray-900"
             placeholder={settings?.has_password ? "********" : ""}
           />
         </div>
@@ -1113,7 +1284,7 @@ function SmtpEditor({
             type="email"
             value={formData.from_email}
             onChange={(e) => setFormData({ ...formData, from_email: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-gray-900"
             placeholder="noreply@example.com"
             required
           />
@@ -1124,7 +1295,7 @@ function SmtpEditor({
             type="text"
             value={formData.from_name}
             onChange={(e) => setFormData({ ...formData, from_name: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-gray-900"
           />
         </div>
         <div>
@@ -1132,7 +1303,7 @@ function SmtpEditor({
           <select
             value={formData.encryption}
             onChange={(e) => setFormData({ ...formData, encryption: e.target.value as "none" | "ssl" | "tls" })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-violet-500 bg-white text-gray-900"
           >
             <option value="none">None</option>
             <option value="ssl">SSL</option>
@@ -1196,7 +1367,7 @@ function SmsEditor({
           <select
             value={formData.provider}
             onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900"
           >
             <option value="wiretap">Wiretap Telecom</option>
           </select>
@@ -1207,7 +1378,7 @@ function SmsEditor({
             type="text"
             value={formData.from_number}
             onChange={(e) => setFormData({ ...formData, from_number: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900"
             placeholder="+1234567890"
           />
         </div>
@@ -1219,7 +1390,7 @@ function SmsEditor({
             type="password"
             value={formData.api_key}
             onChange={(e) => setFormData({ ...formData, api_key: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900"
             placeholder={settings?.has_api_key ? "********" : ""}
           />
         </div>
@@ -1231,7 +1402,7 @@ function SmsEditor({
             type="password"
             value={formData.api_secret}
             onChange={(e) => setFormData({ ...formData, api_secret: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900"
             placeholder={settings?.has_api_secret ? "********" : ""}
           />
         </div>
@@ -1241,7 +1412,7 @@ function SmsEditor({
             type="url"
             value={formData.webhook_url}
             onChange={(e) => setFormData({ ...formData, webhook_url: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 bg-white text-gray-900"
             placeholder="https://your-app.com/api/sms/webhook"
           />
         </div>
@@ -1301,7 +1472,7 @@ function PushEditor({
           <select
             value={formData.provider}
             onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-white text-gray-900"
           >
             <option value="firebase">Firebase Cloud Messaging</option>
           </select>
@@ -1312,7 +1483,7 @@ function PushEditor({
             type="text"
             value={formData.firebase_project_id}
             onChange={(e) => setFormData({ ...formData, firebase_project_id: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-white text-gray-900"
             placeholder="my-firebase-project"
           />
         </div>
@@ -1322,7 +1493,7 @@ function PushEditor({
             type="email"
             value={formData.firebase_client_email}
             onChange={(e) => setFormData({ ...formData, firebase_client_email: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 bg-white text-gray-900"
             placeholder="firebase-adminsdk@project.iam.gserviceaccount.com"
           />
         </div>
@@ -1344,7 +1515,7 @@ function PushEditor({
           <textarea
             value={formData.firebase_private_key}
             onChange={(e) => setFormData({ ...formData, firebase_private_key: e.target.value })}
-            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 font-mono text-sm"
+            className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-amber-500 font-mono text-sm bg-white text-gray-900"
             rows={4}
             placeholder={settings?.has_firebase_key ? "Leave blank to keep current key" : "-----BEGIN PRIVATE KEY-----\\n...\\n-----END PRIVATE KEY-----"}
           />

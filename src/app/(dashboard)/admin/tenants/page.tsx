@@ -571,7 +571,7 @@ export default function TenantManagementPage() {
                   placeholder="123 Main St, City, State 12345"
                   value={createFormData.admin_address}
                   onChange={(e) => setCreateFormData({ ...createFormData, admin_address: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 min-h-[60px] resize-none"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 min-h-[60px] resize-none bg-white text-slate-900 placeholder:text-slate-400"
                 />
               </div>
             </div>
@@ -646,7 +646,7 @@ export default function TenantManagementPage() {
                   placeholder="123 Business Ave, Suite 100, City, State 12345"
                   value={createFormData.business_address}
                   onChange={(e) => setCreateFormData({ ...createFormData, business_address: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 min-h-[60px] resize-none"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-violet-500 focus:border-violet-500 min-h-[60px] resize-none bg-white text-slate-900 placeholder:text-slate-400"
                 />
               </div>
             </div>
@@ -777,7 +777,7 @@ export default function TenantManagementPage() {
                 <select
                   value={editFormData.storage_plan_id}
                   onChange={(e) => setEditFormData({ ...editFormData, storage_plan_id: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-teal-500 focus:border-teal-500 bg-white text-slate-900"
                 >
                   <option value="">No plan assigned</option>
                   {storagePlans.map((plan) => (
