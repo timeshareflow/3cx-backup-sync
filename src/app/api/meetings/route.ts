@@ -24,6 +24,52 @@ export async function GET(request: NextRequest) {
     const supabase = createAdminClient();
     const offset = (page - 1) * pageSize;
 
+    // Check if user is admin (bypass permission filtering)
+    const { data: profile } = await supabase
+      .from("user_profiles")
+      .select("role")
+      .eq("id", context.userId)
+      .single();
+
+    const isSuperAdmin = profile?.role === "super_admin";
+    const isGlobalAdmin = profile?.role === "admin";
+
+    // Check if user is a tenant admin
+    let isTenantAdmin = false;
+    if (!isSuperAdmin && !isGlobalAdmin) {
+      const { data: tenantRole } = await supabase
+        .from("user_tenants")
+        .select("role")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      isTenantAdmin = tenantRole?.role === "admin";
+    }
+
+    const bypassFiltering = isSuperAdmin || isGlobalAdmin || isTenantAdmin;
+
+    // Check feature permission for non-admins
+    if (!bypassFiltering) {
+      const { data: featurePerms } = await supabase
+        .from("user_feature_permissions")
+        .select("can_view_meetings")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      if (!featurePerms || !featurePerms.can_view_meetings) {
+        return NextResponse.json({
+          data: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          has_more: false,
+          message: "Meeting access is not enabled. Contact your administrator.",
+        });
+      }
+    }
+
     // Build query - use uploaded_at for ordering as it's the default timestamp
     // recorded_at may not exist on older table versions
     let query = supabase

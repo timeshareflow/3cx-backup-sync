@@ -58,11 +58,11 @@ export function UserPermissionsModal({
   const [extensionRecordingAccess, setExtensionRecordingAccess] = useState<Map<string, boolean>>(new Map());
   const [searchQuery, setSearchQuery] = useState("");
   const [featurePermissions, setFeaturePermissions] = useState<FeaturePermissions>({
-    canViewCdr: true,
-    canViewRecordings: true,
-    canViewMeetings: true,
-    canViewVoicemails: true,
-    canViewFaxes: true,
+    canViewCdr: false,
+    canViewRecordings: false,
+    canViewMeetings: false,
+    canViewVoicemails: false,
+    canViewFaxes: false,
   });
 
   // Fetch data when modal opens

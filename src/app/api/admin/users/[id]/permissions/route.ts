@@ -135,18 +135,18 @@ export async function GET(request: Request, { params }: RouteParams) {
       })),
       groupChatIds: (groupChatPermissions || []).map(p => p.conversation_id),
       featurePermissions: featurePermissions ? {
-        canViewCdr: featurePermissions.can_view_cdr ?? true,
-        canViewRecordings: featurePermissions.can_view_recordings ?? true,
-        canViewMeetings: featurePermissions.can_view_meetings ?? true,
-        canViewVoicemails: featurePermissions.can_view_voicemails ?? true,
-        canViewFaxes: featurePermissions.can_view_faxes ?? true,
+        canViewCdr: featurePermissions.can_view_cdr ?? false,
+        canViewRecordings: featurePermissions.can_view_recordings ?? false,
+        canViewMeetings: featurePermissions.can_view_meetings ?? false,
+        canViewVoicemails: featurePermissions.can_view_voicemails ?? false,
+        canViewFaxes: featurePermissions.can_view_faxes ?? false,
       } : {
-        // Defaults: all features enabled
-        canViewCdr: true,
-        canViewRecordings: true,
-        canViewMeetings: true,
-        canViewVoicemails: true,
-        canViewFaxes: true,
+        // Defaults: all features disabled (admins bypass restrictions anyway)
+        canViewCdr: false,
+        canViewRecordings: false,
+        canViewMeetings: false,
+        canViewVoicemails: false,
+        canViewFaxes: false,
       },
     });
   } catch (error) {

@@ -54,6 +54,26 @@ export async function GET(request: NextRequest) {
     let permittedExtensionNumbers: Set<string> | null = null;
 
     if (!bypassFiltering) {
+      // First check if user has the recordings feature enabled
+      const { data: featurePerms } = await supabase
+        .from("user_feature_permissions")
+        .select("can_view_recordings")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      // If no feature permissions record exists or recordings is disabled, deny access
+      if (!featurePerms || !featurePerms.can_view_recordings) {
+        return NextResponse.json({
+          data: [],
+          total: 0,
+          page,
+          page_size: pageSize,
+          has_more: false,
+          message: "Recording access is not enabled. Contact your administrator.",
+        });
+      }
+
       // Get extensions user has recording access to
       const { data: extensionPermissions } = await supabase
         .from("user_extension_permissions")
