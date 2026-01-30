@@ -136,7 +136,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // Try to restore from localStorage
           const savedTenantId = localStorage.getItem("currentTenantId");
           const savedTenant = formattedTenants.find(t => t.tenant_id === savedTenantId);
-          setCurrentTenant(savedTenant || formattedTenants[0]);
+          const tenantToSet = savedTenant || formattedTenants[0];
+          setCurrentTenant(tenantToSet);
+          // Set cookie for server-side API access
+          document.cookie = `currentTenantId=${tenantToSet.tenant_id}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
         }
       }
     } catch (error) {
@@ -201,6 +204,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const handleSetCurrentTenant = (tenant: Tenant) => {
     setCurrentTenant(tenant);
     localStorage.setItem("currentTenantId", tenant.tenant_id);
+    // Set cookie for server-side API access
+    document.cookie = `currentTenantId=${tenant.tenant_id}; path=/; max-age=${60 * 60 * 24 * 30}; samesite=lax`;
   };
 
   const handleSetViewingAsTenant = async (tenant: PlatformTenant | null) => {

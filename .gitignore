@@ -51,5 +51,9 @@ next-env.d.ts
 # Local settings
 .claude/settings.local.json
 
+# Debug/utility scripts (local only)
+/scripts/
+/src/app/api/debug/
+
 # Misc
 nul
