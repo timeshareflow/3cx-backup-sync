@@ -158,7 +158,7 @@ export function MessageList({ conversationId, initialMessages, loadAll = false }
     <div
       ref={containerRef}
       onScroll={handleScroll}
-      className="flex-1 overflow-y-auto p-4 space-y-4"
+      className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4"
     >
       {isLoadingMore && (
         <div className="flex justify-center items-center gap-2 py-4">

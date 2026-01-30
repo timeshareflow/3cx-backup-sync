@@ -120,7 +120,7 @@ export default async function ConversationPage({ params }: PageProps) {
       </div>
 
       {/* Messages */}
-      <div className="flex-1 bg-white rounded-lg shadow overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col bg-white rounded-lg shadow overflow-hidden">
         <Suspense fallback={<LoadingScreen message="Loading messages..." />}>
           <MessageList conversationId={id} loadAll={true} />
         </Suspense>
