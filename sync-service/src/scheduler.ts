@@ -59,8 +59,10 @@ async function clearManualTriggers(): Promise<void> {
 }
 
 // Run chat/messages sync (fast - every 15-30 seconds)
+// CRITICAL: Messages sync should NEVER be blocked by media/recordings/full sync
+// This ensures chats are always up to date regardless of what else is running
 async function runChatSync(): Promise<void> {
-  if (runningSync.has("messages") || runningSync.has("full")) {
+  if (runningSync.has("messages")) {
     logger.debug("Chat sync skipped - already running");
     return;
   }
@@ -162,8 +164,9 @@ async function runRecordingsSync(): Promise<void> {
 }
 
 // Run CDR sync (every 5 minutes)
+// CDR is lightweight like messages, so don't block on full sync
 async function runCdrSync(): Promise<void> {
-  if (runningSync.has("cdr") || runningSync.has("full")) {
+  if (runningSync.has("cdr")) {
     logger.debug("CDR sync skipped - already running");
     return;
   }
