@@ -219,8 +219,8 @@ async function runExtensionsSync(): Promise<void> {
   }
 }
 
-// Run full sync for inactive tenants (every 30 minutes)
-// This ensures data stays fresh even when no users are logged in
+// Run lightweight sync for inactive tenants (every 30 minutes)
+// Only syncs messages and CDR to avoid memory issues with large media syncs
 async function runBackgroundSync(): Promise<void> {
   if (runningSync.size > 0) {
     logger.debug("Background sync skipped - other sync running");
@@ -237,12 +237,14 @@ async function runBackgroundSync(): Promise<void> {
 
     runningSync.add("full");
 
-    logger.info(`Background full sync for ${inactiveTenants.length} inactive tenant(s)`);
+    logger.info(`Background sync for ${inactiveTenants.length} inactive tenant(s)`);
 
-    // Run full sync for inactive tenants so next login doesn't need a huge catch-up
-    await runMultiTenantSync({
-      tenantIds: inactiveTenants.map((t) => t.id),
-    });
+    // Only sync messages and CDR for inactive tenants to keep data fresh
+    // Media/recordings sync is heavier and only runs when users are active
+    await runMultiTenantSyncByType(
+      ["messages", "cdr"],
+      inactiveTenants.map((t) => t.id)
+    );
   } catch (error) {
     logger.error("Background sync failed", { error: (error as Error).message });
   } finally {

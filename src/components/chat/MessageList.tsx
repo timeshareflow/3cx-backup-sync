@@ -28,6 +28,12 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
   const bottomRef = useRef<HTMLDivElement>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isNearBottomRef = useRef(true);
+  const newestTimestampRef = useRef<string | null>(null);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    newestTimestampRef.current = newestTimestamp;
+  }, [newestTimestamp]);
 
   const fetchMessages = useCallback(async (before?: string, isPolling?: boolean) => {
     try {
