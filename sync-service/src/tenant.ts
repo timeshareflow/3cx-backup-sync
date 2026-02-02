@@ -114,8 +114,10 @@ setOnTunnelDiedCallback((tenantId: string) => {
   }
 });
 
-// Active user threshold - 5 minutes
-const ACTIVE_USER_THRESHOLD_MS = 5 * 60 * 1000;
+// Active user threshold - 15 minutes
+// This should be higher than the frontend heartbeat activity threshold (10 min)
+// to avoid flapping between active/inactive states
+const ACTIVE_USER_THRESHOLD_MS = 15 * 60 * 1000;
 
 export async function getActiveTenants(): Promise<TenantConfig[]> {
   const supabase = getSupabaseClient();

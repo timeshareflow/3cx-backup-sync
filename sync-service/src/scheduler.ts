@@ -25,7 +25,7 @@ const SYNC_INTERVALS = {
   recordings: parseInt(process.env.SYNC_INTERVAL_RECORDINGS || "15"), // minutes
   cdr: parseInt(process.env.SYNC_INTERVAL_CDR || "5"), // minutes
   extensions: parseInt(process.env.SYNC_INTERVAL_EXTENSIONS || "60"), // minutes
-  background: parseInt(process.env.SYNC_INTERVAL_BACKGROUND || "15"), // minutes
+  background: parseInt(process.env.SYNC_INTERVAL_BACKGROUND || "30"), // minutes - full sync for inactive tenants
 };
 
 // Check if any tenant has requested a manual sync trigger
@@ -219,7 +219,8 @@ async function runExtensionsSync(): Promise<void> {
   }
 }
 
-// Run sync for inactive tenants (every 15 minutes - messages only)
+// Run full sync for inactive tenants (every 30 minutes)
+// This ensures data stays fresh even when no users are logged in
 async function runBackgroundSync(): Promise<void> {
   if (runningSync.size > 0) {
     logger.debug("Background sync skipped - other sync running");
@@ -236,13 +237,12 @@ async function runBackgroundSync(): Promise<void> {
 
     runningSync.add("full");
 
-    logger.info(`Background sync for ${inactiveTenants.length} inactive tenant(s)`);
+    logger.info(`Background full sync for ${inactiveTenants.length} inactive tenant(s)`);
 
-    // Background sync is messages only
-    await runMultiTenantSyncByType(
-      ["messages"],
-      inactiveTenants.map((t) => t.id)
-    );
+    // Run full sync for inactive tenants so next login doesn't need a huge catch-up
+    await runMultiTenantSync({
+      tenantIds: inactiveTenants.map((t) => t.id),
+    });
   } catch (error) {
     logger.error("Background sync failed", { error: (error as Error).message });
   } finally {
@@ -294,7 +294,7 @@ export function startScheduler(): void {
   logger.info(`  - Recordings: every ${SYNC_INTERVALS.recordings} minutes`);
   logger.info(`  - CDR: every ${SYNC_INTERVALS.cdr} minutes`);
   logger.info(`  - Extensions: every ${SYNC_INTERVALS.extensions} minutes`);
-  logger.info(`  - Inactive tenants: every ${SYNC_INTERVALS.background} minutes`);
+  logger.info(`  - Background full sync (inactive tenants): every ${SYNC_INTERVALS.background} minutes`);
 }
 
 export function stopScheduler(): void {

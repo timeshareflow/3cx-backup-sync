@@ -6,13 +6,16 @@ import { Spinner } from "@/components/ui/Spinner";
 import { formatDateDivider, isSameDay } from "@/lib/utils/date";
 import type { MessageWithMedia } from "@/types";
 
+const POLL_INTERVAL = 5000; // Poll every 5 seconds for new messages
+
 interface MessageListProps {
   conversationId: string;
   initialMessages?: MessageWithMedia[];
   loadAll?: boolean; // If true, automatically loads all messages for full history access
+  enablePolling?: boolean; // If true, polls for new messages (default: true)
 }
 
-export function MessageList({ conversationId, initialMessages, loadAll = false }: MessageListProps) {
+export function MessageList({ conversationId, initialMessages, loadAll = false, enablePolling = true }: MessageListProps) {
   const [messages, setMessages] = useState<MessageWithMedia[]>(initialMessages || []);
   const [isLoading, setIsLoading] = useState(!initialMessages);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -23,6 +26,8 @@ export function MessageList({ conversationId, initialMessages, loadAll = false }
 
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isNearBottomRef = useRef(true);
 
   const fetchMessages = useCallback(async (before?: string, isPolling?: boolean) => {
     try {
@@ -93,7 +98,67 @@ export function MessageList({ conversationId, initialMessages, loadAll = false }
     }
   }, [loadAll, hasMore, isLoadingMore, isLoading, oldestTimestamp, fetchMessages]);
 
+  // Poll for new messages
+  const pollForNewMessages = useCallback(async () => {
+    if (!newestTimestamp) return;
+
+    try {
+      const url = new URL(`/api/messages`, window.location.origin);
+      url.searchParams.set("conversation_id", conversationId);
+      url.searchParams.set("after", newestTimestamp);
+      url.searchParams.set("limit", "50");
+
+      const response = await fetch(url.toString());
+
+      if (!response.ok) return;
+
+      const data = await response.json();
+
+      if (data.data && data.data.length > 0) {
+        setMessages((prev) => [...prev, ...data.data]);
+
+        // Update newest timestamp
+        const latestMsg = data.data[data.data.length - 1];
+        if (latestMsg) {
+          setNewestTimestamp(latestMsg.sent_at);
+        }
+
+        // Auto-scroll to bottom if user was near bottom
+        if (isNearBottomRef.current) {
+          setTimeout(() => {
+            bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+          }, 100);
+        }
+      }
+    } catch (err) {
+      // Silently fail for polling - don't show errors
+      console.debug("Polling error:", err);
+    }
+  }, [conversationId, newestTimestamp]);
+
+  // Set up polling interval
+  useEffect(() => {
+    if (!enablePolling || !newestTimestamp) return;
+
+    pollIntervalRef.current = setInterval(pollForNewMessages, POLL_INTERVAL);
+
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+        pollIntervalRef.current = null;
+      }
+    };
+  }, [enablePolling, newestTimestamp, pollForNewMessages]);
+
+  // Track if user is near bottom of scroll
+  const checkIfNearBottom = () => {
+    if (!containerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
+    isNearBottomRef.current = scrollHeight - scrollTop - clientHeight < 100;
+  };
+
   const handleScroll = () => {
+    checkIfNearBottom();
     if (!containerRef.current || isLoadingMore || !hasMore) return;
 
     const { scrollTop } = containerRef.current;
