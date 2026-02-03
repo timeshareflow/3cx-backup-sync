@@ -104,7 +104,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Build query
+    // Build query (use started_at - the actual column name in the database)
     let query = supabase
       .from("call_recordings")
       .select("*", { count: "exact" })

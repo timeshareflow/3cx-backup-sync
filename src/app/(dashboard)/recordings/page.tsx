@@ -14,7 +14,7 @@ interface CallRecording {
   direction: string | null;
   duration_seconds: number | null;
   file_size: number | null;
-  started_at: string;
+  started_at: string;  // Actual column name in database
   storage_path: string;
 }
 

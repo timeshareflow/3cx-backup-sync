@@ -6,7 +6,7 @@ import {
   generateStoragePath,
   fileExists,
   detectFileType,
-} from "../storage/supabase-storage";
+} from "../storage/spaces-storage";
 import { insertMeetingRecording, updateSyncStatus } from "../storage/supabase";
 import { createSftpClient, listRemoteFiles, closeSftpClient, downloadFile } from "../storage/sftp";
 import { TenantConfig, getTenantSftpConfig } from "../tenant";
@@ -222,6 +222,7 @@ export async function syncMeetings(tenant: TenantConfig): Promise<MeetingsSyncRe
           has_audio: true,
           recorded_at: metadata.timestamp?.toISOString() || new Date().toISOString(),
           meeting_started_at: metadata.timestamp?.toISOString(),
+          storage_backend: "spaces",
         });
 
         result.filesSynced++;

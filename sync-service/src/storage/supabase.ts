@@ -622,10 +622,11 @@ export async function insertCallRecording(recording: {
   call_started_at?: string;
   call_ended_at?: string;
   recorded_at: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
-  // Map to actual database column names
+  // Map to actual database column names (matching actual Supabase table)
   const dbRecord = {
     tenant_id: recording.tenant_id,
     threecx_call_id: recording.threecx_recording_id || recording.threecx_call_id,
@@ -640,6 +641,7 @@ export async function insertCallRecording(recording: {
     duration_seconds: recording.duration_seconds,
     started_at: recording.recorded_at || recording.call_started_at || new Date().toISOString(),
     ended_at: recording.call_ended_at,
+    storage_backend: recording.storage_backend || "supabase",
   };
 
   const { data, error } = await client
@@ -662,6 +664,14 @@ export async function insertCallRecording(recording: {
         .single();
       return existing?.id || "";
     }
+    // Log full error details for debugging
+    logger.error("Call recording insert failed", {
+      errorCode: error.code,
+      errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      recordingId: dbRecord.threecx_call_id,
+    });
     throw new SupabaseError("Failed to insert call recording", { error });
   }
 
@@ -685,6 +695,23 @@ export async function recordingExists(tenantId: string, recordingId: string): Pr
   return (count || 0) > 0;
 }
 
+// Check if a voicemail already exists in database
+export async function voicemailExists(tenantId: string, voicemailId: string): Promise<boolean> {
+  const client = getSupabaseClient();
+
+  const { count, error } = await client
+    .from("voicemails")
+    .select("*", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("threecx_voicemail_id", voicemailId);
+
+  if (error) {
+    return false;
+  }
+
+  return (count || 0) > 0;
+}
+
 // ============================================
 // VOICEMAILS
 // ============================================
@@ -693,7 +720,6 @@ export async function insertVoicemail(voicemail: {
   tenant_id: string;
   threecx_voicemail_id?: string;
   extension: string;
-  extension_name?: string;
   caller_number?: string;
   caller_name?: string;
   original_filename?: string;
@@ -702,15 +728,33 @@ export async function insertVoicemail(voicemail: {
   mime_type?: string;
   duration_seconds?: number;
   is_read?: boolean;
-  is_urgent?: boolean;
   transcription?: string;
   received_at: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
+  // Map to actual database column names (matching actual Supabase table)
+  const dbRecord = {
+    tenant_id: voicemail.tenant_id,
+    threecx_voicemail_id: voicemail.threecx_voicemail_id,
+    extension_number: voicemail.extension, // Map 'extension' to 'extension_number'
+    caller_number: voicemail.caller_number,
+    caller_name: voicemail.caller_name,
+    original_filename: voicemail.original_filename,
+    storage_path: voicemail.storage_path,
+    mime_type: voicemail.mime_type || "audio/wav",
+    file_size: voicemail.file_size,
+    duration_seconds: voicemail.duration_seconds,
+    is_read: voicemail.is_read ?? false,
+    transcription: voicemail.transcription,
+    received_at: voicemail.received_at,
+    storage_backend: voicemail.storage_backend || "supabase",
+  };
+
   const { data, error } = await client
     .from("voicemails")
-    .upsert(voicemail, {
+    .upsert(dbRecord, {
       onConflict: "tenant_id,threecx_voicemail_id",
       ignoreDuplicates: true,
     })
@@ -727,6 +771,14 @@ export async function insertVoicemail(voicemail: {
         .single();
       return existing?.id || "";
     }
+    // Log full error details for debugging
+    logger.error("Voicemail insert failed", {
+      errorCode: error.code,
+      errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      voicemailId: voicemail.threecx_voicemail_id,
+    });
     throw new SupabaseError("Failed to insert voicemail", { error });
   }
 
@@ -752,6 +804,7 @@ export async function insertFax(fax: {
   page_count?: number;
   status?: string;
   fax_time: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
@@ -808,9 +861,28 @@ export async function insertCallLog(callLog: {
 }): Promise<string> {
   const client = getSupabaseClient();
 
+  // Map input properties to actual database column names
+  const dbRecord = {
+    tenant_id: callLog.tenant_id,
+    threecx_call_id: callLog.threecx_call_id,
+    caller_number: callLog.caller_number,
+    caller_name: callLog.caller_name,
+    callee_number: callLog.callee_number,
+    callee_name: callLog.callee_name,
+    direction: callLog.direction,
+    call_type: callLog.call_type,
+    status: callLog.status,
+    ring_duration_seconds: callLog.ring_duration_seconds,
+    duration_seconds: callLog.total_duration_seconds || callLog.talk_duration_seconds,
+    started_at: callLog.call_started_at,
+    answered_at: callLog.call_answered_at,
+    ended_at: callLog.call_ended_at,
+    recording_id: callLog.recording_id,
+  };
+
   const { data, error } = await client
     .from("call_logs")
-    .upsert(callLog, {
+    .upsert(dbRecord, {
       onConflict: "tenant_id,threecx_call_id",
       ignoreDuplicates: true,
     })
@@ -827,6 +899,11 @@ export async function insertCallLog(callLog: {
         .single();
       return existing?.id || "";
     }
+    logger.error("Call log insert failed", {
+      errorCode: error.code,
+      errorMessage: error.message,
+      callId: callLog.threecx_call_id,
+    });
     throw new SupabaseError("Failed to insert call log", { error });
   }
 
@@ -857,6 +934,7 @@ export async function insertMeetingRecording(meeting: {
   meeting_started_at?: string;
   meeting_ended_at?: string;
   recorded_at: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
@@ -900,6 +978,7 @@ export async function insertMediaFileNew(media: {
   file_size: number;
   storage_path: string;
   thumbnail_path?: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
@@ -933,6 +1012,7 @@ export async function insertMediaFileNew(media: {
     mime_type: media.mime_type,
     file_size: media.file_size,
     file_name: fileName,  // Required NOT NULL column in database - never null
+    storage_backend: media.storage_backend || "supabase", // Track storage location
   };
 
   // Optional fields

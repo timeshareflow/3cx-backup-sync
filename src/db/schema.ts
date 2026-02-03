@@ -319,6 +319,7 @@ export const mediaFiles = pgTable(
     height: integer("height"),
     durationSeconds: integer("duration_seconds"),
     metadata: jsonb("metadata").default({}),
+    storageBackend: varchar("storage_backend", { length: 20 }).default("supabase"), // 'supabase' or 'spaces'
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (table) => ({

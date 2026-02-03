@@ -80,9 +80,9 @@ export async function runTenantSync(
 
   const result: SyncResult = {
     messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
-    media: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    media: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
     recordings: { filesSynced: 0, filesSkipped: 0, errors: [] as Array<{ recordingId: string; error: string }> },
-    voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    voicemails: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
     faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
     meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
     cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },
@@ -242,9 +242,9 @@ export async function runMultiTenantSync(options?: {
       tenantName: tenant.name,
       success: false,
       messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
-      media: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      media: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
       recordings: { filesSynced: 0, filesSkipped: 0, errors: [] as Array<{ recordingId: string; error: string }> },
-      voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      voicemails: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
       faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
       meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
       cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },

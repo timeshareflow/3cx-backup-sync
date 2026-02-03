@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
+import { getSignedUrl as getSpacesSignedUrl, isSpacesConfigured } from "@/lib/storage/spaces";
 
 interface MediaFile {
   id: string;
@@ -9,6 +10,7 @@ interface MediaFile {
   mime_type: string | null;
   file_type: string;
   tenant_id: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }
 
 export async function GET(
@@ -49,25 +51,43 @@ export async function GET(
 
     const media = data as unknown as MediaFile;
 
-    // Generate signed URL from Supabase Storage (valid for 1 hour)
-    const { data: signedUrlData, error: urlError } = await supabase
-      .storage
-      .from("backupwiz-files")
-      .createSignedUrl(media.storage_path, 3600);
+    let signedUrl: string;
 
-    if (urlError || !signedUrlData?.signedUrl) {
-      console.error("Failed to generate signed URL:", media.storage_path, urlError?.message);
-      return NextResponse.json(
-        { error: "Failed to generate URL" },
-        { status: 500 }
-      );
+    // Check storage backend and generate appropriate signed URL
+    if (media.storage_backend === "spaces" && isSpacesConfigured()) {
+      // Generate signed URL from DO Spaces
+      try {
+        signedUrl = await getSpacesSignedUrl(media.storage_path, 3600);
+      } catch (spacesError) {
+        console.error("Failed to generate DO Spaces signed URL:", media.storage_path, spacesError);
+        return NextResponse.json(
+          { error: "Failed to generate URL" },
+          { status: 500 }
+        );
+      }
+    } else {
+      // Generate signed URL from Supabase Storage (default/fallback)
+      const { data: signedUrlData, error: urlError } = await supabase
+        .storage
+        .from("backupwiz-files")
+        .createSignedUrl(media.storage_path, 3600);
+
+      if (urlError || !signedUrlData?.signedUrl) {
+        console.error("Failed to generate signed URL:", media.storage_path, urlError?.message);
+        return NextResponse.json(
+          { error: "Failed to generate URL" },
+          { status: 500 }
+        );
+      }
+      signedUrl = signedUrlData.signedUrl;
     }
 
     return NextResponse.json({
-      url: signedUrlData.signedUrl,
+      url: signedUrl,
       filename: media.file_name,
       mime_type: media.mime_type,
       file_type: media.file_type,
+      storage_backend: media.storage_backend || "supabase",
     });
   } catch (error) {
     console.error("Error in media API:", error);
