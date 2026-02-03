@@ -146,6 +146,28 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Fallback: for messages with has_media=true but no linked media_files,
+    // try to find media by matching filename in content
+    for (const msg of messages) {
+      if (msg.has_media && (!msg.media_files || msg.media_files.length === 0) && msg.content) {
+        const filename = msg.content.trim();
+        const { data: matchedMedia } = await supabase
+          .from("media_files")
+          .select("*")
+          .eq("file_name", filename)
+          .limit(1);
+
+        if (matchedMedia && matchedMedia.length > 0) {
+          msg.media_files = matchedMedia;
+          // Also fix the FK link for future requests
+          await supabase
+            .from("media_files")
+            .update({ message_id: msg.id, conversation_id: msg.conversation_id })
+            .eq("id", matchedMedia[0].id);
+        }
+      }
+    }
+
     // Enrich messages with conversation info
     const enrichedMessages = messages.map((msg) => ({
       ...msg,
