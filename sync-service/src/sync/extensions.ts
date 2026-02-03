@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import { getExtensions } from "../threecx/queries";
-import { upsertExtension, updateSyncStatus, cascadeExtensionNameChange } from "../storage/supabase";
+import { upsertExtension, updateSyncStatus, cascadeExtensionNameChange, refreshAllParticipantNames, mergeDuplicateConversations } from "../storage/supabase";
 
 export interface ExtensionSyncResult {
   extensionsSynced: number;
@@ -82,9 +82,25 @@ export async function syncExtensions(
       }
     }
 
+    // After syncing all extensions, do a bulk refresh of all participant names
+    // This catches stale names from before cascade code was deployed
+    const refresh = await refreshAllParticipantNames(tenantId);
+    if (refresh.participantsUpdated > 0) {
+      result.namesChanged += refresh.conversationsUpdated;
+    }
+
+    // Merge duplicate 1-on-1 conversations with the same participants
+    const merge = await mergeDuplicateConversations(tenantId);
+
     let notes = `Synced ${result.extensionsSynced} extensions`;
     if (result.namesChanged > 0) {
       notes += `, ${result.namesChanged} name changes cascaded`;
+    }
+    if (refresh.participantsUpdated > 0) {
+      notes += `, ${refresh.participantsUpdated} participant names refreshed`;
+    }
+    if (merge.mergedCount > 0) {
+      notes += `, ${merge.mergedCount} duplicate conversations merged`;
     }
 
     await updateSyncStatus("extensions", "success", {
@@ -98,6 +114,10 @@ export async function syncExtensions(
       synced: result.extensionsSynced,
       namesChanged: result.namesChanged,
       errors: result.errors.length,
+      participantsRefreshed: refresh.participantsUpdated,
+      conversationsRefreshed: refresh.conversationsUpdated,
+      duplicatesMerged: merge.mergedCount,
+      messagesMoved: merge.messagesMoved,
     });
 
     return result;

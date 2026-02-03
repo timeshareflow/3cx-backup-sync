@@ -448,6 +448,263 @@ export async function cascadeExtensionNameChange(
   return { participantsUpdated, conversationsUpdated };
 }
 
+// Bulk refresh ALL participant names from current extension data
+// This catches stale names from before cascade code was deployed
+export async function refreshAllParticipantNames(
+  tenantId?: string
+): Promise<{ participantsUpdated: number; conversationsUpdated: number }> {
+  const client = getSupabaseClient();
+  let participantsUpdated = 0;
+  let conversationsUpdated = 0;
+
+  // Get all extensions with current names
+  let extQuery = client
+    .from("extensions")
+    .select("id, extension_number, display_name, first_name, last_name");
+
+  if (tenantId) {
+    extQuery = extQuery.eq("tenant_id", tenantId);
+  }
+
+  const { data: extensions, error: extError } = await extQuery;
+
+  if (extError || !extensions) {
+    logger.error("Failed to fetch extensions for name refresh", {
+      error: extError?.message,
+    });
+    return { participantsUpdated: 0, conversationsUpdated: 0 };
+  }
+
+  const affectedConversationIds = new Set<string>();
+
+  for (const ext of extensions) {
+    const displayName =
+      ext.display_name ||
+      [ext.first_name, ext.last_name].filter(Boolean).join(" ") ||
+      null;
+
+    if (!displayName) continue;
+
+    const expectedName = `${displayName} (${ext.extension_number})`;
+
+    // Update all participants with this extension_id that have a different name
+    const { data: updated, error: updateError } = await client
+      .from("participants")
+      .update({ external_name: expectedName })
+      .eq("extension_id", ext.id)
+      .neq("external_name", expectedName)
+      .select("conversation_id");
+
+    if (updateError) {
+      logger.warn("Failed to refresh participant name", {
+        extensionId: ext.id,
+        error: updateError.message,
+      });
+      continue;
+    }
+
+    if (updated && updated.length > 0) {
+      participantsUpdated += updated.length;
+      for (const p of updated) {
+        affectedConversationIds.add(p.conversation_id);
+      }
+      logger.debug("Refreshed participant names", {
+        extensionNumber: ext.extension_number,
+        newName: expectedName,
+        count: updated.length,
+      });
+    }
+  }
+
+  // Rebuild conversation names for all affected conversations
+  for (const convId of affectedConversationIds) {
+    try {
+      await updateConversationNameFromParticipants(convId);
+      conversationsUpdated++;
+    } catch (error) {
+      logger.warn("Failed to update conversation name during refresh", {
+        conversationId: convId,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  if (participantsUpdated > 0) {
+    logger.info("Bulk participant name refresh completed", {
+      tenantId,
+      participantsUpdated,
+      conversationsUpdated,
+    });
+  }
+
+  return { participantsUpdated, conversationsUpdated };
+}
+
+// Merge duplicate 1-on-1 conversations that share the same set of participants
+// Keeps the conversation with the most recent activity and moves messages from duplicates
+export async function mergeDuplicateConversations(
+  tenantId?: string
+): Promise<{ mergedCount: number; messagesMoved: number }> {
+  const client = getSupabaseClient();
+  let mergedCount = 0;
+  let messagesMoved = 0;
+
+  // Get all non-group conversations with their participants
+  let convQuery = client
+    .from("conversations")
+    .select("id, conversation_name, is_group_chat, message_count, last_message_at, created_at")
+    .eq("is_group_chat", false);
+
+  if (tenantId) {
+    convQuery = convQuery.eq("tenant_id", tenantId);
+  }
+
+  const { data: conversations, error: convError } = await convQuery;
+
+  if (convError || !conversations) {
+    logger.error("Failed to fetch conversations for dedup", { error: convError?.message });
+    return { mergedCount: 0, messagesMoved: 0 };
+  }
+
+  // Get all participants for these conversations
+  const convIds = conversations.map(c => c.id);
+  if (convIds.length === 0) return { mergedCount: 0, messagesMoved: 0 };
+
+  const { data: allParticipants } = await client
+    .from("participants")
+    .select("conversation_id, extension_id, external_id")
+    .in("conversation_id", convIds);
+
+  if (!allParticipants) return { mergedCount: 0, messagesMoved: 0 };
+
+  // Group participants by conversation
+  const convParticipants: Record<string, string[]> = {};
+  for (const p of allParticipants) {
+    if (!convParticipants[p.conversation_id]) convParticipants[p.conversation_id] = [];
+    const key = p.extension_id || p.external_id || "";
+    if (key) convParticipants[p.conversation_id].push(key);
+  }
+
+  // Build participant set keys and group conversations
+  const participantGroups: Record<string, typeof conversations> = {};
+  for (const conv of conversations) {
+    const parts = convParticipants[conv.id] || [];
+    if (parts.length === 0) continue;
+    const key = [...parts].sort().join("|");
+    if (!participantGroups[key]) participantGroups[key] = [];
+    participantGroups[key].push(conv);
+  }
+
+  // Merge groups with more than one conversation
+  for (const [, group] of Object.entries(participantGroups)) {
+    if (group.length <= 1) continue;
+
+    // Sort: most recent activity first, then most messages
+    group.sort((a, b) => {
+      const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+      const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return b.message_count - a.message_count;
+    });
+
+    const primary = group[0];
+    const duplicates = group.slice(1);
+
+    for (const dup of duplicates) {
+      try {
+        // Move messages from duplicate to primary
+        const { data: movedMsgs, error: moveError } = await client
+          .from("messages")
+          .update({ conversation_id: primary.id })
+          .eq("conversation_id", dup.id)
+          .select("id");
+
+        if (moveError) {
+          logger.warn("Failed to move messages during merge", {
+            from: dup.id,
+            to: primary.id,
+            error: moveError.message,
+          });
+          continue;
+        }
+
+        const movedCount = movedMsgs?.length || 0;
+        messagesMoved += movedCount;
+
+        // Move media files from duplicate to primary
+        await client
+          .from("media_files")
+          .update({ conversation_id: primary.id })
+          .eq("conversation_id", dup.id);
+
+        // Delete duplicate participants (primary already has them)
+        await client
+          .from("participants")
+          .delete()
+          .eq("conversation_id", dup.id);
+
+        // Delete the duplicate conversation
+        const { error: deleteError } = await client
+          .from("conversations")
+          .delete()
+          .eq("id", dup.id);
+
+        if (deleteError) {
+          logger.warn("Failed to delete duplicate conversation", {
+            id: dup.id,
+            error: deleteError.message,
+          });
+          continue;
+        }
+
+        // Update primary conversation message count and last_message_at
+        const { data: msgStats } = await client
+          .from("messages")
+          .select("sent_at")
+          .eq("conversation_id", primary.id)
+          .order("sent_at", { ascending: false })
+          .limit(1);
+
+        const newCount = (primary.message_count || 0) + movedCount;
+        const lastMsg = msgStats?.[0]?.sent_at || primary.last_message_at;
+
+        await client
+          .from("conversations")
+          .update({
+            message_count: newCount,
+            last_message_at: lastMsg,
+          })
+          .eq("id", primary.id);
+
+        mergedCount++;
+
+        logger.info("Merged duplicate conversation", {
+          duplicateId: dup.id,
+          primaryId: primary.id,
+          primaryName: primary.conversation_name,
+          messagesMoved: movedCount,
+        });
+      } catch (error) {
+        logger.warn("Failed to merge conversation", {
+          duplicateId: dup.id,
+          primaryId: primary.id,
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  if (mergedCount > 0) {
+    logger.info("Duplicate conversation merge completed", {
+      tenantId,
+      mergedCount,
+      messagesMoved,
+    });
+  }
+
+  return { mergedCount, messagesMoved };
+}
+
 // Get or create conversation ID by 3CX ID
 export async function getConversationId(
   threecxConversationId: string,
