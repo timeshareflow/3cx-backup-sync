@@ -4,6 +4,8 @@ import { getTenantContext } from "@/lib/tenant";
 import { withRateLimit } from "@/lib/api-utils";
 import { rateLimitConfigs } from "@/lib/rate-limit";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   // Rate limit: 30 searches per minute to prevent abuse
   const rateLimited = withRateLimit(request, rateLimitConfigs.search);

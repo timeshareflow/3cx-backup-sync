@@ -5,6 +5,8 @@ import { format } from "date-fns";
 import { withRateLimit } from "@/lib/api-utils";
 import { rateLimitConfigs } from "@/lib/rate-limit";
 
+export const dynamic = "force-dynamic";
+
 interface ExportMessage {
   id: string;
   sent_at: string;

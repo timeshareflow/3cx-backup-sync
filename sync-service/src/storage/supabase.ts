@@ -107,7 +107,7 @@ export async function updateConversationNameFromParticipants(
     .select("external_name")
     .eq("conversation_id", conversationId);
 
-  if (!participants || participants.length < 2) {
+  if (!participants || participants.length === 0) {
     return;
   }
 
@@ -306,7 +306,7 @@ export async function insertMediaFile(media: {
   return data.id;
 }
 
-// Upsert extension
+// Upsert extension - returns { changed: true, extensionId } if the name was updated
 export async function upsertExtension(extension: {
   extension_number: string;
   first_name?: string | null;
@@ -314,13 +314,43 @@ export async function upsertExtension(extension: {
   display_name?: string | null;
   email?: string | null;
   tenant_id?: string;
-}): Promise<void> {
+}): Promise<{ changed: boolean; extensionId: string | null }> {
   const client = getSupabaseClient();
 
   const displayName =
     extension.display_name ||
     [extension.first_name, extension.last_name].filter(Boolean).join(" ") ||
     null;
+
+  // Check if extension already exists with different name
+  let nameChanged = false;
+  let extensionId: string | null = null;
+
+  if (extension.tenant_id) {
+    const { data: existing } = await client
+      .from("extensions")
+      .select("id, display_name, first_name, last_name")
+      .eq("tenant_id", extension.tenant_id)
+      .eq("extension_number", extension.extension_number)
+      .single();
+
+    if (existing) {
+      extensionId = existing.id;
+      // Detect name change
+      if (
+        existing.display_name !== displayName ||
+        existing.first_name !== (extension.first_name || null) ||
+        existing.last_name !== (extension.last_name || null)
+      ) {
+        nameChanged = true;
+        logger.info("Extension name changed", {
+          extensionNumber: extension.extension_number,
+          oldName: existing.display_name,
+          newName: displayName,
+        });
+      }
+    }
+  }
 
   const now = new Date().toISOString();
   const insertData: Record<string, unknown> = {
@@ -338,12 +368,11 @@ export async function upsertExtension(extension: {
   }
 
   // Use correct column order to match the unique index: (tenant_id, extension_number)
-  const { error } = await client.from("extensions").upsert(insertData, {
+  const { data, error } = await client.from("extensions").upsert(insertData, {
     onConflict: extension.tenant_id
       ? "tenant_id,extension_number"
       : "extension_number",
-    // ignoreDuplicates: false is the default, ensuring updates happen
-  });
+  }).select("id").single();
 
   if (error) {
     logger.warn("Failed to upsert extension", {
@@ -353,6 +382,70 @@ export async function upsertExtension(extension: {
     });
     throw new Error(`Failed to upsert extension ${extension.extension_number}: ${error.message}`);
   }
+
+  return { changed: nameChanged, extensionId: data?.id || extensionId };
+}
+
+// Cascade extension name change to all participants and conversation names
+export async function cascadeExtensionNameChange(
+  extensionId: string,
+  newDisplayName: string,
+  extensionNumber: string
+): Promise<{ participantsUpdated: number; conversationsUpdated: number }> {
+  const client = getSupabaseClient();
+  let participantsUpdated = 0;
+  let conversationsUpdated = 0;
+
+  // Build the new participant display name: "Name (ext)"
+  const newExternalName = `${newDisplayName} (${extensionNumber})`;
+
+  // 1. Update all participant records that reference this extension
+  const { data: updatedParticipants, error: partError } = await client
+    .from("participants")
+    .update({ external_name: newExternalName })
+    .eq("extension_id", extensionId)
+    .neq("external_name", newExternalName)
+    .select("conversation_id");
+
+  if (partError) {
+    logger.error("Failed to cascade name to participants", {
+      extensionId,
+      error: partError.message,
+    });
+    return { participantsUpdated: 0, conversationsUpdated: 0 };
+  }
+
+  participantsUpdated = updatedParticipants?.length || 0;
+
+  if (participantsUpdated === 0) {
+    return { participantsUpdated: 0, conversationsUpdated: 0 };
+  }
+
+  // 2. Rebuild conversation names for all affected conversations
+  const affectedConversationIds = [
+    ...new Set(updatedParticipants.map((p) => p.conversation_id)),
+  ];
+
+  for (const convId of affectedConversationIds) {
+    try {
+      await updateConversationNameFromParticipants(convId);
+      conversationsUpdated++;
+    } catch (error) {
+      logger.warn("Failed to update conversation name after extension rename", {
+        conversationId: convId,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  logger.info("Cascaded extension name change", {
+    extensionId,
+    newDisplayName,
+    participantsUpdated,
+    conversationsUpdated,
+  });
+
+  return { participantsUpdated, conversationsUpdated };
 }
 
 // Get or create conversation ID by 3CX ID
@@ -725,7 +818,6 @@ export async function insertVoicemail(voicemail: {
   original_filename?: string;
   file_size: number;
   storage_path: string;
-  mime_type?: string;
   duration_seconds?: number;
   is_read?: boolean;
   transcription?: string;
@@ -734,17 +826,28 @@ export async function insertVoicemail(voicemail: {
 }): Promise<string> {
   const client = getSupabaseClient();
 
+  // Look up extension UUID by extension number
+  let extensionId: string | null = null;
+  if (voicemail.extension) {
+    const { data: ext } = await client
+      .from("extensions")
+      .select("id")
+      .eq("extension_number", voicemail.extension)
+      .eq("tenant_id", voicemail.tenant_id)
+      .single();
+    extensionId = ext?.id || null;
+  }
+
   // Map to actual database column names (matching actual Supabase table)
   const dbRecord = {
     tenant_id: voicemail.tenant_id,
     threecx_voicemail_id: voicemail.threecx_voicemail_id,
-    extension_number: voicemail.extension, // Map 'extension' to 'extension_number'
+    extension_id: extensionId,
+    file_name: voicemail.original_filename || "voicemail.wav",
+    file_size: voicemail.file_size,
+    storage_path: voicemail.storage_path,
     caller_number: voicemail.caller_number,
     caller_name: voicemail.caller_name,
-    original_filename: voicemail.original_filename,
-    storage_path: voicemail.storage_path,
-    mime_type: voicemail.mime_type || "audio/wav",
-    file_size: voicemail.file_size,
     duration_seconds: voicemail.duration_seconds,
     is_read: voicemail.is_read ?? false,
     transcription: voicemail.transcription,

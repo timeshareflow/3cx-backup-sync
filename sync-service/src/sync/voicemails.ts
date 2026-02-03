@@ -209,7 +209,6 @@ export async function syncVoicemails(
           original_filename: filename,
           file_size: uploadResult.size,
           storage_path: uploadResult.path,
-          mime_type: uploadResult.newMimeType,
           duration_seconds: durationSeconds || undefined,
           is_read: voicemail.is_heard,
           transcription: voicemail.transcription || undefined,

@@ -86,7 +86,7 @@ export async function runTenantSync(
     faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
     meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
     cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },
-    extensions: { extensionsSynced: 0, errors: [] },
+    extensions: { extensionsSynced: 0, namesChanged: 0, errors: [] },
     duration: 0,
   };
 
@@ -248,7 +248,7 @@ export async function runMultiTenantSync(options?: {
       faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
       meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
       cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },
-      extensions: { extensionsSynced: 0, errors: [] },
+      extensions: { extensionsSynced: 0, namesChanged: 0, errors: [] },
       duration: 0,
     };
 

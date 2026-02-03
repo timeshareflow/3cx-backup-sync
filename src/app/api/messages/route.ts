@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
+export const dynamic = "force-dynamic";
+
 interface MessageWithMedia {
   id: string;
   sent_at: string;

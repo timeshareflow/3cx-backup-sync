@@ -177,7 +177,6 @@ export default function ReportsPage() {
           { label: "Total Voicemails", value: stats.total },
           { label: "Read", value: stats.read || 0 },
           { label: "Unread", value: stats.unread || 0 },
-          { label: "Urgent", value: stats.urgent || 0 },
           { label: "Total Duration", value: formatDuration(Number(stats.total_duration) || 0) },
           { label: "Avg Duration", value: formatDuration(Number(stats.avg_duration) || 0) }
         );
@@ -270,7 +269,7 @@ export default function ReportsPage() {
       case "recordings":
         return ["Date/Time", "Direction", "Caller", "Callee", "Duration", "Size"];
       case "voicemails":
-        return ["Date/Time", "Extension", "Caller", "Duration", "Urgent", "Read"];
+        return ["Date/Time", "Extension", "Caller", "Duration", "Read"];
       case "faxes":
         return ["Date/Time", "Direction", "Extension", "Remote Number", "Pages", "Status"];
       case "messages":
@@ -304,12 +303,13 @@ export default function ReportsPage() {
           formatFileSize(Number(row.file_size) || 0),
         ];
       case "voicemails":
+        // eslint-disable-next-line no-case-declarations
+        const ext = row.extensions as Record<string, string> | null;
         return [
           formatDateTime(row.received_at as string),
-          String(row.extension_number || "Unknown"),
+          String(ext?.extension_number || "Unknown"),
           `${String(row.caller_name || "")} ${String(row.caller_number || "Unknown")}`.trim(),
           formatDuration(Number(row.duration_seconds) || 0),
-          row.is_urgent ? "Yes" : "No",
           row.is_read ? "Yes" : "No",
         ];
       case "faxes":

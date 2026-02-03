@@ -4,6 +4,8 @@ import { getTenantContext } from "@/lib/tenant";
 import { withRateLimit } from "@/lib/api-utils";
 import { rateLimitConfigs } from "@/lib/rate-limit";
 
+export const dynamic = "force-dynamic";
+
 type ReportType = "call_logs" | "recordings" | "voicemails" | "faxes" | "messages" | "meetings";
 
 interface ReportStats {
@@ -207,9 +209,10 @@ async function getVoicemailsReport(
   tenantId: string,
   filters: { startDate: string | null; endDate: string | null; extension: string | null; limit: number }
 ) {
+  // Join with extensions to get extension_number for display
   let query = supabase
     .from("voicemails")
-    .select("*", { count: "exact" })
+    .select("*, extensions(extension_number, display_name)", { count: "exact" })
     .eq("tenant_id", tenantId)
     .order("received_at", { ascending: false })
     .limit(filters.limit);
@@ -221,7 +224,16 @@ async function getVoicemailsReport(
     query = query.lte("received_at", `${filters.endDate}T23:59:59.999Z`);
   }
   if (filters.extension) {
-    query = query.eq("extension_number", filters.extension);
+    // Look up extension_id from extension_number first
+    const { data: ext } = await supabase
+      .from("extensions")
+      .select("id")
+      .eq("tenant_id", tenantId)
+      .eq("extension_number", filters.extension)
+      .single();
+    if (ext) {
+      query = query.eq("extension_id", ext.id);
+    }
   }
 
   const { data, error, count } = await query;
@@ -385,7 +397,6 @@ function calculateStats(reportType: ReportType, data: unknown[]): ReportStats {
     case "voicemails": {
       const read = records.filter(r => r.is_read).length;
       const unread = records.filter(r => !r.is_read).length;
-      const urgent = records.filter(r => r.is_urgent).length;
       const totalDuration = records.reduce((sum, r) => sum + (Number(r.duration_seconds) || 0), 0);
       const avgDuration = records.length > 0 ? Math.round(totalDuration / records.length) : 0;
 
@@ -393,7 +404,6 @@ function calculateStats(reportType: ReportType, data: unknown[]): ReportStats {
         total: records.length,
         read,
         unread,
-        urgent,
         total_duration: totalDuration,
         avg_duration: avgDuration,
       };

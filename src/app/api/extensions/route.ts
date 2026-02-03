@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
+export const dynamic = "force-dynamic";
+
 export async function GET() {
   try {
     const context = await getTenantContext();
