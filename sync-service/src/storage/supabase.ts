@@ -92,7 +92,7 @@ export async function updateConversationNameFromParticipants(
   // Get conversation info
   const { data: conv } = await client
     .from("conversations")
-    .select("is_group_chat")
+    .select("is_group_chat, conversation_name")
     .eq("id", conversationId)
     .single();
 
@@ -112,15 +112,24 @@ export async function updateConversationNameFromParticipants(
   }
 
   // Build name from all participant names
-  const names = participants
+  const validNames = participants
     .map(p => p.external_name)
-    .filter(Boolean)
-    .sort()
-    .join(", ");
+    .filter(Boolean);
 
-  if (!names) {
+  if (validNames.length === 0) {
     return;
   }
+
+  // Don't overwrite a multi-participant name with a single-participant name
+  // This prevents losing 3CX-provided names when we only have partial participant data
+  const currentName = conv?.conversation_name || "";
+  const currentCommaCount = (currentName.match(/,/g) || []).length;
+  if (validNames.length === 1 && currentCommaCount >= 1) {
+    // Current name has multiple participants but we only have 1 stored - keep the current name
+    return;
+  }
+
+  const names = validNames.sort().join(", ");
 
   // Update the conversation name
   await client
@@ -1545,6 +1554,63 @@ export async function linkMediaByFilename(
   }
 
   return false;
+}
+
+// Re-link orphaned media: find messages with has_media=true but no linked media_files,
+// then try to match them to unlinked media files by filename
+export async function relinkOrphanedMedia(
+  tenantId: string
+): Promise<{ linked: number; checked: number }> {
+  const client = getSupabaseClient();
+  let linked = 0;
+  let checked = 0;
+
+  // Find messages that claim to have media but have no linked media_files
+  // We check by looking for messages with has_media=true where the content looks like a filename
+  const { data: orphanedMessages, error: msgError } = await client
+    .from("messages")
+    .select("id, content, conversation_id")
+    .eq("tenant_id", tenantId)
+    .eq("has_media", true)
+    .order("sent_at", { ascending: false })
+    .limit(500);
+
+  if (msgError || !orphanedMessages) {
+    logger.error("Failed to fetch orphaned media messages", { error: msgError?.message });
+    return { linked: 0, checked: 0 };
+  }
+
+  for (const msg of orphanedMessages) {
+    if (!msg.content?.trim()) continue;
+
+    // Check if this message already has linked media
+    const { count: existingCount } = await client
+      .from("media_files")
+      .select("id", { count: "exact", head: true })
+      .eq("message_id", msg.id);
+
+    if ((existingCount || 0) > 0) continue; // Already linked
+
+    checked++;
+
+    // Try to link by filename
+    const wasLinked = await linkMediaByFilename(
+      tenantId,
+      msg.id,
+      msg.conversation_id,
+      msg.content
+    );
+
+    if (wasLinked) {
+      linked++;
+    }
+  }
+
+  if (linked > 0) {
+    logger.info("Re-linked orphaned media files", { tenantId, linked, checked });
+  }
+
+  return { linked, checked };
 }
 
 // ============================================

@@ -2,29 +2,24 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Navigation } from "@/components/layout/Navigation";
-import { MessageList } from "@/components/chat/MessageList";
+import { ExtensionMessageList } from "@/components/chat/ExtensionMessageList";
 import { ActivityFeed } from "@/components/monitor/ActivityFeed";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { Plus, X, Columns, Maximize2, Minimize2, LayoutGrid, List } from "lucide-react";
+import { Plus, X, Columns, Maximize2, Minimize2, LayoutGrid, List, Phone } from "lucide-react";
 
-interface Conversation {
+interface Extension {
   id: string;
-  conversation_name: string | null;
-  is_group_chat: boolean;
-  participant_count: number;
-  message_count: number;
-  last_message_at: string | null;
-  participants: Array<{
-    id: string;
-    external_name: string | null;
-    external_id: string | null;
-  }>;
+  extension_number: string;
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  is_active: boolean;
 }
 
 interface MonitorPanel {
   id: string;
-  conversation: Conversation;
+  extension: Extension;
   isMaximized: boolean;
 }
 
@@ -34,22 +29,22 @@ export default function MonitorPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [panels, setPanels] = useState<MonitorPanel[]>([]);
   const [showSelector, setShowSelector] = useState(false);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [extensions, setExtensions] = useState<Extension[]>([]);
+  const [isLoadingExtensions, setIsLoadingExtensions] = useState(false);
   const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const initialLoadDone = useRef(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Save selected conversation IDs and view mode to user preferences (debounced)
-  const saveMonitorPreferences = useCallback((conversationIds: string[], mode?: ViewMode) => {
+  // Save selected extension IDs and view mode to user preferences (debounced)
+  const saveMonitorPreferences = useCallback((extensionIds: string[], mode?: ViewMode) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        const body: { monitorConversationIds: string[]; monitorViewMode?: ViewMode } = {
-          monitorConversationIds: conversationIds,
+        const body: { monitorExtensionIds: string[]; monitorViewMode?: ViewMode } = {
+          monitorExtensionIds: extensionIds,
         };
         if (mode !== undefined) {
           body.monitorViewMode = mode;
@@ -68,23 +63,22 @@ export default function MonitorPage() {
   // Save view mode change
   const handleViewModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode);
-    saveMonitorPreferences(panels.map((p) => p.conversation.id), mode);
+    saveMonitorPreferences(panels.map((p) => p.extension.id), mode);
   }, [panels, saveMonitorPreferences]);
 
-  const fetchConversations = useCallback(async (): Promise<Conversation[]> => {
-    setIsLoadingConversations(true);
+  const fetchExtensions = useCallback(async (): Promise<Extension[]> => {
+    setIsLoadingExtensions(true);
     try {
-      const response = await fetch("/api/conversations?limit=100");
+      const response = await fetch("/api/extensions");
       if (response.ok) {
         const data = await response.json();
-        const convList = data.data || [];
-        setConversations(convList);
-        return convList;
+        setExtensions(data || []);
+        return data || [];
       }
     } catch (error) {
-      console.error("Failed to fetch conversations:", error);
+      console.error("Failed to fetch extensions:", error);
     } finally {
-      setIsLoadingConversations(false);
+      setIsLoadingExtensions(false);
     }
     return [];
   }, []);
@@ -96,28 +90,29 @@ export default function MonitorPage() {
 
     (async () => {
       try {
-        const [prefsResponse, convList] = await Promise.all([
+        const [prefsResponse, extList] = await Promise.all([
           fetch("/api/user/preferences"),
-          fetchConversations(),
+          fetchExtensions(),
         ]);
 
         if (prefsResponse.ok) {
           const prefsData = await prefsResponse.json();
-          const savedIds: string[] =
-            prefsData.preferences?.monitorConversationIds || [];
+          const savedExtIds: string[] =
+            prefsData.preferences?.monitorExtensionIds || [];
+          // Also check for legacy conversation IDs (backward compat)
           const savedViewMode: ViewMode =
             prefsData.preferences?.monitorViewMode || "grid";
 
           setViewMode(savedViewMode);
 
-          if (savedIds.length > 0 && convList.length > 0) {
+          if (savedExtIds.length > 0 && extList.length > 0) {
             const savedPanels: MonitorPanel[] = [];
-            for (const id of savedIds) {
-              const conv = convList.find((c: Conversation) => c.id === id);
-              if (conv) {
+            for (const id of savedExtIds) {
+              const ext = extList.find((e: Extension) => e.id === id);
+              if (ext) {
                 savedPanels.push({
                   id: `panel-${id}`,
-                  conversation: conv,
+                  extension: ext,
                   isMaximized: false,
                 });
               }
@@ -131,16 +126,16 @@ export default function MonitorPage() {
         setIsLoadingInitial(false);
       }
     })();
-  }, [fetchConversations]);
+  }, [fetchExtensions]);
 
   useEffect(() => {
-    if (showSelector && conversations.length === 0) {
-      fetchConversations();
+    if (showSelector && extensions.length === 0) {
+      fetchExtensions();
     }
-  }, [showSelector, conversations.length, fetchConversations]);
+  }, [showSelector, extensions.length, fetchExtensions]);
 
-  const addPanel = (conversation: Conversation) => {
-    if (panels.some((p) => p.conversation.id === conversation.id)) {
+  const addPanel = (extension: Extension) => {
+    if (panels.some((p) => p.extension.id === extension.id)) {
       return;
     }
 
@@ -148,19 +143,19 @@ export default function MonitorPage() {
       ...panels,
       {
         id: `panel-${Date.now()}`,
-        conversation,
+        extension,
         isMaximized: false,
       },
     ];
     setPanels(newPanels);
     setShowSelector(false);
-    saveMonitorPreferences(newPanels.map((p) => p.conversation.id));
+    saveMonitorPreferences(newPanels.map((p) => p.extension.id));
   };
 
   const removePanel = (panelId: string) => {
     const newPanels = panels.filter((p) => p.id !== panelId);
     setPanels(newPanels);
-    saveMonitorPreferences(newPanels.map((p) => p.conversation.id));
+    saveMonitorPreferences(newPanels.map((p) => p.extension.id));
   };
 
   const toggleMaximize = (panelId: string) => {
@@ -171,23 +166,21 @@ export default function MonitorPage() {
     );
   };
 
-  const getConversationTitle = (conv: Conversation) => {
-    if (conv.conversation_name) return conv.conversation_name;
-    const names = conv.participants
-      ?.map((p) => p.external_name || p.external_id)
-      .filter(Boolean)
-      .join(", ");
-    return names || "Unnamed Conversation";
+  const getExtensionTitle = (ext: Extension) => {
+    const name = ext.display_name ||
+      [ext.first_name, ext.last_name].filter(Boolean).join(" ") ||
+      ext.extension_number;
+    return `${name} (${ext.extension_number})`;
   };
 
-  const filteredConversations = conversations.filter((conv) => {
-    const title = getConversationTitle(conv).toLowerCase();
+  const filteredExtensions = extensions.filter((ext) => {
+    const title = getExtensionTitle(ext).toLowerCase();
     return title.includes(searchTerm.toLowerCase());
   });
 
-  // Get available conversations (not already in panels)
-  const availableConversations = filteredConversations.filter(
-    (conv) => !panels.some((p) => p.conversation.id === conv.id)
+  // Get available extensions (not already in panels)
+  const availableExtensions = filteredExtensions.filter(
+    (ext) => !panels.some((p) => p.extension.id === ext.id)
   );
 
   // Check if any panel is maximized
@@ -228,7 +221,7 @@ export default function MonitorPage() {
             </h1>
             <p className="text-sm text-gray-500 mt-1">
               {viewMode === "grid"
-                ? "View multiple conversations simultaneously"
+                ? "Monitor all chats for selected extensions"
                 : "Live activity feed from all conversations"}
             </p>
           </div>
@@ -273,7 +266,7 @@ export default function MonitorPage() {
                   disabled={showSelector}
                 >
                   <Plus className="h-4 w-4" />
-                  Add Conversation
+                  Add Extension
                 </Button>
               </>
             )}
@@ -281,62 +274,61 @@ export default function MonitorPage() {
         </div>
       </div>
 
-      {/* Conversation Selector Modal */}
+      {/* Extension Selector Modal */}
       {showSelector && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="p-4 border-b flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Select Conversation</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Select Extension to Monitor</h2>
               <button
                 onClick={() => setShowSelector(false)}
                 className="p-1 hover:bg-gray-100 rounded"
               >
-                <X className="h-5 w-5" />
+                <X className="h-5 w-5 text-gray-500" />
               </button>
             </div>
 
             <div className="p-4 border-b">
               <input
                 type="text"
-                placeholder="Search conversations..."
+                placeholder="Search extensions..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 placeholder-gray-400 bg-white"
               />
             </div>
 
             <div className="flex-1 overflow-y-auto p-2">
-              {isLoadingConversations ? (
+              {isLoadingExtensions ? (
                 <div className="flex items-center justify-center py-8">
                   <Spinner size="lg" />
                 </div>
-              ) : availableConversations.length === 0 ? (
+              ) : availableExtensions.length === 0 ? (
                 <div className="text-center py-8 text-gray-500">
                   {searchTerm
-                    ? "No matching conversations found"
-                    : "All conversations are already being monitored"}
+                    ? "No matching extensions found"
+                    : "All extensions are already being monitored"}
                 </div>
               ) : (
                 <div className="space-y-1">
-                  {availableConversations.map((conv) => (
+                  {availableExtensions.map((ext) => (
                     <button
-                      key={conv.id}
-                      onClick={() => addPanel(conv)}
+                      key={ext.id}
+                      onClick={() => addPanel(ext)}
                       className="w-full text-left px-3 py-3 hover:bg-gray-50 rounded-lg transition-colors"
                     >
-                      <div className="font-medium text-gray-900">
-                        {getConversationTitle(conv)}
-                      </div>
-                      <div className="text-sm text-gray-500 flex items-center gap-2 mt-1">
-                        <span>{conv.participant_count} participants</span>
-                        <span>•</span>
-                        <span>{conv.message_count} messages</span>
-                        {conv.is_group_chat && (
-                          <>
-                            <span>•</span>
-                            <span className="text-teal-600">Group</span>
-                          </>
-                        )}
+                      <div className="flex items-center gap-3">
+                        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center">
+                          <Phone className="h-4 w-4 text-teal-600" />
+                        </div>
+                        <div>
+                          <div className="font-medium text-gray-900">
+                            {getExtensionTitle(ext)}
+                          </div>
+                          <div className="text-sm text-gray-500">
+                            {ext.is_active ? "Active" : "Inactive"}
+                          </div>
+                        </div>
                       </div>
                     </button>
                   ))}
@@ -359,16 +351,16 @@ export default function MonitorPage() {
           {panels.length === 0 ? (
             <div className="flex-1 bg-white rounded-lg shadow flex items-center justify-center">
               <div className="text-center">
-                <Columns className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+                <Phone className="h-12 w-12 text-gray-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  No conversations selected
+                  No extensions selected
                 </h3>
                 <p className="text-gray-500 mb-4">
-                  Click &quot;Add Conversation&quot; to start monitoring chats
+                  Click &quot;Add Extension&quot; to start monitoring an extension&apos;s chats
                 </p>
                 <Button onClick={() => setShowSelector(true)}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Conversation
+                  Add Extension
                 </Button>
               </div>
             </div>
@@ -376,8 +368,9 @@ export default function MonitorPage() {
             // Show only maximized panel
             <div className="flex-1 bg-white rounded-lg shadow overflow-hidden flex flex-col">
               <div className="p-3 border-b bg-gray-50 flex items-center justify-between">
-                <h3 className="font-medium text-gray-900 truncate">
-                  {getConversationTitle(maximizedPanel.conversation)}
+                <h3 className="font-medium text-gray-900 truncate flex items-center gap-2">
+                  <Phone className="h-4 w-4 text-teal-600" />
+                  {getExtensionTitle(maximizedPanel.extension)}
                 </h3>
                 <div className="flex items-center gap-1">
                   <button
@@ -397,7 +390,7 @@ export default function MonitorPage() {
                 </div>
               </div>
               <div className="flex-1 overflow-auto min-h-0">
-                <MessageList conversationId={maximizedPanel.conversation.id} />
+                <ExtensionMessageList extensionId={maximizedPanel.extension.id} />
               </div>
             </div>
           ) : (
@@ -409,8 +402,9 @@ export default function MonitorPage() {
                   className="bg-white rounded-lg shadow overflow-hidden flex flex-col min-h-0"
                 >
                   <div className="p-3 border-b bg-gray-50 flex items-center justify-between shrink-0">
-                    <h3 className="font-medium text-gray-900 truncate text-sm">
-                      {getConversationTitle(panel.conversation)}
+                    <h3 className="font-medium text-gray-900 truncate text-sm flex items-center gap-2">
+                      <Phone className="h-3.5 w-3.5 text-teal-600" />
+                      {getExtensionTitle(panel.extension)}
                     </h3>
                     <div className="flex items-center gap-1">
                       <button
@@ -430,7 +424,7 @@ export default function MonitorPage() {
                     </div>
                   </div>
                   <div className="flex-1 overflow-auto min-h-0">
-                    <MessageList conversationId={panel.conversation.id} />
+                    <ExtensionMessageList extensionId={panel.extension.id} />
                   </div>
                 </div>
               ))}

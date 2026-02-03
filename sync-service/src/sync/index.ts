@@ -8,7 +8,7 @@ import { syncExtensions, ExtensionSyncResult } from "./extensions";
 import { syncFaxes, FaxesSyncResult } from "./faxes";
 import { syncMeetings, MeetingsSyncResult } from "./meetings";
 import { syncCdr, CdrSyncResult } from "./cdr";
-import { createSyncLog, updateSyncLog } from "../storage/supabase";
+import { createSyncLog, updateSyncLog, relinkOrphanedMedia } from "../storage/supabase";
 import { TenantConfig, getActiveTenants, getTenantPool, testTenantConnection } from "../tenant";
 
 // Sync types for granular scheduling
@@ -141,6 +141,20 @@ export async function runTenantSync(
         result.meetings = await syncMeetings(tenant);
       } catch (err) {
         logger.warn("Meetings sync failed, continuing", { error: (err as Error).message });
+      }
+
+      // After media files are downloaded, re-link any orphaned media to messages
+      try {
+        const relink = await relinkOrphanedMedia(tenant.id);
+        if (relink.linked > 0) {
+          logger.info("Re-linked orphaned media after media sync", {
+            tenantId: tenant.id,
+            linked: relink.linked,
+            checked: relink.checked,
+          });
+        }
+      } catch (err) {
+        logger.warn("Media re-linking failed, continuing", { error: (err as Error).message });
       }
     }
 
