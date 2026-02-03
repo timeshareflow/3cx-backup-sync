@@ -58,6 +58,27 @@ async function clearManualTriggers(): Promise<void> {
     .gt("trigger_requested_at", twoMinutesAgo);
 }
 
+// Check if there are recent messages with media that haven't been linked to media files yet
+async function hasRecentUnlinkedMedia(): Promise<boolean> {
+  try {
+    const supabase = getSupabaseClient();
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+    // Find messages created in the last 2 minutes with has_media=true
+    const { data } = await supabase
+      .from("messages")
+      .select("id, media_files(id)")
+      .eq("has_media", true)
+      .gt("created_at", twoMinutesAgo)
+      .limit(10);
+
+    // Check if any have no linked media_files
+    return (data || []).some((m: { media_files?: { id: string }[] }) => !m.media_files || m.media_files.length === 0);
+  } catch {
+    return false;
+  }
+}
+
 // Run chat/messages sync (fast - every 15-30 seconds)
 // CRITICAL: Messages sync should NEVER be blocked by media/recordings/full sync
 // This ensures chats are always up to date regardless of what else is running
@@ -100,6 +121,16 @@ async function runChatSync(): Promise<void> {
       ["messages"],
       activeTenants.map((t) => t.id)
     );
+
+    // After chat sync, check if new media messages need files downloaded
+    // Triggers an immediate media sync so thumbnails appear quickly
+    if (!runningSync.has("media") && !runningSync.has("full")) {
+      const needsMedia = await hasRecentUnlinkedMedia();
+      if (needsMedia) {
+        logger.info("New media messages detected - triggering immediate media sync");
+        runMediaSync();
+      }
+    }
   } catch (error) {
     logger.error("Chat sync failed", { error: (error as Error).message });
   } finally {

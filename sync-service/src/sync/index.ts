@@ -425,6 +425,18 @@ export async function runMultiTenantSyncByType(
 
             case "media":
               await syncMedia(tenant);
+              // Re-link any orphaned media to messages after download
+              try {
+                const relink = await relinkOrphanedMedia(tenant.id);
+                if (relink.linked > 0) {
+                  logger.info("Re-linked orphaned media after media sync", {
+                    tenantId: tenant.id,
+                    linked: relink.linked,
+                  });
+                }
+              } catch (relinkErr) {
+                logger.warn("Media re-linking failed", { error: (relinkErr as Error).message });
+              }
               break;
 
             case "recordings":
