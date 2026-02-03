@@ -19,14 +19,17 @@ let backgroundSyncTask: cron.ScheduledTask | null = null;
 let chatCycleCount = 0;
 
 // Sync intervals (configurable via env)
-const SYNC_INTERVALS = {
-  chat: parseInt(process.env.SYNC_INTERVAL_CHAT || "20"), // seconds
-  media: parseInt(process.env.SYNC_INTERVAL_MEDIA || "5"), // minutes
-  recordings: parseInt(process.env.SYNC_INTERVAL_RECORDINGS || "15"), // minutes
-  cdr: parseInt(process.env.SYNC_INTERVAL_CDR || "5"), // minutes
-  extensions: parseInt(process.env.SYNC_INTERVAL_EXTENSIONS || "60"), // minutes
-  background: parseInt(process.env.SYNC_INTERVAL_BACKGROUND || "30"), // minutes - full sync for inactive tenants
-};
+// NOTE: Computed lazily via getSyncIntervals() because dotenv.config() runs after module imports
+function getSyncIntervals() {
+  return {
+    chat: parseInt(process.env.SYNC_INTERVAL_CHAT || "20"), // seconds
+    media: parseInt(process.env.SYNC_INTERVAL_MEDIA || "5"), // minutes
+    recordings: parseInt(process.env.SYNC_INTERVAL_RECORDINGS || "15"), // minutes
+    cdr: parseInt(process.env.SYNC_INTERVAL_CDR || "5"), // minutes
+    extensions: parseInt(process.env.SYNC_INTERVAL_EXTENSIONS || "60"), // minutes
+    background: parseInt(process.env.SYNC_INTERVAL_BACKGROUND || "30"), // minutes - full sync for inactive tenants
+  };
+}
 
 // Check if any tenant has requested a manual sync trigger
 async function checkForManualTriggers(): Promise<boolean> {
@@ -287,17 +290,19 @@ async function runBackgroundSync(): Promise<void> {
 }
 
 export function startScheduler(): void {
+  const intervals = getSyncIntervals();
+
   logger.info("Starting multi-interval scheduler", {
-    chatInterval: `${SYNC_INTERVALS.chat}s`,
-    mediaInterval: `${SYNC_INTERVALS.media}m`,
-    recordingsInterval: `${SYNC_INTERVALS.recordings}m`,
-    cdrInterval: `${SYNC_INTERVALS.cdr}m`,
-    extensionsInterval: `${SYNC_INTERVALS.extensions}m`,
-    backgroundInterval: `${SYNC_INTERVALS.background}m`,
+    chatInterval: `${intervals.chat}s`,
+    mediaInterval: `${intervals.media}m`,
+    recordingsInterval: `${intervals.recordings}m`,
+    cdrInterval: `${intervals.cdr}m`,
+    extensionsInterval: `${intervals.extensions}m`,
+    backgroundInterval: `${intervals.background}m`,
   });
 
   // Chat sync: every N seconds (use setInterval for sub-minute)
-  const chatIntervalMs = SYNC_INTERVALS.chat * 1000;
+  const chatIntervalMs = intervals.chat * 1000;
   const chatIntervalId = setInterval(runChatSync, chatIntervalMs);
   chatSyncTask = {
     start: () => {},
@@ -305,32 +310,32 @@ export function startScheduler(): void {
   } as cron.ScheduledTask;
 
   // Media sync: every N minutes
-  mediaSyncTask = cron.schedule(`*/${SYNC_INTERVALS.media} * * * *`, runMediaSync);
+  mediaSyncTask = cron.schedule(`*/${intervals.media} * * * *`, runMediaSync);
   mediaSyncTask.start();
 
   // Recordings sync: every N minutes
-  recordingsSyncTask = cron.schedule(`*/${SYNC_INTERVALS.recordings} * * * *`, runRecordingsSync);
+  recordingsSyncTask = cron.schedule(`*/${intervals.recordings} * * * *`, runRecordingsSync);
   recordingsSyncTask.start();
 
   // CDR sync: every N minutes
-  cdrSyncTask = cron.schedule(`*/${SYNC_INTERVALS.cdr} * * * *`, runCdrSync);
+  cdrSyncTask = cron.schedule(`*/${intervals.cdr} * * * *`, runCdrSync);
   cdrSyncTask.start();
 
   // Extensions sync: every N minutes
-  extensionsSyncTask = cron.schedule(`*/${SYNC_INTERVALS.extensions} * * * *`, runExtensionsSync);
+  extensionsSyncTask = cron.schedule(`*/${intervals.extensions} * * * *`, runExtensionsSync);
   extensionsSyncTask.start();
 
   // Background sync: every N minutes
-  backgroundSyncTask = cron.schedule(`*/${SYNC_INTERVALS.background} * * * *`, runBackgroundSync);
+  backgroundSyncTask = cron.schedule(`*/${intervals.background} * * * *`, runBackgroundSync);
   backgroundSyncTask.start();
 
   logger.info("Multi-interval scheduler started:");
-  logger.info(`  - Chat messages: every ${SYNC_INTERVALS.chat} seconds`);
-  logger.info(`  - Media files: every ${SYNC_INTERVALS.media} minutes`);
-  logger.info(`  - Recordings: every ${SYNC_INTERVALS.recordings} minutes`);
-  logger.info(`  - CDR: every ${SYNC_INTERVALS.cdr} minutes`);
-  logger.info(`  - Extensions: every ${SYNC_INTERVALS.extensions} minutes`);
-  logger.info(`  - Background full sync (inactive tenants): every ${SYNC_INTERVALS.background} minutes`);
+  logger.info(`  - Chat messages: every ${intervals.chat} seconds`);
+  logger.info(`  - Media files: every ${intervals.media} minutes`);
+  logger.info(`  - Recordings: every ${intervals.recordings} minutes`);
+  logger.info(`  - CDR: every ${intervals.cdr} minutes`);
+  logger.info(`  - Extensions: every ${intervals.extensions} minutes`);
+  logger.info(`  - Background full sync (inactive tenants): every ${intervals.background} minutes`);
 }
 
 export function stopScheduler(): void {
