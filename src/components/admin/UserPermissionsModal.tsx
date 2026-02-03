@@ -5,7 +5,16 @@ import { Modal } from "@/components/ui/Modal";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Input } from "@/components/ui/Input";
-import { CheckSquare, Square, Users, MessageSquare, Search, Phone, Mic, Video, Voicemail, FileText, ToggleLeft, ToggleRight } from "lucide-react";
+import { CheckSquare, Square, Users, Search, Phone, Mic, Video, Voicemail, FileText, ToggleLeft, ToggleRight } from "lucide-react";
+
+interface Extension {
+  id: string;
+  extension_number: string;
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  is_active: boolean;
+}
 
 interface Conversation {
   id: string;
@@ -13,12 +22,6 @@ interface Conversation {
   is_group_chat: boolean;
   message_count: number;
   participant_count: number;
-  participants: Array<{
-    external_id: string | null;
-    external_name: string | null;
-    extension_id: string | null;
-    participant_type: string;
-  }>;
 }
 
 interface FeaturePermissions {
@@ -53,9 +56,11 @@ export function UserPermissionsModal({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [selectedConversations, setSelectedConversations] = useState<Set<string>>(new Set());
+  const [extensions, setExtensions] = useState<Extension[]>([]);
+  const [groupChats, setGroupChats] = useState<Conversation[]>([]);
+  const [selectedExtensions, setSelectedExtensions] = useState<Set<string>>(new Set());
   const [extensionRecordingAccess, setExtensionRecordingAccess] = useState<Map<string, boolean>>(new Map());
+  const [selectedGroupChats, setSelectedGroupChats] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState("");
   const [featurePermissions, setFeaturePermissions] = useState<FeaturePermissions>({
     canViewCdr: false,
@@ -77,57 +82,43 @@ export function UserPermissionsModal({
     setError(null);
 
     try {
-      // Fetch all conversations and current permissions in parallel
-      const [conversationsRes, permissionsRes] = await Promise.all([
+      const [extensionsRes, conversationsRes, permissionsRes] = await Promise.all([
+        fetch("/api/extensions"),
         fetch("/api/conversations?limit=1000"),
         fetch(`/api/admin/users/${userId}/permissions`),
       ]);
 
-      if (!conversationsRes.ok || !permissionsRes.ok) {
+      if (!extensionsRes.ok || !conversationsRes.ok || !permissionsRes.ok) {
         throw new Error("Failed to fetch data");
       }
 
+      const extensionsData = await extensionsRes.json();
       const conversationsData = await conversationsRes.json();
       const permissionsData = await permissionsRes.json();
 
-      // Get all conversations with messages
-      const allConversations: Conversation[] = (conversationsData.data || [])
-        .filter((c: Conversation) => c.message_count > 0);
+      setExtensions(extensionsData || []);
 
-      setConversations(allConversations);
+      // Filter to only group chats with messages
+      const groups = (conversationsData.data || [])
+        .filter((c: Conversation) => c.is_group_chat && c.message_count > 0);
+      setGroupChats(groups);
 
-      // Build the selected set from both conversation permissions and extension permissions
-      const selectedSet = new Set<string>();
+      // Build selected extensions from permissions
+      const selectedExtSet = new Set<string>(permissionsData.extensionIds || []);
+      setSelectedExtensions(selectedExtSet);
 
-      // Add directly permitted conversations (group chats and any conversation-level permissions)
-      for (const convId of (permissionsData.groupChatIds || [])) {
-        selectedSet.add(convId);
-      }
-
-      // Build recording access map from extensionPermissions (new format)
+      // Build recording access map
       const recordingAccessMap = new Map<string, boolean>();
-      const extPermissions = permissionsData.extensionPermissions || [];
-      for (const perm of extPermissions) {
+      for (const perm of (permissionsData.extensionPermissions || [])) {
         recordingAccessMap.set(perm.extensionId, perm.canAccessRecordings);
       }
-
-      // Map extension permissions to conversations
-      // If user has permission for an extension, select all conversations where that extension participates
-      const permittedExtIds = new Set<string>(permissionsData.extensionIds || []);
-      if (permittedExtIds.size > 0) {
-        for (const conv of allConversations) {
-          if (!conv.is_group_chat && conv.participants?.some(
-            p => p.extension_id && permittedExtIds.has(p.extension_id)
-          )) {
-            selectedSet.add(conv.id);
-          }
-        }
-      }
-
-      setSelectedConversations(selectedSet);
       setExtensionRecordingAccess(recordingAccessMap);
 
-      // Set feature permissions from API response
+      // Build selected group chats
+      const selectedGroupSet = new Set<string>(permissionsData.groupChatIds || []);
+      setSelectedGroupChats(selectedGroupSet);
+
+      // Set feature permissions
       if (permissionsData.featurePermissions) {
         setFeaturePermissions(permissionsData.featurePermissions);
       }
@@ -144,30 +135,12 @@ export function UserPermissionsModal({
     setError(null);
 
     try {
-      // Split selected into group chats and 1-on-1 chats
-      const selectedGroupChatIds: string[] = [];
       const extensionPermissions: ExtensionPermission[] = [];
-      const seenExtensions = new Set<string>();
-
-      for (const convId of selectedConversations) {
-        const conv = conversations.find(c => c.id === convId);
-        if (!conv) continue;
-
-        if (conv.is_group_chat) {
-          selectedGroupChatIds.push(convId);
-        } else {
-          // For 1-on-1 chats, add participant extension IDs with recording toggle
-          selectedGroupChatIds.push(convId); // Also store as conversation permission
-          for (const p of (conv.participants || [])) {
-            if (p.extension_id && !seenExtensions.has(p.extension_id)) {
-              seenExtensions.add(p.extension_id);
-              extensionPermissions.push({
-                extensionId: p.extension_id,
-                canAccessRecordings: extensionRecordingAccess.get(p.extension_id) ?? false,
-              });
-            }
-          }
-        }
+      for (const extId of selectedExtensions) {
+        extensionPermissions.push({
+          extensionId: extId,
+          canAccessRecordings: extensionRecordingAccess.get(extId) ?? false,
+        });
       }
 
       const response = await fetch(`/api/admin/users/${userId}/permissions`, {
@@ -175,7 +148,7 @@ export function UserPermissionsModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           extensionPermissions,
-          groupChatIds: selectedGroupChatIds,
+          groupChatIds: Array.from(selectedGroupChats),
           featurePermissions,
         }),
       });
@@ -195,8 +168,8 @@ export function UserPermissionsModal({
     }
   };
 
-  const toggleConversation = (id: string) => {
-    setSelectedConversations(prev => {
+  const toggleExtension = (id: string) => {
+    setSelectedExtensions(prev => {
       const next = new Set(prev);
       if (next.has(id)) {
         next.delete(id);
@@ -207,81 +180,59 @@ export function UserPermissionsModal({
     });
   };
 
-  const toggleRecordingAccess = (convId: string, e: React.MouseEvent) => {
-    e.stopPropagation(); // Prevent toggling the conversation selection
-    const conv = conversations.find(c => c.id === convId);
-    if (!conv) return;
-
-    // Toggle recording access for all extension participants in this conversation
+  const toggleExtensionRecording = (extId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
     setExtensionRecordingAccess(prev => {
       const next = new Map(prev);
-      for (const p of (conv.participants || [])) {
-        if (p.extension_id) {
-          const current = next.get(p.extension_id) ?? false;
-          next.set(p.extension_id, !current);
-        }
+      next.set(extId, !(next.get(extId) ?? false));
+      return next;
+    });
+  };
+
+  const toggleGroupChat = (id: string) => {
+    setSelectedGroupChats(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
       }
       return next;
     });
   };
 
-  const getRecordingAccessForConv = (conv: Conversation): boolean => {
-    // Return true if any participant extension has recording access
-    for (const p of (conv.participants || [])) {
-      if (p.extension_id && extensionRecordingAccess.get(p.extension_id)) {
-        return true;
-      }
-    }
-    return false;
+  const getExtensionTitle = (ext: Extension) => {
+    const name = ext.display_name ||
+      [ext.first_name, ext.last_name].filter(Boolean).join(" ") ||
+      ext.extension_number;
+    return `${name} (${ext.extension_number})`;
   };
 
-  const oneOnOneChats = conversations.filter(c => !c.is_group_chat);
-  const groupChats = conversations.filter(c => c.is_group_chat);
+  const filteredExtensions = extensions.filter(ext => {
+    if (!searchQuery) return true;
+    return getExtensionTitle(ext).toLowerCase().includes(searchQuery.toLowerCase());
+  });
 
-  const filteredOneOnOne = oneOnOneChats.filter(c =>
-    !searchQuery ||
-    c.conversation_name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const filteredGroupChats = groupChats.filter(c => {
+    if (!searchQuery) return true;
+    return c.conversation_name?.toLowerCase().includes(searchQuery.toLowerCase());
+  });
 
-  const filteredGroupChats = groupChats.filter(c =>
-    !searchQuery ||
-    c.conversation_name?.toLowerCase().includes(searchQuery.toLowerCase())
-  );
-
-  const selectAllOneOnOne = () => {
-    setSelectedConversations(prev => {
-      const next = new Set(prev);
-      oneOnOneChats.forEach(c => next.add(c.id));
-      return next;
-    });
+  const selectAllExtensions = () => {
+    setSelectedExtensions(new Set(extensions.map(e => e.id)));
   };
 
-  const deselectAllOneOnOne = () => {
-    setSelectedConversations(prev => {
-      const next = new Set(prev);
-      oneOnOneChats.forEach(c => next.delete(c.id));
-      return next;
-    });
+  const deselectAllExtensions = () => {
+    setSelectedExtensions(new Set());
   };
 
   const selectAllGroupChats = () => {
-    setSelectedConversations(prev => {
-      const next = new Set(prev);
-      groupChats.forEach(c => next.add(c.id));
-      return next;
-    });
+    setSelectedGroupChats(new Set(groupChats.map(c => c.id)));
   };
 
   const deselectAllGroupChats = () => {
-    setSelectedConversations(prev => {
-      const next = new Set(prev);
-      groupChats.forEach(c => next.delete(c.id));
-      return next;
-    });
+    setSelectedGroupChats(new Set());
   };
-
-  const selectedOneOnOneCount = oneOnOneChats.filter(c => selectedConversations.has(c.id)).length;
-  const selectedGroupChatCount = groupChats.filter(c => selectedConversations.has(c.id)).length;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`Permissions for ${userName}`} size="lg">
@@ -301,7 +252,6 @@ export function UserPermissionsModal({
           <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Feature Access</h3>
             <div className="grid grid-cols-2 gap-3">
-              {/* CDR */}
               <button
                 type="button"
                 onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewCdr: !prev.canViewCdr }))}
@@ -316,7 +266,6 @@ export function UserPermissionsModal({
                 <span className="text-sm text-gray-700">Call History (CDR)</span>
               </button>
 
-              {/* Recordings */}
               <button
                 type="button"
                 onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewRecordings: !prev.canViewRecordings }))}
@@ -331,7 +280,6 @@ export function UserPermissionsModal({
                 <span className="text-sm text-gray-700">Call Recordings</span>
               </button>
 
-              {/* Meetings */}
               <button
                 type="button"
                 onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewMeetings: !prev.canViewMeetings }))}
@@ -346,7 +294,6 @@ export function UserPermissionsModal({
                 <span className="text-sm text-gray-700">Meetings</span>
               </button>
 
-              {/* Voicemails */}
               <button
                 type="button"
                 onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewVoicemails: !prev.canViewVoicemails }))}
@@ -361,7 +308,6 @@ export function UserPermissionsModal({
                 <span className="text-sm text-gray-700">Voicemails</span>
               </button>
 
-              {/* Faxes */}
               <button
                 type="button"
                 onClick={() => setFeaturePermissions(prev => ({ ...prev, canViewFaxes: !prev.canViewFaxes }))}
@@ -378,15 +324,13 @@ export function UserPermissionsModal({
             </div>
           </div>
 
-          {/* Conversation Permissions Header */}
+          {/* Chat Access Header */}
           <div>
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Chat Access</h3>
-
-            {/* Search */}
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
               <Input
-                placeholder="Search conversations..."
+                placeholder="Search extensions or group chats..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="pl-9 text-sm"
@@ -394,17 +338,17 @@ export function UserPermissionsModal({
             </div>
           </div>
 
-          {/* 1-on-1 Chats Section */}
+          {/* Extensions Section */}
           <div>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
-                <MessageSquare className="h-4 w-4" />
-                1-on-1 Chats ({selectedOneOnOneCount}/{oneOnOneChats.length} selected)
+                <Phone className="h-4 w-4" />
+                Extensions ({selectedExtensions.size}/{extensions.length} selected)
               </h3>
               <div className="flex gap-2">
                 <button
                   type="button"
-                  onClick={selectAllOneOnOne}
+                  onClick={selectAllExtensions}
                   className="text-xs text-blue-600 hover:text-blue-800"
                 >
                   Select All
@@ -412,7 +356,7 @@ export function UserPermissionsModal({
                 <span className="text-gray-300">|</span>
                 <button
                   type="button"
-                  onClick={deselectAllOneOnOne}
+                  onClick={deselectAllExtensions}
                   className="text-xs text-blue-600 hover:text-blue-800"
                 >
                   Deselect All
@@ -420,23 +364,27 @@ export function UserPermissionsModal({
               </div>
             </div>
 
-            {filteredOneOnOne.length === 0 ? (
+            <p className="text-xs text-gray-500 mb-2">
+              Selecting an extension grants access to all its direct message conversations.
+            </p>
+
+            {filteredExtensions.length === 0 ? (
               <p className="text-sm text-gray-500 italic">
-                {searchQuery ? "No matching chats" : "No 1-on-1 chats with messages"}
+                {searchQuery ? "No matching extensions" : "No extensions found"}
               </p>
             ) : (
               <div className="max-h-48 overflow-y-auto border border-gray-200 rounded-lg">
-                {filteredOneOnOne.map(conv => {
-                  const isSelected = selectedConversations.has(conv.id);
-                  const hasRecordingAccess = getRecordingAccessForConv(conv);
+                {filteredExtensions.map(ext => {
+                  const isSelected = selectedExtensions.has(ext.id);
+                  const hasRecordingAccess = extensionRecordingAccess.get(ext.id) ?? false;
                   return (
                     <div
-                      key={conv.id}
+                      key={ext.id}
                       className="flex items-center gap-2 px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0"
                     >
                       <button
                         type="button"
-                        onClick={() => toggleConversation(conv.id)}
+                        onClick={() => toggleExtension(ext.id)}
                         className="flex items-center gap-3 flex-1 text-left"
                       >
                         {isSelected ? (
@@ -445,17 +393,16 @@ export function UserPermissionsModal({
                           <Square className="h-4 w-4 text-gray-400 flex-shrink-0" />
                         )}
                         <span className="text-sm text-gray-900 truncate flex-1">
-                          {conv.conversation_name || "Unnamed Chat"}
+                          {getExtensionTitle(ext)}
                         </span>
-                        <span className="text-xs text-gray-400">
-                          {conv.message_count} msgs
-                        </span>
+                        {!ext.is_active && (
+                          <span className="text-xs text-gray-400">Inactive</span>
+                        )}
                       </button>
-                      {/* Recording access toggle - only show when selected */}
                       {isSelected && (
                         <button
                           type="button"
-                          onClick={(e) => toggleRecordingAccess(conv.id, e)}
+                          onClick={(e) => toggleExtensionRecording(ext.id, e)}
                           className={`flex items-center gap-1 px-2 py-1 rounded text-xs transition-colors ${
                             hasRecordingAccess
                               ? "bg-green-100 text-green-700 hover:bg-green-200"
@@ -479,7 +426,7 @@ export function UserPermissionsModal({
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
                 <Users className="h-4 w-4" />
-                Group Chats ({selectedGroupChatCount}/{groupChats.length} selected)
+                Group Chats ({selectedGroupChats.size}/{groupChats.length} selected)
               </h3>
               <div className="flex gap-2">
                 <button
@@ -510,10 +457,10 @@ export function UserPermissionsModal({
                   <button
                     key={conv.id}
                     type="button"
-                    onClick={() => toggleConversation(conv.id)}
+                    onClick={() => toggleGroupChat(conv.id)}
                     className="w-full flex items-center gap-3 px-3 py-2 hover:bg-gray-50 border-b border-gray-100 last:border-b-0 text-left"
                   >
-                    {selectedConversations.has(conv.id) ? (
+                    {selectedGroupChats.has(conv.id) ? (
                       <CheckSquare className="h-4 w-4 text-blue-600 flex-shrink-0" />
                     ) : (
                       <Square className="h-4 w-4 text-gray-400 flex-shrink-0" />
@@ -530,14 +477,14 @@ export function UserPermissionsModal({
             )}
           </div>
 
-          {/* Info message */}
+          {/* Info */}
           <div className="text-xs text-gray-500 space-y-1">
-            <p>Users with no conversations selected will not see any chats. Admins bypass these restrictions.</p>
+            <p>Users with no permissions will not see any chats. Admins bypass these restrictions.</p>
             <p>
               <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-green-100 text-green-700 rounded">
                 <Mic className="h-3 w-3" />On
               </span>
-              {" "}next to a chat enables recording access for that extension.
+              {" "}enables recording access for that extension.
             </p>
           </div>
 
