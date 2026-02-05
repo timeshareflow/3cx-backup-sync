@@ -142,6 +142,8 @@ async function runChatSync(): Promise<void> {
 }
 
 // Run media sync (every 5 minutes)
+// CRITICAL: Media sync runs for ALL active tenants, not just those with active users
+// This ensures media files are always backed up regardless of user activity
 async function runMediaSync(): Promise<void> {
   if (runningSync.has("media") || runningSync.has("full")) {
     logger.debug("Media sync skipped - already running");
@@ -149,18 +151,20 @@ async function runMediaSync(): Promise<void> {
   }
 
   try {
-    const activeTenants = await getActiveUserTenants();
-    if (activeTenants.length === 0) {
+    // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
+    // Media backup should happen regardless of whether users are logged in
+    const allTenants = await getActiveTenants();
+    if (allTenants.length === 0) {
       return;
     }
 
     runningSync.add("media");
 
-    logger.info(`Media sync for ${activeTenants.length} tenant(s)`);
+    logger.info(`Media sync for ${allTenants.length} tenant(s)`);
 
     await runMultiTenantSyncByType(
       ["media", "voicemails"],
-      activeTenants.map((t) => t.id)
+      allTenants.map((t) => t.id)
     );
   } catch (error) {
     logger.error("Media sync failed", { error: (error as Error).message });
@@ -170,6 +174,8 @@ async function runMediaSync(): Promise<void> {
 }
 
 // Run recordings sync (every 15 minutes)
+// CRITICAL: Recordings sync runs for ALL active tenants, not just those with active users
+// This ensures call recordings are always backed up regardless of user activity
 async function runRecordingsSync(): Promise<void> {
   if (runningSync.has("recordings") || runningSync.has("full")) {
     logger.debug("Recordings sync skipped - already running");
@@ -177,18 +183,20 @@ async function runRecordingsSync(): Promise<void> {
   }
 
   try {
-    const activeTenants = await getActiveUserTenants();
-    if (activeTenants.length === 0) {
+    // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
+    // Recording backup should happen regardless of whether users are logged in
+    const allTenants = await getActiveTenants();
+    if (allTenants.length === 0) {
       return;
     }
 
     runningSync.add("recordings");
 
-    logger.info(`Recordings sync for ${activeTenants.length} tenant(s)`);
+    logger.info(`Recordings sync for ${allTenants.length} tenant(s)`);
 
     await runMultiTenantSyncByType(
       ["recordings", "meetings", "faxes"],
-      activeTenants.map((t) => t.id)
+      allTenants.map((t) => t.id)
     );
   } catch (error) {
     logger.error("Recordings sync failed", { error: (error as Error).message });
@@ -257,7 +265,7 @@ async function runExtensionsSync(): Promise<void> {
 }
 
 // Run lightweight sync for inactive tenants (every 30 minutes)
-// Only syncs messages and CDR to avoid memory issues with large media syncs
+// Only syncs messages and CDR - media/recordings now run for all tenants via dedicated schedulers
 async function runBackgroundSync(): Promise<void> {
   if (runningSync.size > 0) {
     logger.debug("Background sync skipped - other sync running");
