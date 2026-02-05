@@ -1412,6 +1412,57 @@ export async function insertMediaFileNew(media: {
   return data.id;
 }
 
+// Get all synced filenames for a tenant+category (for fast duplicate checking)
+// Extracts just the filename from storage_path to avoid date-based path mismatches
+export async function getSyncedFilenames(
+  tenantId: string,
+  category: string
+): Promise<Set<string>> {
+  const client = getSupabaseClient();
+  const filenames = new Set<string>();
+  const prefix = `${tenantId}/${category}/`;
+
+  // Paginate through all media files for this tenant/category
+  let offset = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data, error } = await client
+      .from("media_files")
+      .select("storage_path")
+      .eq("tenant_id", tenantId)
+      .like("storage_path", `${prefix}%`)
+      .range(offset, offset + pageSize - 1);
+
+    if (error) {
+      logger.error("Failed to fetch synced filenames", { tenantId, category, error: error.message });
+      break;
+    }
+
+    if (!data || data.length === 0) break;
+
+    for (const row of data) {
+      if (row.storage_path) {
+        // Extract just the base name WITHOUT extension (last segment of path, strip extension)
+        // Extension changes after compression (e.g., .MOV -> .mp4, .jpeg -> .webp)
+        // so we only compare the base name which is deterministic from the source file
+        const parts = row.storage_path.split("/");
+        const filename = parts[parts.length - 1];
+        if (filename) {
+          const dotIdx = filename.lastIndexOf(".");
+          const baseName = dotIdx > 0 ? filename.substring(0, dotIdx) : filename;
+          filenames.add(baseName);
+        }
+      }
+    }
+
+    if (data.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return filenames;
+}
+
 // Update media file with message link and original filename
 export async function linkMediaToMessage(
   tenantId: string,

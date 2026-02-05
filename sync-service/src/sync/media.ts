@@ -3,13 +3,12 @@ import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import {
   uploadBufferWithCompression,
-  fileExists,
   detectFileType,
   generateStoragePath,
   getFileInfo,
   streamUpload,
 } from "../storage/spaces-storage";
-import { insertMediaFileNew, updateSyncStatus } from "../storage/supabase";
+import { insertMediaFileNew, updateSyncStatus, getSyncedFilenames } from "../storage/supabase";
 import {
   createSftpClient,
   listRemoteFilesRecursive,
@@ -119,46 +118,48 @@ export async function syncMedia(
       return result;
     }
 
-    logger.info(`Found ${files.length} files to process (including subfolders)`, { tenantId });
+    logger.info(`Found ${files.length} files on SFTP`, { tenantId });
 
+    // Load all already-synced filenames from DB in one query (instead of per-file HEAD checks)
+    const syncedFilenames = await getSyncedFilenames(tenantId, "chat-media");
+    logger.info(`Loaded ${syncedFilenames.size} already-synced files from DB`, { tenantId });
+
+    // Pre-filter: determine which files need syncing using in-memory Set lookup
+    // Compare by sanitized base name only (extension changes after compression)
+    const filesToSync: typeof files = [];
     for (const file of files) {
-      try {
-        // Check file size - skip files over streaming limit (500MB)
-        if (file.size > MAX_STREAM_FILE_SIZE_BYTES) {
-          logger.warn("Skipping extremely large file", {
-            tenantId,
-            filename: file.relativePath,
-            size: formatBytes(file.size),
-            maxSize: formatBytes(MAX_STREAM_FILE_SIZE_BYTES),
-          });
-          result.filesTooLarge++;
-          continue;
-        }
+      if (file.size > MAX_STREAM_FILE_SIZE_BYTES) {
+        result.filesTooLarge++;
+        continue;
+      }
+      // Build just the base name (no extension) that would be used in storage
+      const baseName = path.basename(file.relativePath, path.extname(file.relativePath));
+      const sanitizedName = baseName
+        .replace(/\[/g, "(")
+        .replace(/\]/g, ")")
+        .replace(/[#%&{}<>*?$!'":@+`|=]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
 
+      if (syncedFilenames.has(sanitizedName)) {
+        result.filesSkipped++;
+      } else {
+        filesToSync.push(file);
+      }
+    }
+
+    logger.info(`${filesToSync.length} new files to sync, ${result.filesSkipped} already synced`, { tenantId });
+
+    for (const file of filesToSync) {
+      try {
         // Determine upload strategy based on file size
         const useStreaming = file.size > MAX_FILE_SIZE_BYTES;
-
-        // Log file info for debugging
-        logger.debug("Processing media file", {
-          tenantId,
-          filename: file.filename,
-          relativePath: file.relativePath,
-          size: formatBytes(file.size),
-          strategy: useStreaming ? "streaming" : "buffer",
-        });
 
         // Get file info from filename for streaming (can't detect from buffer)
         const fileInfo = getFileInfo(file.filename);
 
         // Generate storage path - preserve subfolder structure
         const storagePath = generateStoragePath(tenantId, "chat-media", file.relativePath, fileInfo.extension);
-
-        // Check if already uploaded
-        const exists = await fileExists(storagePath);
-        if (exists) {
-          result.filesSkipped++;
-          continue;
-        }
 
         let uploadedPath: string;
         let uploadedSize: number;
@@ -167,7 +168,6 @@ export async function syncMedia(
 
         if (useStreaming) {
           // STREAMING: For large files (25MB-500MB), stream directly to S3
-          // No compression possible with streaming, but avoids memory issues
           logger.info("Using streaming upload for large file", {
             tenantId,
             filename: file.relativePath,
@@ -178,15 +178,9 @@ export async function syncMedia(
           const streamResult = await streamUpload(stream, storagePath, fileInfo.mimeType, file.size);
 
           uploadedPath = streamResult.path;
-          uploadedSize = file.size; // Use original size since no compression
+          uploadedSize = file.size;
           mimeType = fileInfo.mimeType;
           fileType = fileInfo.fileType;
-
-          logger.info("Large file streamed successfully", {
-            tenantId,
-            filename: file.relativePath,
-            size: formatBytes(file.size),
-          });
         } else {
           // BUFFER: For smaller files (<25MB), download to buffer and compress
           const buffer = await downloadFile(sftp, file.fullPath);
@@ -222,7 +216,7 @@ export async function syncMedia(
         });
 
         result.filesSynced++;
-        logger.debug(`Synced media file via SFTP`, { tenantId, filename: file.relativePath });
+        logger.info(`Synced media file`, { tenantId, filename: file.relativePath, size: formatBytes(file.size) });
       } catch (error) {
         const err = handleError(error);
         result.errors.push({
@@ -304,30 +298,40 @@ export async function syncRecordings(
     sftp = await createSftpClient(sftpConfig);
     const files = await listRemoteFilesRecursive(sftp, recordingsPath);
 
-    logger.info(`Found ${files.length} recordings to process`, { tenantId: tenant.id });
+    logger.info(`Found ${files.length} recordings on SFTP`, { tenantId: tenant.id });
 
+    // Load already-synced filenames from DB in one query
+    const syncedFilenames = await getSyncedFilenames(tenant.id, "recordings");
+    logger.info(`Loaded ${syncedFilenames.size} already-synced recording files from DB`, { tenantId: tenant.id });
+
+    // Pre-filter using in-memory Set lookup by base name (no extension)
+    const recordingsToSync: typeof files = [];
     for (const file of files) {
-      try {
-        // Check file size before downloading
-        if (file.size > MAX_FILE_SIZE_BYTES) {
-          logger.warn("Skipping large recording", {
-            tenantId: tenant.id,
-            filename: file.filename,
-            size: formatBytes(file.size),
-          });
-          result.filesTooLarge++;
-          continue;
-        }
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        result.filesTooLarge++;
+        continue;
+      }
+      const baseName = path.basename(file.filename, path.extname(file.filename));
+      const sanitizedName = baseName
+        .replace(/\[/g, "(")
+        .replace(/\]/g, ")")
+        .replace(/[#%&{}<>*?$!'":@+`|=]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      if (syncedFilenames.has(sanitizedName)) {
+        result.filesSkipped++;
+      } else {
+        recordingsToSync.push(file);
+      }
+    }
 
+    logger.info(`${recordingsToSync.length} new recordings to sync, ${result.filesSkipped} already synced`, { tenantId: tenant.id });
+
+    for (const file of recordingsToSync) {
+      try {
         const buffer = await downloadFile(sftp, file.fullPath);
         const { fileType, extension } = detectFileType(buffer);
         const storagePath = generateStoragePath(tenant.id, "recordings", file.filename, extension);
-
-        const exists = await fileExists(storagePath);
-        if (exists) {
-          result.filesSkipped++;
-          continue;
-        }
 
         // Upload with compression (recordings are often WAV, compress to MP3)
         const uploadResult = await uploadBufferWithCompression(
@@ -408,28 +412,35 @@ export async function syncVoicemails(
     sftp = await createSftpClient(sftpConfig);
     const files = await listRemoteFilesRecursive(sftp, voicemailPath);
 
-    for (const file of files) {
-      try {
-        // Check file size before downloading
-        if (file.size > MAX_FILE_SIZE_BYTES) {
-          logger.warn("Skipping large voicemail", {
-            tenantId: tenant.id,
-            filename: file.filename,
-            size: formatBytes(file.size),
-          });
-          result.filesTooLarge++;
-          continue;
-        }
+    // Load already-synced filenames from DB in one query
+    const syncedFilenames = await getSyncedFilenames(tenant.id, "voicemails");
 
+    // Pre-filter using in-memory Set lookup by base name (no extension)
+    const voicemailsToSync: typeof files = [];
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        result.filesTooLarge++;
+        continue;
+      }
+      const baseName = path.basename(file.filename, path.extname(file.filename));
+      const sanitizedName = baseName
+        .replace(/\[/g, "(")
+        .replace(/\]/g, ")")
+        .replace(/[#%&{}<>*?$!'":@+`|=]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      if (syncedFilenames.has(sanitizedName)) {
+        result.filesSkipped++;
+      } else {
+        voicemailsToSync.push(file);
+      }
+    }
+
+    for (const file of voicemailsToSync) {
+      try {
         const buffer = await downloadFile(sftp, file.fullPath);
         const { fileType, extension } = detectFileType(buffer);
         const storagePath = generateStoragePath(tenant.id, "voicemails", file.filename, extension);
-
-        const exists = await fileExists(storagePath);
-        if (exists) {
-          result.filesSkipped++;
-          continue;
-        }
 
         // Upload with compression (voicemails are often WAV, compress to MP3)
         const uploadResult = await uploadBufferWithCompression(
