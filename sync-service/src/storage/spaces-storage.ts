@@ -18,36 +18,48 @@ import {
   DEFAULT_COMPRESSION_SETTINGS,
 } from "../utils/compression";
 
-// DO Spaces configuration from environment
-const SPACES_ENDPOINT = process.env.DO_SPACES_ENDPOINT || "nyc3.digitaloceanspaces.com";
-const SPACES_REGION = process.env.DO_SPACES_REGION || "nyc3";
-const SPACES_BUCKET = process.env.DO_SPACES_BUCKET || "3cxbackupwiz";
-const SPACES_KEY = process.env.DO_SPACES_KEY || "";
-const SPACES_SECRET = process.env.DO_SPACES_SECRET || "";
+// DO Spaces configuration - lazy-loaded to ensure dotenv.config() has run
+// NOTE: Module-level consts read process.env before dotenv runs in CJS builds
+function getSpacesConfig() {
+  return {
+    endpoint: process.env.DO_SPACES_ENDPOINT || "nyc3.digitaloceanspaces.com",
+    region: process.env.DO_SPACES_REGION || "nyc3",
+    bucket: process.env.DO_SPACES_BUCKET || "3cxbackupwiz",
+    key: process.env.DO_SPACES_KEY || "",
+    secret: process.env.DO_SPACES_SECRET || "",
+  };
+}
+
+// Convenience accessors used throughout this file
+function SPACES_ENDPOINT() { return getSpacesConfig().endpoint; }
+function SPACES_REGION() { return getSpacesConfig().region; }
+function SPACES_BUCKET() { return getSpacesConfig().bucket; }
+function SPACES_KEY() { return getSpacesConfig().key; }
+function SPACES_SECRET() { return getSpacesConfig().secret; }
 
 // Create S3 client for DO Spaces
 let s3Client: S3Client | null = null;
 
 export function getSpacesClient(): S3Client {
   if (!s3Client) {
-    if (!SPACES_KEY || !SPACES_SECRET) {
+    if (!SPACES_KEY() || !SPACES_SECRET()) {
       throw new Error("DO Spaces credentials not configured. Set DO_SPACES_KEY and DO_SPACES_SECRET environment variables.");
     }
 
     s3Client = new S3Client({
-      endpoint: `https://${SPACES_ENDPOINT}`,
-      region: SPACES_REGION,
+      endpoint: `https://${SPACES_ENDPOINT()}`,
+      region: SPACES_REGION(),
       credentials: {
-        accessKeyId: SPACES_KEY,
-        secretAccessKey: SPACES_SECRET,
+        accessKeyId: SPACES_KEY(),
+        secretAccessKey: SPACES_SECRET(),
       },
       forcePathStyle: false,
     });
 
     logger.info("DO Spaces client initialized", {
-      endpoint: SPACES_ENDPOINT,
-      bucket: SPACES_BUCKET,
-      region: SPACES_REGION,
+      endpoint: SPACES_ENDPOINT(),
+      bucket: SPACES_BUCKET(),
+      region: SPACES_REGION(),
     });
   }
 
@@ -198,7 +210,7 @@ export async function fileExists(storagePath: string): Promise<boolean> {
   try {
     const client = getSpacesClient();
     await client.send(new HeadObjectCommand({
-      Bucket: SPACES_BUCKET,
+      Bucket: SPACES_BUCKET(),
       Key: storagePath,
     }));
     return true;
@@ -221,7 +233,7 @@ export async function uploadBuffer(
 
   try {
     await client.send(new PutObjectCommand({
-      Bucket: SPACES_BUCKET,
+      Bucket: SPACES_BUCKET(),
       Key: storagePath,
       Body: buffer,
       ContentType: contentType,
@@ -247,7 +259,7 @@ export async function uploadFile(
 
   try {
     await client.send(new PutObjectCommand({
-      Bucket: SPACES_BUCKET,
+      Bucket: SPACES_BUCKET(),
       Key: storagePath,
       Body: fileContent,
       ContentType: contentType,
@@ -273,7 +285,7 @@ export async function streamUpload(
   const upload = new Upload({
     client,
     params: {
-      Bucket: SPACES_BUCKET,
+      Bucket: SPACES_BUCKET(),
       Key: storagePath,
       Body: stream,
       ContentType: contentType,
@@ -303,7 +315,7 @@ export async function getSignedUrl(storagePath: string, expiresIn = 3600): Promi
   const client = getSpacesClient();
 
   const command = new GetObjectCommand({
-    Bucket: SPACES_BUCKET,
+    Bucket: SPACES_BUCKET(),
     Key: storagePath,
   });
 
@@ -316,7 +328,7 @@ export async function downloadFile(storagePath: string): Promise<Buffer> {
   const client = getSpacesClient();
 
   const response = await client.send(new GetObjectCommand({
-    Bucket: SPACES_BUCKET,
+    Bucket: SPACES_BUCKET(),
     Key: storagePath,
   }));
 
@@ -338,7 +350,7 @@ export async function deleteFile(storagePath: string): Promise<void> {
   const client = getSpacesClient();
 
   await client.send(new DeleteObjectCommand({
-    Bucket: SPACES_BUCKET,
+    Bucket: SPACES_BUCKET(),
     Key: storagePath,
   }));
 
@@ -353,7 +365,7 @@ export async function listFiles(prefix: string): Promise<string[]> {
 
   do {
     const response = await client.send(new ListObjectsV2Command({
-      Bucket: SPACES_BUCKET,
+      Bucket: SPACES_BUCKET(),
       Prefix: prefix,
       ContinuationToken: continuationToken,
     }));
@@ -437,10 +449,10 @@ export async function uploadBufferWithCompression(
 
 // Check if DO Spaces is configured
 export function isSpacesConfigured(): boolean {
-  return !!(SPACES_KEY && SPACES_SECRET && SPACES_BUCKET);
+  return !!(SPACES_KEY() && SPACES_SECRET() && SPACES_BUCKET());
 }
 
 // Get bucket name (for migration scripts)
 export function getBucketName(): string {
-  return SPACES_BUCKET;
+  return SPACES_BUCKET();
 }

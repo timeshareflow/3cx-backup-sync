@@ -1,8 +1,38 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { SupabaseClient } from "@supabase/supabase-js";
 import { getTenantContext } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * Sum file_size across all rows in a table for a tenant.
+ * Supabase PostgREST returns max 1000 rows per request, so we paginate.
+ */
+async function sumFileSizes(
+  supabase: SupabaseClient,
+  table: string,
+  tenantId: string
+): Promise<number> {
+  let total = 0;
+  let offset = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data, error } = await supabase
+      .from(table)
+      .select("file_size")
+      .eq("tenant_id", tenantId)
+      .range(offset, offset + pageSize - 1);
+
+    if (error || !data || data.length === 0) break;
+    total += data.reduce((sum: number, row: { file_size: number | null }) => sum + (row.file_size || 0), 0);
+    if (data.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return total;
+}
 
 export async function GET() {
   try {
@@ -36,37 +66,27 @@ export async function GET() {
       );
     }
 
-    // Calculate current storage usage
-    const [messagesResult, mediaResult, recordingsResult, voicemailsResult, faxesResult, meetingsResult] = await Promise.all([
+    // Calculate storage usage by summing file_size with pagination
+    // PostgREST caps responses at 1000 rows, so we page through all rows
+    const [media, recordings, voicemails, faxes, meetings, messagesResult] = await Promise.all([
+      sumFileSizes(supabase, "media_files", context.tenantId),
+      sumFileSizes(supabase, "call_recordings", context.tenantId),
+      sumFileSizes(supabase, "voicemails", context.tenantId),
+      sumFileSizes(supabase, "faxes", context.tenantId),
+      sumFileSizes(supabase, "meeting_recordings", context.tenantId),
       supabase.from("messages").select("id", { count: "exact", head: true }).eq("tenant_id", context.tenantId),
-      supabase.from("media_files").select("file_size").eq("tenant_id", context.tenantId),
-      supabase.from("call_recordings").select("file_size").eq("tenant_id", context.tenantId),
-      supabase.from("voicemails").select("file_size").eq("tenant_id", context.tenantId),
-      supabase.from("faxes").select("file_size").eq("tenant_id", context.tenantId),
-      supabase.from("meeting_recordings").select("file_size").eq("tenant_id", context.tenantId),
     ]);
 
-    // Sum up file sizes
-    const sumFileSize = (data: { file_size: number | null }[] | null) => {
-      if (!data) return 0;
-      return data.reduce((sum, item) => sum + (item.file_size || 0), 0);
-    };
-
     const storageBreakdown = {
-      messages: messagesResult.count || 0, // Just count, no actual file storage
-      media: sumFileSize(mediaResult.data),
-      recordings: sumFileSize(recordingsResult.data),
-      voicemails: sumFileSize(voicemailsResult.data),
-      faxes: sumFileSize(faxesResult.data),
-      meetings: sumFileSize(meetingsResult.data),
+      messages: messagesResult.count || 0,
+      media,
+      recordings,
+      voicemails,
+      faxes,
+      meetings,
     };
 
-    const totalStorageBytes =
-      storageBreakdown.media +
-      storageBreakdown.recordings +
-      storageBreakdown.voicemails +
-      storageBreakdown.faxes +
-      storageBreakdown.meetings;
+    const totalStorageBytes = media + recordings + voicemails + faxes + meetings;
 
     // Get plan limits
     const plan = tenant.storage_plans;

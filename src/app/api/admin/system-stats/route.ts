@@ -23,11 +23,16 @@ export async function GET() {
       supabase.from("user_profiles").select("id", { count: "exact", head: true }),
       supabase.from("conversations").select("id", { count: "exact", head: true }),
       supabase.from("messages").select("id", { count: "exact", head: true }),
-      supabase.from("media_files").select("id, file_size", { count: "exact" }),
+      supabase.from("media_files").select("id", { count: "exact", head: true }),
       supabase.from("sync_logs").select("*").order("started_at", { ascending: false }).limit(1),
     ]);
 
-    const totalStorageBytes = mediaResult.data?.reduce((acc, file) => acc + (file.file_size || 0), 0) || 0;
+    // Sum storage across all tenants
+    const { data: allTenants } = await supabase
+      .from("tenants")
+      .select("storage_used_bytes")
+      .eq("is_active", true);
+    const totalStorageBytes = (allTenants || []).reduce((acc, t) => acc + (t.storage_used_bytes || 0), 0);
 
     const lastSync = syncResult.data?.[0];
     const syncStatus = lastSync?.status === "running" ? "running" :
