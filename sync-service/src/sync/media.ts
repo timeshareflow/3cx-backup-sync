@@ -476,7 +476,24 @@ export async function syncVoicemails(
       }
     }
 
+    // Update sync status after voicemail sync completes
+    let notes = `Synced ${result.filesSynced}, skipped ${result.filesSkipped}`;
+    if (result.filesTooLarge > 0) notes += `, ${result.filesTooLarge} too large`;
+    if (result.errors.length > 0) notes += `, ${result.errors.length} failed`;
+
+    await updateSyncStatus("voicemails", result.errors.length > 0 && result.filesSynced === 0 ? "error" : "success", {
+      recordsSynced: result.filesSynced,
+      notes,
+      tenantId: tenant.id,
+    });
+
     return result;
+  } catch (error) {
+    await updateSyncStatus("voicemails", "error", {
+      errorMessage: (error as Error).message,
+      tenantId: tenant.id,
+    });
+    throw error;
   } finally {
     if (sftp) {
       await closeSftpClient(sftp);
