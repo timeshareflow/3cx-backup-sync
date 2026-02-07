@@ -82,6 +82,10 @@ export interface SyncStatus {
   status: "idle" | "running" | "success" | "error";
   created_at: string;
   updated_at: string;
+  // Enriched health fields from API
+  health?: "healthy" | "warning" | "critical";
+  staleness_minutes?: number;
+  expected_interval_minutes?: number;
 }
 
 export interface SyncLog {
