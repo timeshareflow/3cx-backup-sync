@@ -1,14 +1,34 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
+import { cookies } from "next/headers";
 
 // POST /api/heartbeat - Update tenant's last activity timestamp
 export async function POST() {
   try {
     const context = await getTenantContext();
 
-    if (!context.isAuthenticated || !context.tenantId) {
+    if (!context.isAuthenticated) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    // Determine which tenant to update
+    // For super admins: use viewingAsTenantId if set
+    // For regular users: use their current tenant
+    let tenantIdToUpdate = context.tenantId;
+
+    if (context.role === "super_admin" && !tenantIdToUpdate) {
+      // Super admin not viewing as tenant - check for viewingAsTenantId cookie directly
+      const cookieStore = await cookies();
+      const viewingAsTenantId = cookieStore.get("viewingAsTenantId")?.value;
+      if (viewingAsTenantId) {
+        tenantIdToUpdate = viewingAsTenantId;
+      }
+    }
+
+    if (!tenantIdToUpdate) {
+      // No tenant to update - this is fine for super admins at platform level
+      return NextResponse.json({ success: true, message: "No tenant context" });
     }
 
     const supabase = createAdminClient();
@@ -17,7 +37,7 @@ export async function POST() {
     const { error } = await supabase
       .from("tenants")
       .update({ last_user_activity_at: new Date().toISOString() })
-      .eq("id", context.tenantId);
+      .eq("id", tenantIdToUpdate);
 
     if (error) {
       console.error("Error updating tenant activity:", error);
@@ -27,7 +47,7 @@ export async function POST() {
       );
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ success: true, tenantId: tenantIdToUpdate });
   } catch (error) {
     console.error("Error in heartbeat API:", error);
     return NextResponse.json(
