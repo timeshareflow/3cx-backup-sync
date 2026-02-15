@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
+export const dynamic = "force-dynamic";
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const page = parseInt(searchParams.get("page") || "1");

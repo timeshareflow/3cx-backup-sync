@@ -6,7 +6,7 @@ import {
   generateStoragePath,
   fileExists,
   detectFileType,
-} from "../storage/supabase-storage";
+} from "../storage/spaces-storage";
 import { insertFax, updateSyncStatus } from "../storage/supabase";
 import { createSftpClient, listRemoteFiles, closeSftpClient, downloadFile } from "../storage/sftp";
 import { TenantConfig, getTenantSftpConfig } from "../tenant";
@@ -167,6 +167,7 @@ export async function syncFaxes(tenant: TenantConfig): Promise<FaxesSyncResult> 
           storage_path: uploadedPath,
           mime_type: mimeType,
           fax_time: metadata.timestamp?.toISOString() || new Date().toISOString(),
+          storage_backend: "spaces",
         });
 
         result.filesSynced++;

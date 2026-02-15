@@ -3,19 +3,36 @@ import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import {
   uploadBufferWithCompression,
-  fileExists,
   detectFileType,
   generateStoragePath,
-} from "../storage/supabase-storage";
-import { insertMediaFileNew, updateSyncStatus } from "../storage/supabase";
-import { createSftpClient, listRemoteFiles, listRemoteFilesRecursive, downloadFile, closeSftpClient } from "../storage/sftp";
+  getFileInfo,
+  streamUpload,
+} from "../storage/spaces-storage";
+import { insertMediaFileNew, updateSyncStatus, getSyncedFilenames } from "../storage/supabase";
+import {
+  createSftpClient,
+  listRemoteFilesRecursive,
+  downloadFile,
+  downloadFileStream,
+  closeSftpClient,
+  MAX_FILE_SIZE_BYTES,
+  MAX_STREAM_FILE_SIZE_BYTES,
+} from "../storage/sftp";
 import { TenantConfig, getTenantSftpConfig } from "../tenant";
 import { DEFAULT_COMPRESSION_SETTINGS } from "../utils/compression";
 
 export interface MediaSyncResult {
   filesSynced: number;
   filesSkipped: number;
+  filesTooLarge: number;
   errors: Array<{ filename: string; error: string }>;
+}
+
+// Format bytes to human readable
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 // Common 3CX chat files paths to try
@@ -35,6 +52,7 @@ export async function syncMedia(
   const result: MediaSyncResult = {
     filesSynced: 0,
     filesSkipped: 0,
+    filesTooLarge: 0,
     errors: [],
   };
 
@@ -81,7 +99,7 @@ export async function syncMedia(
 
     // Try each path until we find one that exists
     let chatFilesPath: string | null = null;
-    let files: Array<{ filename: string; relativePath: string; fullPath: string }> = [];
+    let files: Array<{ filename: string; relativePath: string; fullPath: string; size: number }> = [];
 
     for (const tryPath of pathsToTry) {
       logger.debug("Trying chat files path", { tenantId, path: tryPath });
@@ -100,56 +118,105 @@ export async function syncMedia(
       return result;
     }
 
-    logger.info(`Found ${files.length} files to process (including subfolders)`, { tenantId });
+    logger.info(`Found ${files.length} files on SFTP`, { tenantId });
 
+    // Load all already-synced filenames from DB in one query (instead of per-file HEAD checks)
+    const syncedFilenames = await getSyncedFilenames(tenantId, "chat-media");
+    logger.info(`Loaded ${syncedFilenames.size} already-synced files from DB`, { tenantId });
+
+    // Pre-filter: determine which files need syncing using in-memory Set lookup
+    // Compare by sanitized base name only (extension changes after compression)
+    const filesToSync: typeof files = [];
     for (const file of files) {
+      if (file.size > MAX_STREAM_FILE_SIZE_BYTES) {
+        result.filesTooLarge++;
+        continue;
+      }
+      // Build just the base name (no extension) that would be used in storage
+      const baseName = path.basename(file.relativePath, path.extname(file.relativePath));
+      const sanitizedName = baseName
+        .replace(/\[/g, "(")
+        .replace(/\]/g, ")")
+        .replace(/[#%&{}<>*?$!'":@+`|=]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+
+      if (syncedFilenames.has(sanitizedName)) {
+        result.filesSkipped++;
+      } else {
+        filesToSync.push(file);
+      }
+    }
+
+    logger.info(`${filesToSync.length} new files to sync, ${result.filesSkipped} already synced`, { tenantId });
+
+    for (const file of filesToSync) {
       try {
-        // Log file info for debugging
-        logger.debug("Processing media file", {
-          tenantId,
-          filename: file.filename,
-          relativePath: file.relativePath,
-          fullPath: file.fullPath,
-        });
+        // Determine upload strategy based on file size
+        const useStreaming = file.size > MAX_FILE_SIZE_BYTES;
 
-        // Download file from remote server using full path
-        const buffer = await downloadFile(sftp, file.fullPath);
-
-        // Detect file type
-        const { fileType, mimeType, extension } = detectFileType(buffer);
+        // Get file info from filename for streaming (can't detect from buffer)
+        const fileInfo = getFileInfo(file.filename);
 
         // Generate storage path - preserve subfolder structure
-        const storagePath = generateStoragePath(tenantId, "chat-media", file.relativePath, extension);
+        const storagePath = generateStoragePath(tenantId, "chat-media", file.relativePath, fileInfo.extension);
 
-        // Check if already uploaded (check with possible compressed extension too)
-        const exists = await fileExists(storagePath);
-        if (exists) {
-          result.filesSkipped++;
-          continue;
+        let uploadedPath: string;
+        let uploadedSize: number;
+        let mimeType: string;
+        let fileType: string;
+
+        if (useStreaming) {
+          // STREAMING: For large files (25MB-500MB), stream directly to S3
+          logger.info("Using streaming upload for large file", {
+            tenantId,
+            filename: file.relativePath,
+            size: formatBytes(file.size),
+          });
+
+          const stream = await downloadFileStream(sftp, file.fullPath);
+          const streamResult = await streamUpload(stream, storagePath, fileInfo.mimeType, file.size);
+
+          uploadedPath = streamResult.path;
+          uploadedSize = file.size;
+          mimeType = fileInfo.mimeType;
+          fileType = fileInfo.fileType;
+        } else {
+          // BUFFER: For smaller files (<25MB), download to buffer and compress
+          const buffer = await downloadFile(sftp, file.fullPath);
+
+          // Detect file type from buffer (more accurate than filename)
+          const detected = detectFileType(buffer);
+          fileType = detected.fileType;
+
+          // Upload with compression
+          const uploadResult = await uploadBufferWithCompression(
+            buffer,
+            storagePath,
+            detected.fileType,
+            detected.extension,
+            DEFAULT_COMPRESSION_SETTINGS
+          );
+
+          uploadedPath = uploadResult.path;
+          uploadedSize = uploadResult.size;
+          mimeType = uploadResult.newMimeType;
         }
 
-        // Upload to Supabase Storage with compression
-        const uploadResult = await uploadBufferWithCompression(
-          buffer,
-          storagePath,
-          fileType,
-          extension,
-          DEFAULT_COMPRESSION_SETTINGS
-        );
-
-        // Record in database with compressed file info
+        // Record in database
         await insertMediaFileNew({
           tenant_id: tenantId,
           original_filename: file.filename,
-          stored_filename: `${path.basename(file.filename, path.extname(file.filename))}.${uploadResult.newExtension}`,
+          stored_filename: path.basename(uploadedPath),
           file_type: fileType,
-          mime_type: uploadResult.newMimeType,
-          file_size: uploadResult.size,
-          storage_path: uploadResult.path,
+          mime_type: mimeType,
+          file_size: uploadedSize,
+          storage_path: uploadedPath,
+          storage_backend: "spaces",
         });
 
         result.filesSynced++;
-        logger.debug(`Synced media file via SFTP`, { tenantId, filename: file.relativePath });
+        logger.info(`Synced media file`, { tenantId, filename: file.relativePath, size: formatBytes(file.size) });
       } catch (error) {
         const err = handleError(error);
         result.errors.push({
@@ -173,6 +240,7 @@ export async function syncMedia(
       tenantId,
       synced: result.filesSynced,
       skipped: result.filesSkipped,
+      tooLarge: result.filesTooLarge,
       errors: result.errors.length,
     });
 
@@ -199,6 +267,7 @@ export async function syncRecordings(
   const result: MediaSyncResult = {
     filesSynced: 0,
     filesSkipped: 0,
+    filesTooLarge: 0,
     errors: [],
   };
 
@@ -227,22 +296,42 @@ export async function syncRecordings(
   let sftp;
   try {
     sftp = await createSftpClient(sftpConfig);
-    const files = await listRemoteFiles(sftp, recordingsPath);
+    const files = await listRemoteFilesRecursive(sftp, recordingsPath);
 
-    logger.info(`Found ${files.length} recordings to process`, { tenantId: tenant.id });
+    logger.info(`Found ${files.length} recordings on SFTP`, { tenantId: tenant.id });
 
-    for (const filename of files) {
+    // Load already-synced filenames from DB in one query
+    const syncedFilenames = await getSyncedFilenames(tenant.id, "recordings");
+    logger.info(`Loaded ${syncedFilenames.size} already-synced recording files from DB`, { tenantId: tenant.id });
+
+    // Pre-filter using in-memory Set lookup by base name (no extension)
+    const recordingsToSync: typeof files = [];
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        result.filesTooLarge++;
+        continue;
+      }
+      const baseName = path.basename(file.filename, path.extname(file.filename));
+      const sanitizedName = baseName
+        .replace(/\[/g, "(")
+        .replace(/\]/g, ")")
+        .replace(/[#%&{}<>*?$!'":@+`|=]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      if (syncedFilenames.has(sanitizedName)) {
+        result.filesSkipped++;
+      } else {
+        recordingsToSync.push(file);
+      }
+    }
+
+    logger.info(`${recordingsToSync.length} new recordings to sync, ${result.filesSkipped} already synced`, { tenantId: tenant.id });
+
+    for (const file of recordingsToSync) {
       try {
-        const remotePath = path.posix.join(recordingsPath, filename);
-        const buffer = await downloadFile(sftp, remotePath);
-        const { fileType, mimeType, extension } = detectFileType(buffer);
-        const storagePath = generateStoragePath(tenant.id, "recordings", filename, extension);
-
-        const exists = await fileExists(storagePath);
-        if (exists) {
-          result.filesSkipped++;
-          continue;
-        }
+        const buffer = await downloadFile(sftp, file.fullPath);
+        const { fileType, extension } = detectFileType(buffer);
+        const storagePath = generateStoragePath(tenant.id, "recordings", file.filename, extension);
 
         // Upload with compression (recordings are often WAV, compress to MP3)
         const uploadResult = await uploadBufferWithCompression(
@@ -255,12 +344,13 @@ export async function syncRecordings(
 
         await insertMediaFileNew({
           tenant_id: tenant.id,
-          original_filename: filename,
-          stored_filename: `${path.basename(filename, path.extname(filename))}.${uploadResult.newExtension}`,
+          original_filename: file.filename,
+          stored_filename: `${path.basename(file.filename, path.extname(file.filename))}.${uploadResult.newExtension}`,
           file_type: "recording",
           mime_type: uploadResult.newMimeType,
           file_size: uploadResult.size,
           storage_path: uploadResult.path,
+          storage_backend: "spaces",
         });
 
         result.filesSynced++;
@@ -268,12 +358,12 @@ export async function syncRecordings(
         if (uploadResult.wasCompressed) {
           logger.info("Recording compressed", {
             tenantId: tenant.id,
-            filename,
+            filename: file.filename,
             savings: `${uploadResult.compressionRatio.toFixed(1)}%`,
           });
         }
       } catch (error) {
-        result.errors.push({ filename, error: (error as Error).message });
+        result.errors.push({ filename: file.filename, error: (error as Error).message });
       }
     }
 
@@ -292,6 +382,7 @@ export async function syncVoicemails(
   const result: MediaSyncResult = {
     filesSynced: 0,
     filesSkipped: 0,
+    filesTooLarge: 0,
     errors: [],
   };
 
@@ -319,20 +410,37 @@ export async function syncVoicemails(
   let sftp;
   try {
     sftp = await createSftpClient(sftpConfig);
-    const files = await listRemoteFiles(sftp, voicemailPath);
+    const files = await listRemoteFilesRecursive(sftp, voicemailPath);
 
-    for (const filename of files) {
+    // Load already-synced filenames from DB in one query
+    const syncedFilenames = await getSyncedFilenames(tenant.id, "voicemails");
+
+    // Pre-filter using in-memory Set lookup by base name (no extension)
+    const voicemailsToSync: typeof files = [];
+    for (const file of files) {
+      if (file.size > MAX_FILE_SIZE_BYTES) {
+        result.filesTooLarge++;
+        continue;
+      }
+      const baseName = path.basename(file.filename, path.extname(file.filename));
+      const sanitizedName = baseName
+        .replace(/\[/g, "(")
+        .replace(/\]/g, ")")
+        .replace(/[#%&{}<>*?$!'":@+`|=]/g, "_")
+        .replace(/_+/g, "_")
+        .replace(/^_+|_+$/g, "");
+      if (syncedFilenames.has(sanitizedName)) {
+        result.filesSkipped++;
+      } else {
+        voicemailsToSync.push(file);
+      }
+    }
+
+    for (const file of voicemailsToSync) {
       try {
-        const remotePath = path.posix.join(voicemailPath, filename);
-        const buffer = await downloadFile(sftp, remotePath);
-        const { fileType, mimeType, extension } = detectFileType(buffer);
-        const storagePath = generateStoragePath(tenant.id, "voicemails", filename, extension);
-
-        const exists = await fileExists(storagePath);
-        if (exists) {
-          result.filesSkipped++;
-          continue;
-        }
+        const buffer = await downloadFile(sftp, file.fullPath);
+        const { fileType, extension } = detectFileType(buffer);
+        const storagePath = generateStoragePath(tenant.id, "voicemails", file.filename, extension);
 
         // Upload with compression (voicemails are often WAV, compress to MP3)
         const uploadResult = await uploadBufferWithCompression(
@@ -345,12 +453,13 @@ export async function syncVoicemails(
 
         await insertMediaFileNew({
           tenant_id: tenant.id,
-          original_filename: filename,
-          stored_filename: `${path.basename(filename, path.extname(filename))}.${uploadResult.newExtension}`,
+          original_filename: file.filename,
+          stored_filename: `${path.basename(file.filename, path.extname(file.filename))}.${uploadResult.newExtension}`,
           file_type: "voicemail",
           mime_type: uploadResult.newMimeType,
           file_size: uploadResult.size,
           storage_path: uploadResult.path,
+          storage_backend: "spaces",
         });
 
         result.filesSynced++;
@@ -358,16 +467,33 @@ export async function syncVoicemails(
         if (uploadResult.wasCompressed) {
           logger.info("Voicemail compressed", {
             tenantId: tenant.id,
-            filename,
+            filename: file.filename,
             savings: `${uploadResult.compressionRatio.toFixed(1)}%`,
           });
         }
       } catch (error) {
-        result.errors.push({ filename, error: (error as Error).message });
+        result.errors.push({ filename: file.filename, error: (error as Error).message });
       }
     }
 
+    // Update sync status after voicemail sync completes
+    let notes = `Synced ${result.filesSynced}, skipped ${result.filesSkipped}`;
+    if (result.filesTooLarge > 0) notes += `, ${result.filesTooLarge} too large`;
+    if (result.errors.length > 0) notes += `, ${result.errors.length} failed`;
+
+    await updateSyncStatus("voicemails", result.errors.length > 0 && result.filesSynced === 0 ? "error" : "success", {
+      recordsSynced: result.filesSynced,
+      notes,
+      tenantId: tenant.id,
+    });
+
     return result;
+  } catch (error) {
+    await updateSyncStatus("voicemails", "error", {
+      errorMessage: (error as Error).message,
+      tenantId: tenant.id,
+    });
+    throw error;
   } finally {
     if (sftp) {
       await closeSftpClient(sftp);

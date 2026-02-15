@@ -92,7 +92,7 @@ export async function updateConversationNameFromParticipants(
   // Get conversation info
   const { data: conv } = await client
     .from("conversations")
-    .select("is_group_chat")
+    .select("is_group_chat, conversation_name")
     .eq("id", conversationId)
     .single();
 
@@ -107,20 +107,29 @@ export async function updateConversationNameFromParticipants(
     .select("external_name")
     .eq("conversation_id", conversationId);
 
-  if (!participants || participants.length < 2) {
+  if (!participants || participants.length === 0) {
     return;
   }
 
   // Build name from all participant names
-  const names = participants
+  const validNames = participants
     .map(p => p.external_name)
-    .filter(Boolean)
-    .sort()
-    .join(", ");
+    .filter(Boolean);
 
-  if (!names) {
+  if (validNames.length === 0) {
     return;
   }
+
+  // Don't overwrite a multi-participant name with a single-participant name
+  // This prevents losing 3CX-provided names when we only have partial participant data
+  const currentName = conv?.conversation_name || "";
+  const currentCommaCount = (currentName.match(/,/g) || []).length;
+  if (validNames.length === 1 && currentCommaCount >= 1) {
+    // Current name has multiple participants but we only have 1 stored - keep the current name
+    return;
+  }
+
+  const names = validNames.sort().join(", ");
 
   // Update the conversation name
   await client
@@ -306,7 +315,7 @@ export async function insertMediaFile(media: {
   return data.id;
 }
 
-// Upsert extension
+// Upsert extension - returns { changed: true, extensionId } if the name was updated
 export async function upsertExtension(extension: {
   extension_number: string;
   first_name?: string | null;
@@ -314,13 +323,43 @@ export async function upsertExtension(extension: {
   display_name?: string | null;
   email?: string | null;
   tenant_id?: string;
-}): Promise<void> {
+}): Promise<{ changed: boolean; extensionId: string | null }> {
   const client = getSupabaseClient();
 
   const displayName =
     extension.display_name ||
     [extension.first_name, extension.last_name].filter(Boolean).join(" ") ||
     null;
+
+  // Check if extension already exists with different name
+  let nameChanged = false;
+  let extensionId: string | null = null;
+
+  if (extension.tenant_id) {
+    const { data: existing } = await client
+      .from("extensions")
+      .select("id, display_name, first_name, last_name")
+      .eq("tenant_id", extension.tenant_id)
+      .eq("extension_number", extension.extension_number)
+      .single();
+
+    if (existing) {
+      extensionId = existing.id;
+      // Detect name change
+      if (
+        existing.display_name !== displayName ||
+        existing.first_name !== (extension.first_name || null) ||
+        existing.last_name !== (extension.last_name || null)
+      ) {
+        nameChanged = true;
+        logger.info("Extension name changed", {
+          extensionNumber: extension.extension_number,
+          oldName: existing.display_name,
+          newName: displayName,
+        });
+      }
+    }
+  }
 
   const now = new Date().toISOString();
   const insertData: Record<string, unknown> = {
@@ -338,12 +377,11 @@ export async function upsertExtension(extension: {
   }
 
   // Use correct column order to match the unique index: (tenant_id, extension_number)
-  const { error } = await client.from("extensions").upsert(insertData, {
+  const { data, error } = await client.from("extensions").upsert(insertData, {
     onConflict: extension.tenant_id
       ? "tenant_id,extension_number"
       : "extension_number",
-    // ignoreDuplicates: false is the default, ensuring updates happen
-  });
+  }).select("id").single();
 
   if (error) {
     logger.warn("Failed to upsert extension", {
@@ -353,6 +391,327 @@ export async function upsertExtension(extension: {
     });
     throw new Error(`Failed to upsert extension ${extension.extension_number}: ${error.message}`);
   }
+
+  return { changed: nameChanged, extensionId: data?.id || extensionId };
+}
+
+// Cascade extension name change to all participants and conversation names
+export async function cascadeExtensionNameChange(
+  extensionId: string,
+  newDisplayName: string,
+  extensionNumber: string
+): Promise<{ participantsUpdated: number; conversationsUpdated: number }> {
+  const client = getSupabaseClient();
+  let participantsUpdated = 0;
+  let conversationsUpdated = 0;
+
+  // Build the new participant display name: "Name (ext)"
+  const newExternalName = `${newDisplayName} (${extensionNumber})`;
+
+  // 1. Update all participant records that reference this extension
+  const { data: updatedParticipants, error: partError } = await client
+    .from("participants")
+    .update({ external_name: newExternalName })
+    .eq("extension_id", extensionId)
+    .neq("external_name", newExternalName)
+    .select("conversation_id");
+
+  if (partError) {
+    logger.error("Failed to cascade name to participants", {
+      extensionId,
+      error: partError.message,
+    });
+    return { participantsUpdated: 0, conversationsUpdated: 0 };
+  }
+
+  participantsUpdated = updatedParticipants?.length || 0;
+
+  if (participantsUpdated === 0) {
+    return { participantsUpdated: 0, conversationsUpdated: 0 };
+  }
+
+  // 2. Rebuild conversation names for all affected conversations
+  const affectedConversationIds = [
+    ...new Set(updatedParticipants.map((p) => p.conversation_id)),
+  ];
+
+  for (const convId of affectedConversationIds) {
+    try {
+      await updateConversationNameFromParticipants(convId);
+      conversationsUpdated++;
+    } catch (error) {
+      logger.warn("Failed to update conversation name after extension rename", {
+        conversationId: convId,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  logger.info("Cascaded extension name change", {
+    extensionId,
+    newDisplayName,
+    participantsUpdated,
+    conversationsUpdated,
+  });
+
+  return { participantsUpdated, conversationsUpdated };
+}
+
+// Bulk refresh ALL participant names from current extension data
+// This catches stale names from before cascade code was deployed
+export async function refreshAllParticipantNames(
+  tenantId?: string
+): Promise<{ participantsUpdated: number; conversationsUpdated: number }> {
+  const client = getSupabaseClient();
+  let participantsUpdated = 0;
+  let conversationsUpdated = 0;
+
+  // Get all extensions with current names
+  let extQuery = client
+    .from("extensions")
+    .select("id, extension_number, display_name, first_name, last_name");
+
+  if (tenantId) {
+    extQuery = extQuery.eq("tenant_id", tenantId);
+  }
+
+  const { data: extensions, error: extError } = await extQuery;
+
+  if (extError || !extensions) {
+    logger.error("Failed to fetch extensions for name refresh", {
+      error: extError?.message,
+    });
+    return { participantsUpdated: 0, conversationsUpdated: 0 };
+  }
+
+  const affectedConversationIds = new Set<string>();
+
+  for (const ext of extensions) {
+    const displayName =
+      ext.display_name ||
+      [ext.first_name, ext.last_name].filter(Boolean).join(" ") ||
+      null;
+
+    if (!displayName) continue;
+
+    const expectedName = `${displayName} (${ext.extension_number})`;
+
+    // Update all participants with this extension_id that have a different name
+    const { data: updated, error: updateError } = await client
+      .from("participants")
+      .update({ external_name: expectedName })
+      .eq("extension_id", ext.id)
+      .neq("external_name", expectedName)
+      .select("conversation_id");
+
+    if (updateError) {
+      logger.warn("Failed to refresh participant name", {
+        extensionId: ext.id,
+        error: updateError.message,
+      });
+      continue;
+    }
+
+    if (updated && updated.length > 0) {
+      participantsUpdated += updated.length;
+      for (const p of updated) {
+        affectedConversationIds.add(p.conversation_id);
+      }
+      logger.debug("Refreshed participant names", {
+        extensionNumber: ext.extension_number,
+        newName: expectedName,
+        count: updated.length,
+      });
+    }
+  }
+
+  // Rebuild conversation names for all affected conversations
+  for (const convId of affectedConversationIds) {
+    try {
+      await updateConversationNameFromParticipants(convId);
+      conversationsUpdated++;
+    } catch (error) {
+      logger.warn("Failed to update conversation name during refresh", {
+        conversationId: convId,
+        error: (error as Error).message,
+      });
+    }
+  }
+
+  if (participantsUpdated > 0) {
+    logger.info("Bulk participant name refresh completed", {
+      tenantId,
+      participantsUpdated,
+      conversationsUpdated,
+    });
+  }
+
+  return { participantsUpdated, conversationsUpdated };
+}
+
+// Merge duplicate 1-on-1 conversations that share the same set of participants
+// Keeps the conversation with the most recent activity and moves messages from duplicates
+export async function mergeDuplicateConversations(
+  tenantId?: string
+): Promise<{ mergedCount: number; messagesMoved: number }> {
+  const client = getSupabaseClient();
+  let mergedCount = 0;
+  let messagesMoved = 0;
+
+  // Get all non-group conversations with their participants
+  let convQuery = client
+    .from("conversations")
+    .select("id, conversation_name, is_group_chat, message_count, last_message_at, created_at")
+    .eq("is_group_chat", false);
+
+  if (tenantId) {
+    convQuery = convQuery.eq("tenant_id", tenantId);
+  }
+
+  const { data: conversations, error: convError } = await convQuery;
+
+  if (convError || !conversations) {
+    logger.error("Failed to fetch conversations for dedup", { error: convError?.message });
+    return { mergedCount: 0, messagesMoved: 0 };
+  }
+
+  // Get all participants for these conversations
+  const convIds = conversations.map(c => c.id);
+  if (convIds.length === 0) return { mergedCount: 0, messagesMoved: 0 };
+
+  const { data: allParticipants } = await client
+    .from("participants")
+    .select("conversation_id, extension_id, external_id")
+    .in("conversation_id", convIds);
+
+  if (!allParticipants) return { mergedCount: 0, messagesMoved: 0 };
+
+  // Group participants by conversation
+  const convParticipants: Record<string, string[]> = {};
+  for (const p of allParticipants) {
+    if (!convParticipants[p.conversation_id]) convParticipants[p.conversation_id] = [];
+    const key = p.extension_id || p.external_id || "";
+    if (key) convParticipants[p.conversation_id].push(key);
+  }
+
+  // Build participant set keys and group conversations
+  const participantGroups: Record<string, typeof conversations> = {};
+  for (const conv of conversations) {
+    const parts = convParticipants[conv.id] || [];
+    if (parts.length === 0) continue;
+    const key = [...parts].sort().join("|");
+    if (!participantGroups[key]) participantGroups[key] = [];
+    participantGroups[key].push(conv);
+  }
+
+  // Merge groups with more than one conversation
+  for (const [, group] of Object.entries(participantGroups)) {
+    if (group.length <= 1) continue;
+
+    // Sort: most recent activity first, then most messages
+    group.sort((a, b) => {
+      const aTime = a.last_message_at ? new Date(a.last_message_at).getTime() : 0;
+      const bTime = b.last_message_at ? new Date(b.last_message_at).getTime() : 0;
+      if (bTime !== aTime) return bTime - aTime;
+      return b.message_count - a.message_count;
+    });
+
+    const primary = group[0];
+    const duplicates = group.slice(1);
+
+    for (const dup of duplicates) {
+      try {
+        // Move messages from duplicate to primary
+        const { data: movedMsgs, error: moveError } = await client
+          .from("messages")
+          .update({ conversation_id: primary.id })
+          .eq("conversation_id", dup.id)
+          .select("id");
+
+        if (moveError) {
+          logger.warn("Failed to move messages during merge", {
+            from: dup.id,
+            to: primary.id,
+            error: moveError.message,
+          });
+          continue;
+        }
+
+        const movedCount = movedMsgs?.length || 0;
+        messagesMoved += movedCount;
+
+        // Move media files from duplicate to primary
+        await client
+          .from("media_files")
+          .update({ conversation_id: primary.id })
+          .eq("conversation_id", dup.id);
+
+        // Delete duplicate participants (primary already has them)
+        await client
+          .from("participants")
+          .delete()
+          .eq("conversation_id", dup.id);
+
+        // Delete the duplicate conversation
+        const { error: deleteError } = await client
+          .from("conversations")
+          .delete()
+          .eq("id", dup.id);
+
+        if (deleteError) {
+          logger.warn("Failed to delete duplicate conversation", {
+            id: dup.id,
+            error: deleteError.message,
+          });
+          continue;
+        }
+
+        // Update primary conversation message count and last_message_at
+        const { data: msgStats } = await client
+          .from("messages")
+          .select("sent_at")
+          .eq("conversation_id", primary.id)
+          .order("sent_at", { ascending: false })
+          .limit(1);
+
+        const newCount = (primary.message_count || 0) + movedCount;
+        const lastMsg = msgStats?.[0]?.sent_at || primary.last_message_at;
+
+        await client
+          .from("conversations")
+          .update({
+            message_count: newCount,
+            last_message_at: lastMsg,
+          })
+          .eq("id", primary.id);
+
+        mergedCount++;
+
+        logger.info("Merged duplicate conversation", {
+          duplicateId: dup.id,
+          primaryId: primary.id,
+          primaryName: primary.conversation_name,
+          messagesMoved: movedCount,
+        });
+      } catch (error) {
+        logger.warn("Failed to merge conversation", {
+          duplicateId: dup.id,
+          primaryId: primary.id,
+          error: (error as Error).message,
+        });
+      }
+    }
+  }
+
+  if (mergedCount > 0) {
+    logger.info("Duplicate conversation merge completed", {
+      tenantId,
+      mergedCount,
+      messagesMoved,
+    });
+  }
+
+  return { mergedCount, messagesMoved };
 }
 
 // Get or create conversation ID by 3CX ID
@@ -622,10 +981,11 @@ export async function insertCallRecording(recording: {
   call_started_at?: string;
   call_ended_at?: string;
   recorded_at: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
-  // Map to actual database column names
+  // Map to actual database column names (matching actual Supabase table)
   const dbRecord = {
     tenant_id: recording.tenant_id,
     threecx_call_id: recording.threecx_recording_id || recording.threecx_call_id,
@@ -640,6 +1000,7 @@ export async function insertCallRecording(recording: {
     duration_seconds: recording.duration_seconds,
     started_at: recording.recorded_at || recording.call_started_at || new Date().toISOString(),
     ended_at: recording.call_ended_at,
+    storage_backend: recording.storage_backend || "supabase",
   };
 
   const { data, error } = await client
@@ -662,6 +1023,14 @@ export async function insertCallRecording(recording: {
         .single();
       return existing?.id || "";
     }
+    // Log full error details for debugging
+    logger.error("Call recording insert failed", {
+      errorCode: error.code,
+      errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      recordingId: dbRecord.threecx_call_id,
+    });
     throw new SupabaseError("Failed to insert call recording", { error });
   }
 
@@ -685,6 +1054,23 @@ export async function recordingExists(tenantId: string, recordingId: string): Pr
   return (count || 0) > 0;
 }
 
+// Check if a voicemail already exists in database
+export async function voicemailExists(tenantId: string, voicemailId: string): Promise<boolean> {
+  const client = getSupabaseClient();
+
+  const { count, error } = await client
+    .from("voicemails")
+    .select("*", { count: "exact", head: true })
+    .eq("tenant_id", tenantId)
+    .eq("threecx_voicemail_id", voicemailId);
+
+  if (error) {
+    return false;
+  }
+
+  return (count || 0) > 0;
+}
+
 // ============================================
 // VOICEMAILS
 // ============================================
@@ -693,24 +1079,51 @@ export async function insertVoicemail(voicemail: {
   tenant_id: string;
   threecx_voicemail_id?: string;
   extension: string;
-  extension_name?: string;
   caller_number?: string;
   caller_name?: string;
   original_filename?: string;
   file_size: number;
   storage_path: string;
-  mime_type?: string;
   duration_seconds?: number;
   is_read?: boolean;
-  is_urgent?: boolean;
   transcription?: string;
   received_at: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
+  // Look up extension UUID by extension number
+  let extensionId: string | null = null;
+  if (voicemail.extension) {
+    const { data: ext } = await client
+      .from("extensions")
+      .select("id")
+      .eq("extension_number", voicemail.extension)
+      .eq("tenant_id", voicemail.tenant_id)
+      .single();
+    extensionId = ext?.id || null;
+  }
+
+  // Map to actual database column names (matching actual Supabase table)
+  const dbRecord = {
+    tenant_id: voicemail.tenant_id,
+    threecx_voicemail_id: voicemail.threecx_voicemail_id,
+    extension_id: extensionId,
+    file_name: voicemail.original_filename || "voicemail.wav",
+    file_size: voicemail.file_size,
+    storage_path: voicemail.storage_path,
+    caller_number: voicemail.caller_number,
+    caller_name: voicemail.caller_name,
+    duration_seconds: voicemail.duration_seconds,
+    is_read: voicemail.is_read ?? false,
+    transcription: voicemail.transcription,
+    received_at: voicemail.received_at,
+    storage_backend: voicemail.storage_backend || "supabase",
+  };
+
   const { data, error } = await client
     .from("voicemails")
-    .upsert(voicemail, {
+    .upsert(dbRecord, {
       onConflict: "tenant_id,threecx_voicemail_id",
       ignoreDuplicates: true,
     })
@@ -727,6 +1140,14 @@ export async function insertVoicemail(voicemail: {
         .single();
       return existing?.id || "";
     }
+    // Log full error details for debugging
+    logger.error("Voicemail insert failed", {
+      errorCode: error.code,
+      errorMessage: error.message,
+      errorDetails: error.details,
+      errorHint: error.hint,
+      voicemailId: voicemail.threecx_voicemail_id,
+    });
     throw new SupabaseError("Failed to insert voicemail", { error });
   }
 
@@ -752,6 +1173,7 @@ export async function insertFax(fax: {
   page_count?: number;
   status?: string;
   fax_time: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
@@ -808,9 +1230,28 @@ export async function insertCallLog(callLog: {
 }): Promise<string> {
   const client = getSupabaseClient();
 
+  // Map input properties to actual database column names
+  const dbRecord = {
+    tenant_id: callLog.tenant_id,
+    threecx_call_id: callLog.threecx_call_id,
+    caller_number: callLog.caller_number,
+    caller_name: callLog.caller_name,
+    callee_number: callLog.callee_number,
+    callee_name: callLog.callee_name,
+    direction: callLog.direction,
+    call_type: callLog.call_type,
+    status: callLog.status,
+    ring_duration_seconds: callLog.ring_duration_seconds,
+    duration_seconds: callLog.total_duration_seconds || callLog.talk_duration_seconds,
+    started_at: callLog.call_started_at,
+    answered_at: callLog.call_answered_at,
+    ended_at: callLog.call_ended_at,
+    recording_id: callLog.recording_id,
+  };
+
   const { data, error } = await client
     .from("call_logs")
-    .upsert(callLog, {
+    .upsert(dbRecord, {
       onConflict: "tenant_id,threecx_call_id",
       ignoreDuplicates: true,
     })
@@ -827,6 +1268,11 @@ export async function insertCallLog(callLog: {
         .single();
       return existing?.id || "";
     }
+    logger.error("Call log insert failed", {
+      errorCode: error.code,
+      errorMessage: error.message,
+      callId: callLog.threecx_call_id,
+    });
     throw new SupabaseError("Failed to insert call log", { error });
   }
 
@@ -857,6 +1303,7 @@ export async function insertMeetingRecording(meeting: {
   meeting_started_at?: string;
   meeting_ended_at?: string;
   recorded_at: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
@@ -900,6 +1347,7 @@ export async function insertMediaFileNew(media: {
   file_size: number;
   storage_path: string;
   thumbnail_path?: string;
+  storage_backend?: string; // 'supabase' or 'spaces'
 }): Promise<string> {
   const client = getSupabaseClient();
 
@@ -933,6 +1381,7 @@ export async function insertMediaFileNew(media: {
     mime_type: media.mime_type,
     file_size: media.file_size,
     file_name: fileName,  // Required NOT NULL column in database - never null
+    storage_backend: media.storage_backend || "supabase", // Track storage location
   };
 
   // Optional fields
@@ -961,6 +1410,57 @@ export async function insertMediaFileNew(media: {
   }
 
   return data.id;
+}
+
+// Get all synced filenames for a tenant+category (for fast duplicate checking)
+// Extracts just the filename from storage_path to avoid date-based path mismatches
+export async function getSyncedFilenames(
+  tenantId: string,
+  category: string
+): Promise<Set<string>> {
+  const client = getSupabaseClient();
+  const filenames = new Set<string>();
+  const prefix = `${tenantId}/${category}/`;
+
+  // Paginate through all media files for this tenant/category
+  let offset = 0;
+  const pageSize = 1000;
+
+  while (true) {
+    const { data, error } = await client
+      .from("media_files")
+      .select("storage_path")
+      .eq("tenant_id", tenantId)
+      .like("storage_path", `${prefix}%`)
+      .range(offset, offset + pageSize - 1);
+
+    if (error) {
+      logger.error("Failed to fetch synced filenames", { tenantId, category, error: error.message });
+      break;
+    }
+
+    if (!data || data.length === 0) break;
+
+    for (const row of data) {
+      if (row.storage_path) {
+        // Extract just the base name WITHOUT extension (last segment of path, strip extension)
+        // Extension changes after compression (e.g., .MOV -> .mp4, .jpeg -> .webp)
+        // so we only compare the base name which is deterministic from the source file
+        const parts = row.storage_path.split("/");
+        const filename = parts[parts.length - 1];
+        if (filename) {
+          const dotIdx = filename.lastIndexOf(".");
+          const baseName = dotIdx > 0 ? filename.substring(0, dotIdx) : filename;
+          filenames.add(baseName);
+        }
+      }
+    }
+
+    if (data.length < pageSize) break;
+    offset += pageSize;
+  }
+
+  return filenames;
 }
 
 // Update media file with message link and original filename
@@ -1105,6 +1605,63 @@ export async function linkMediaByFilename(
   }
 
   return false;
+}
+
+// Re-link orphaned media: find messages with has_media=true but no linked media_files,
+// then try to match them to unlinked media files by filename
+export async function relinkOrphanedMedia(
+  tenantId: string
+): Promise<{ linked: number; checked: number }> {
+  const client = getSupabaseClient();
+  let linked = 0;
+  let checked = 0;
+
+  // Find messages that claim to have media but have no linked media_files
+  // We check by looking for messages with has_media=true where the content looks like a filename
+  const { data: orphanedMessages, error: msgError } = await client
+    .from("messages")
+    .select("id, content, conversation_id")
+    .eq("tenant_id", tenantId)
+    .eq("has_media", true)
+    .order("sent_at", { ascending: false })
+    .limit(500);
+
+  if (msgError || !orphanedMessages) {
+    logger.error("Failed to fetch orphaned media messages", { error: msgError?.message });
+    return { linked: 0, checked: 0 };
+  }
+
+  for (const msg of orphanedMessages) {
+    if (!msg.content?.trim()) continue;
+
+    // Check if this message already has linked media
+    const { count: existingCount } = await client
+      .from("media_files")
+      .select("id", { count: "exact", head: true })
+      .eq("message_id", msg.id);
+
+    if ((existingCount || 0) > 0) continue; // Already linked
+
+    checked++;
+
+    // Try to link by filename
+    const wasLinked = await linkMediaByFilename(
+      tenantId,
+      msg.id,
+      msg.conversation_id,
+      msg.content
+    );
+
+    if (wasLinked) {
+      linked++;
+    }
+  }
+
+  if (linked > 0) {
+    logger.info("Re-linked orphaned media files", { tenantId, linked, checked });
+  }
+
+  return { linked, checked };
 }
 
 // ============================================

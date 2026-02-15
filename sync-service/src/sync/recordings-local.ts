@@ -13,7 +13,7 @@ import {
   generateStoragePath,
   fileExists,
   detectFileType,
-} from "../storage/supabase-storage";
+} from "../storage/spaces-storage";
 import { insertCallRecording, updateSyncStatus, getLastSyncedTimestamp } from "../storage/supabase";
 import { getRecordings } from "../threecx/queries";
 
@@ -223,6 +223,7 @@ export async function syncRecordingsLocal(
           recorded_at: recording.start_time?.toISOString() || new Date().toISOString(),
           call_started_at: recording.start_time?.toISOString(),
           call_ended_at: recording.end_time?.toISOString(),
+          storage_backend: "spaces",
         });
 
         result.filesSynced++;

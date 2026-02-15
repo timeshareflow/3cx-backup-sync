@@ -1,4 +1,5 @@
 import SftpClient from "ssh2-sftp-client";
+import { Readable } from "stream";
 import { logger } from "../utils/logger";
 
 export interface SftpConfig {
@@ -59,13 +60,25 @@ export async function listRemoteFiles(
   }
 }
 
-// Recursively list all files including subdirectories
+// File info with size for smart downloading
+export interface RemoteFileInfo {
+  filename: string;
+  relativePath: string;
+  fullPath: string;
+  size: number; // bytes
+}
+
+// Max file size for in-memory download (25MB)
+// Files larger than this should be streamed or skipped
+export const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
+
+// Recursively list all files including subdirectories with size info
 export async function listRemoteFilesRecursive(
   sftp: SftpClient,
   remotePath: string,
   basePath?: string
-): Promise<Array<{ filename: string; relativePath: string; fullPath: string }>> {
-  const results: Array<{ filename: string; relativePath: string; fullPath: string }> = [];
+): Promise<RemoteFileInfo[]> {
+  const results: RemoteFileInfo[] = [];
   const currentBase = basePath || remotePath;
 
   try {
@@ -85,12 +98,13 @@ export async function listRemoteFilesRecursive(
         const subFiles = await listRemoteFilesRecursive(sftp, itemPath, currentBase);
         results.push(...subFiles);
       } else if (item.type === "-") {
-        // It's a file
+        // It's a file - include size
         const relativePath = itemPath.replace(currentBase + "/", "");
         results.push({
           filename: item.name,
           relativePath,
           fullPath: itemPath,
+          size: item.size,
         });
       }
     }
@@ -102,6 +116,23 @@ export async function listRemoteFilesRecursive(
       error: (error as Error).message,
     });
     return results;
+  }
+}
+
+// Get file size without downloading
+export async function getRemoteFileSize(
+  sftp: SftpClient,
+  remotePath: string
+): Promise<number> {
+  try {
+    const stat = await sftp.stat(remotePath);
+    return stat.size;
+  } catch (error) {
+    logger.error("Failed to get file size", {
+      path: remotePath,
+      error: (error as Error).message,
+    });
+    return -1;
   }
 }
 
@@ -150,3 +181,34 @@ export async function closeSftpClient(sftp: SftpClient): Promise<void> {
     });
   }
 }
+
+/**
+ * Stream a file from SFTP - returns a readable stream for piping to S3
+ * Use this for large files to avoid loading them entirely into memory
+ */
+export async function downloadFileStream(
+  sftp: SftpClient,
+  remotePath: string
+): Promise<Readable> {
+  try {
+    // ssh2-sftp-client returns a readable stream when no destination is specified
+    const stream = sftp.createReadStream(remotePath, {
+      autoClose: true,
+    });
+
+    logger.debug("Created SFTP read stream", { path: remotePath });
+    return stream as unknown as Readable;
+  } catch (error) {
+    logger.error("Failed to create SFTP read stream", {
+      path: remotePath,
+      error: (error as Error).message,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Higher limit for streaming uploads (500MB)
+ * Streaming doesn't load the entire file into memory
+ */
+export const MAX_STREAM_FILE_SIZE_BYTES = 500 * 1024 * 1024;

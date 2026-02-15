@@ -8,7 +8,7 @@ import { syncExtensions, ExtensionSyncResult } from "./extensions";
 import { syncFaxes, FaxesSyncResult } from "./faxes";
 import { syncMeetings, MeetingsSyncResult } from "./meetings";
 import { syncCdr, CdrSyncResult } from "./cdr";
-import { createSyncLog, updateSyncLog } from "../storage/supabase";
+import { createSyncLog, updateSyncLog, relinkOrphanedMedia } from "../storage/supabase";
 import { TenantConfig, getActiveTenants, getTenantPool, testTenantConnection } from "../tenant";
 
 // Sync types for granular scheduling
@@ -80,13 +80,13 @@ export async function runTenantSync(
 
   const result: SyncResult = {
     messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
-    media: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    media: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
     recordings: { filesSynced: 0, filesSkipped: 0, errors: [] as Array<{ recordingId: string; error: string }> },
-    voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
+    voicemails: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
     faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
     meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
     cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },
-    extensions: { extensionsSynced: 0, errors: [] },
+    extensions: { extensionsSynced: 0, namesChanged: 0, errors: [] },
     duration: 0,
   };
 
@@ -141,6 +141,20 @@ export async function runTenantSync(
         result.meetings = await syncMeetings(tenant);
       } catch (err) {
         logger.warn("Meetings sync failed, continuing", { error: (err as Error).message });
+      }
+
+      // After media files are downloaded, re-link any orphaned media to messages
+      try {
+        const relink = await relinkOrphanedMedia(tenant.id);
+        if (relink.linked > 0) {
+          logger.info("Re-linked orphaned media after media sync", {
+            tenantId: tenant.id,
+            linked: relink.linked,
+            checked: relink.checked,
+          });
+        }
+      } catch (err) {
+        logger.warn("Media re-linking failed, continuing", { error: (err as Error).message });
       }
     }
 
@@ -242,13 +256,13 @@ export async function runMultiTenantSync(options?: {
       tenantName: tenant.name,
       success: false,
       messages: { messagesSynced: 0, conversationsCreated: 0, errors: [] },
-      media: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      media: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
       recordings: { filesSynced: 0, filesSkipped: 0, errors: [] as Array<{ recordingId: string; error: string }> },
-      voicemails: { filesSynced: 0, filesSkipped: 0, errors: [] },
+      voicemails: { filesSynced: 0, filesSkipped: 0, filesTooLarge: 0, errors: [] },
       faxes: { filesSynced: 0, filesSkipped: 0, errors: [] },
       meetings: { filesSynced: 0, filesSkipped: 0, errors: [] },
       cdr: { recordsSynced: 0, recordsSkipped: 0, errors: [] },
-      extensions: { extensionsSynced: 0, errors: [] },
+      extensions: { extensionsSynced: 0, namesChanged: 0, errors: [] },
       duration: 0,
     };
 
@@ -411,6 +425,18 @@ export async function runMultiTenantSyncByType(
 
             case "media":
               await syncMedia(tenant);
+              // Re-link any orphaned media to messages after download
+              try {
+                const relink = await relinkOrphanedMedia(tenant.id);
+                if (relink.linked > 0) {
+                  logger.info("Re-linked orphaned media after media sync", {
+                    tenantId: tenant.id,
+                    linked: relink.linked,
+                  });
+                }
+              } catch (relinkErr) {
+                logger.warn("Media re-linking failed", { error: (relinkErr as Error).message });
+              }
               break;
 
             case "recordings":

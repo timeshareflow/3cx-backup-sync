@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
-import { Settings, Download, Trash2, Bell, Clock, Shield, Archive, Infinity, User } from "lucide-react";
+import { Settings, Download, Trash2, Bell, Clock, Shield, Archive, Infinity, User, HardDrive } from "lucide-react";
 import { TwoFactorSetup } from "@/components/auth/TwoFactorSetup";
 import { createClient } from "@/lib/supabase/client";
 
@@ -22,6 +22,27 @@ interface UserProfile {
   full_name: string | null;
 }
 
+interface TenantConfig {
+  backup_chats: boolean;
+  backup_chat_media: boolean;
+  backup_recordings: boolean;
+  backup_voicemails: boolean;
+  backup_faxes: boolean;
+  backup_cdr: boolean;
+  backup_meetings: boolean;
+  sync_interval_seconds: number;
+}
+
+const BACKUP_TYPES = [
+  { key: "backup_chats", label: "Chat Messages", description: "Text messages and conversation history" },
+  { key: "backup_chat_media", label: "Chat Media", description: "Images, videos, and file attachments from chats" },
+  { key: "backup_recordings", label: "Call Recordings", description: "Audio recordings of phone calls" },
+  { key: "backup_voicemails", label: "Voicemails", description: "Voice messages left by callers" },
+  { key: "backup_faxes", label: "Faxes", description: "Sent and received fax documents" },
+  { key: "backup_cdr", label: "Call Logs (CDR)", description: "Call detail records and call history" },
+  { key: "backup_meetings", label: "Meeting Recordings", description: "Web meeting recordings and transcripts" },
+] as const;
+
 export default function SettingsPage() {
   const [policies, setPolicies] = useState<RetentionPolicy[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -34,9 +55,16 @@ export default function SettingsPage() {
   const [profileSaving, setProfileSaving] = useState(false);
   const [profileMessage, setProfileMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
 
+  // Tenant config state (backup toggles + sync interval)
+  const [tenantConfig, setTenantConfig] = useState<TenantConfig | null>(null);
+  const [configLoading, setConfigLoading] = useState(true);
+  const [configSaving, setConfigSaving] = useState(false);
+  const [configMessage, setConfigMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   useEffect(() => {
     fetchPolicies();
     fetchProfile();
+    fetchTenantConfig();
   }, []);
 
   async function fetchProfile() {
@@ -134,6 +162,56 @@ export default function SettingsPage() {
     } finally {
       setIsSaving(false);
       setTimeout(() => setSaveMessage(null), 3000);
+    }
+  }
+
+  async function fetchTenantConfig() {
+    try {
+      const response = await fetch("/api/tenant/config");
+      if (response.ok) {
+        const data = await response.json();
+        setTenantConfig({
+          backup_chats: data.backup_chats ?? true,
+          backup_chat_media: data.backup_chat_media ?? true,
+          backup_recordings: data.backup_recordings ?? true,
+          backup_voicemails: data.backup_voicemails ?? true,
+          backup_faxes: data.backup_faxes ?? true,
+          backup_cdr: data.backup_cdr ?? true,
+          backup_meetings: data.backup_meetings ?? true,
+          sync_interval_seconds: data.sync_interval_seconds ?? 60,
+        });
+      }
+    } catch (error) {
+      console.error("Failed to fetch tenant config:", error);
+    } finally {
+      setConfigLoading(false);
+    }
+  }
+
+  async function saveTenantConfig() {
+    if (!tenantConfig) return;
+
+    setConfigSaving(true);
+    setConfigMessage(null);
+
+    try {
+      const response = await fetch("/api/tenant/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tenantConfig),
+      });
+
+      if (response.ok) {
+        setConfigMessage({ type: "success", text: "Sync settings saved successfully" });
+      } else {
+        const data = await response.json();
+        setConfigMessage({ type: "error", text: data.error || "Failed to save settings" });
+      }
+    } catch (error) {
+      setConfigMessage({ type: "error", text: "Failed to save settings" });
+    } finally {
+      setConfigSaving(false);
+      setTimeout(() => setConfigMessage(null), 3000);
     }
   }
 
@@ -330,27 +408,98 @@ export default function SettingsPage() {
 
       {/* Sync Settings */}
       <div className="space-y-4">
-        <h2 className="text-xl font-bold text-slate-800">Sync Settings</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xl font-bold text-slate-800">Sync Settings</h2>
+          {configMessage && (
+            <div
+              className={`px-4 py-2 rounded-lg text-sm font-medium ${
+                configMessage.type === "success"
+                  ? "bg-green-100 text-green-700"
+                  : "bg-red-100 text-red-700"
+              }`}
+            >
+              {configMessage.text}
+            </div>
+          )}
+        </div>
         <div className="bg-white rounded-2xl shadow-lg shadow-slate-200/50 border border-slate-200 p-6">
-          <div className="space-y-6">
-            <div className="flex items-center justify-between p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
-              <div className="flex items-center gap-4">
-                <div className="p-2 bg-blue-100 rounded-lg">
-                  <Clock className="h-5 w-5 text-blue-600" />
+          {configLoading ? (
+            <div className="space-y-4">
+              {[1, 2, 3].map((i) => (
+                <div key={i} className="h-16 bg-slate-100 rounded-xl animate-pulse" />
+              ))}
+            </div>
+          ) : tenantConfig ? (
+            <div className="space-y-6">
+              {/* Sync Interval */}
+              <div className="flex items-center justify-between p-4 bg-gradient-to-br from-blue-50 to-indigo-50 rounded-xl border border-blue-200">
+                <div className="flex items-center gap-4">
+                  <div className="p-2 bg-blue-100 rounded-lg">
+                    <Clock className="h-5 w-5 text-blue-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-800">Sync Interval</h3>
+                    <p className="text-sm text-slate-500">How often to sync data from 3CX</p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="font-semibold text-slate-800">Sync Interval</h3>
-                  <p className="text-sm text-slate-500">How often to sync data from 3CX</p>
+                <select
+                  value={tenantConfig.sync_interval_seconds}
+                  onChange={(e) => setTenantConfig({ ...tenantConfig, sync_interval_seconds: parseInt(e.target.value) })}
+                  className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-slate-800 font-medium"
+                >
+                  <option value="60">Every minute</option>
+                  <option value="300">Every 5 minutes</option>
+                  <option value="900">Every 15 minutes</option>
+                  <option value="3600">Every hour</option>
+                </select>
+              </div>
+
+              {/* Backup Type Toggles */}
+              <div>
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="p-2 bg-teal-100 rounded-lg">
+                    <HardDrive className="h-5 w-5 text-teal-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-800">Backup Types</h3>
+                    <p className="text-sm text-slate-500">Choose which data types to sync from 3CX</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {BACKUP_TYPES.map(({ key, label, description }) => (
+                    <div
+                      key={key}
+                      className="flex items-center justify-between p-4 bg-gradient-to-br from-slate-50 to-gray-50 rounded-xl border border-slate-200"
+                    >
+                      <div>
+                        <h4 className="font-semibold text-slate-800">{label}</h4>
+                        <p className="text-sm text-slate-500">{description}</p>
+                      </div>
+                      <label className="relative inline-flex items-center cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={tenantConfig[key]}
+                          onChange={(e) =>
+                            setTenantConfig({ ...tenantConfig, [key]: e.target.checked })
+                          }
+                          className="sr-only peer"
+                        />
+                        <div className="w-11 h-6 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-500"></div>
+                      </label>
+                    </div>
+                  ))}
                 </div>
               </div>
-              <select className="px-4 py-2 bg-white border border-slate-300 rounded-lg text-slate-800 font-medium">
-                <option value="60">Every minute</option>
-                <option value="300">Every 5 minutes</option>
-                <option value="900">Every 15 minutes</option>
-                <option value="3600">Every hour</option>
-              </select>
+
+              <div className="flex justify-end pt-2">
+                <Button onClick={saveTenantConfig} disabled={configSaving}>
+                  {configSaving ? "Saving..." : "Save Sync Settings"}
+                </Button>
+              </div>
             </div>
-          </div>
+          ) : (
+            <p className="text-slate-500">Unable to load sync settings</p>
+          )}
         </div>
       </div>
 

@@ -2,11 +2,21 @@
 
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Navigation } from "@/components/layout/Navigation";
+import { ExtensionMessageList } from "@/components/chat/ExtensionMessageList";
 import { MessageList } from "@/components/chat/MessageList";
 import { ActivityFeed } from "@/components/monitor/ActivityFeed";
 import { Button } from "@/components/ui/Button";
 import { Spinner } from "@/components/ui/Spinner";
-import { Plus, X, Columns, Maximize2, Minimize2, LayoutGrid, List } from "lucide-react";
+import { Plus, X, Columns, Maximize2, Minimize2, LayoutGrid, List, Phone, Users } from "lucide-react";
+
+interface Extension {
+  id: string;
+  extension_number: string;
+  display_name: string | null;
+  first_name: string | null;
+  last_name: string | null;
+  is_active: boolean;
+}
 
 interface Conversation {
   id: string;
@@ -22,34 +32,49 @@ interface Conversation {
   }>;
 }
 
+type PanelType = "extension" | "group";
+
 interface MonitorPanel {
   id: string;
-  conversation: Conversation;
+  type: PanelType;
+  extension?: Extension;
+  conversation?: Conversation;
   isMaximized: boolean;
 }
 
 type ViewMode = "grid" | "feed";
+type SelectorTab = "extensions" | "groups";
 
 export default function MonitorPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
   const [panels, setPanels] = useState<MonitorPanel[]>([]);
   const [showSelector, setShowSelector] = useState(false);
-  const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [isLoadingConversations, setIsLoadingConversations] = useState(false);
+  const [selectorTab, setSelectorTab] = useState<SelectorTab>("extensions");
+  const [extensions, setExtensions] = useState<Extension[]>([]);
+  const [groupChats, setGroupChats] = useState<Conversation[]>([]);
+  const [isLoadingSelector, setIsLoadingSelector] = useState(false);
   const [isLoadingInitial, setIsLoadingInitial] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
   const initialLoadDone = useRef(false);
   const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Save selected conversation IDs and view mode to user preferences (debounced)
-  const saveMonitorPreferences = useCallback((conversationIds: string[], mode?: ViewMode) => {
+  // Save panel config to user preferences (debounced)
+  const saveMonitorPreferences = useCallback((currentPanels: MonitorPanel[], mode?: ViewMode) => {
     if (saveTimeoutRef.current) {
       clearTimeout(saveTimeoutRef.current);
     }
     saveTimeoutRef.current = setTimeout(async () => {
       try {
-        const body: { monitorConversationIds: string[]; monitorViewMode?: ViewMode } = {
-          monitorConversationIds: conversationIds,
+        const monitorExtensionIds = currentPanels
+          .filter((p) => p.type === "extension" && p.extension)
+          .map((p) => p.extension!.id);
+        const monitorGroupChatIds = currentPanels
+          .filter((p) => p.type === "group" && p.conversation)
+          .map((p) => p.conversation!.id);
+
+        const body: Record<string, unknown> = {
+          monitorExtensionIds,
+          monitorGroupChatIds,
         };
         if (mode !== undefined) {
           body.monitorViewMode = mode;
@@ -65,26 +90,36 @@ export default function MonitorPage() {
     }, 500);
   }, []);
 
-  // Save view mode change
   const handleViewModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode);
-    saveMonitorPreferences(panels.map((p) => p.conversation.id), mode);
+    saveMonitorPreferences(panels, mode);
   }, [panels, saveMonitorPreferences]);
 
-  const fetchConversations = useCallback(async (): Promise<Conversation[]> => {
-    setIsLoadingConversations(true);
+  const fetchExtensions = useCallback(async (): Promise<Extension[]> => {
+    try {
+      const response = await fetch("/api/extensions");
+      if (response.ok) {
+        const data = await response.json();
+        setExtensions(data || []);
+        return data || [];
+      }
+    } catch (error) {
+      console.error("Failed to fetch extensions:", error);
+    }
+    return [];
+  }, []);
+
+  const fetchGroupChats = useCallback(async (): Promise<Conversation[]> => {
     try {
       const response = await fetch("/api/conversations?limit=100");
       if (response.ok) {
         const data = await response.json();
-        const convList = data.data || [];
-        setConversations(convList);
-        return convList;
+        const groups = (data.data || []).filter((c: Conversation) => c.is_group_chat);
+        setGroupChats(groups);
+        return groups;
       }
     } catch (error) {
-      console.error("Failed to fetch conversations:", error);
-    } finally {
-      setIsLoadingConversations(false);
+      console.error("Failed to fetch group chats:", error);
     }
     return [];
   }, []);
@@ -96,34 +131,52 @@ export default function MonitorPage() {
 
     (async () => {
       try {
-        const [prefsResponse, convList] = await Promise.all([
+        const [prefsResponse, extList, groupList] = await Promise.all([
           fetch("/api/user/preferences"),
-          fetchConversations(),
+          fetchExtensions(),
+          fetchGroupChats(),
         ]);
 
         if (prefsResponse.ok) {
           const prefsData = await prefsResponse.json();
-          const savedIds: string[] =
-            prefsData.preferences?.monitorConversationIds || [];
+          const savedExtIds: string[] =
+            prefsData.preferences?.monitorExtensionIds || [];
+          const savedGroupIds: string[] =
+            prefsData.preferences?.monitorGroupChatIds || [];
           const savedViewMode: ViewMode =
             prefsData.preferences?.monitorViewMode || "grid";
 
           setViewMode(savedViewMode);
 
-          if (savedIds.length > 0 && convList.length > 0) {
-            const savedPanels: MonitorPanel[] = [];
-            for (const id of savedIds) {
-              const conv = convList.find((c: Conversation) => c.id === id);
-              if (conv) {
-                savedPanels.push({
-                  id: `panel-${id}`,
-                  conversation: conv,
-                  isMaximized: false,
-                });
-              }
+          const savedPanels: MonitorPanel[] = [];
+
+          // Restore extension panels
+          for (const id of savedExtIds) {
+            const ext = extList.find((e: Extension) => e.id === id);
+            if (ext) {
+              savedPanels.push({
+                id: `panel-ext-${id}`,
+                type: "extension",
+                extension: ext,
+                isMaximized: false,
+              });
             }
-            setPanels(savedPanels);
           }
+
+          // Restore group chat panels
+          for (const id of savedGroupIds) {
+            const conv = groupList.find((c: Conversation) => c.id === id);
+            if (conv) {
+              savedPanels.push({
+                id: `panel-grp-${id}`,
+                type: "group",
+                conversation: conv,
+                isMaximized: false,
+              });
+            }
+          }
+
+          setPanels(savedPanels);
         }
       } catch (error) {
         console.error("Failed to load monitor preferences:", error);
@@ -131,36 +184,63 @@ export default function MonitorPage() {
         setIsLoadingInitial(false);
       }
     })();
-  }, [fetchConversations]);
+  }, [fetchExtensions, fetchGroupChats]);
 
+  // Fetch data when selector opens
   useEffect(() => {
-    if (showSelector && conversations.length === 0) {
-      fetchConversations();
+    if (showSelector) {
+      setIsLoadingSelector(true);
+      Promise.all([
+        extensions.length === 0 ? fetchExtensions() : Promise.resolve(extensions),
+        groupChats.length === 0 ? fetchGroupChats() : Promise.resolve(groupChats),
+      ]).finally(() => setIsLoadingSelector(false));
     }
-  }, [showSelector, conversations.length, fetchConversations]);
+  }, [showSelector, extensions.length, groupChats.length, fetchExtensions, fetchGroupChats]);
 
-  const addPanel = (conversation: Conversation) => {
-    if (panels.some((p) => p.conversation.id === conversation.id)) {
+  const addExtensionPanel = (extension: Extension) => {
+    if (panels.some((p) => p.type === "extension" && p.extension?.id === extension.id)) {
       return;
     }
 
     const newPanels = [
       ...panels,
       {
-        id: `panel-${Date.now()}`,
+        id: `panel-ext-${Date.now()}`,
+        type: "extension" as PanelType,
+        extension,
+        isMaximized: false,
+      },
+    ];
+    setPanels(newPanels);
+    setShowSelector(false);
+    setSearchTerm("");
+    saveMonitorPreferences(newPanels);
+  };
+
+  const addGroupPanel = (conversation: Conversation) => {
+    if (panels.some((p) => p.type === "group" && p.conversation?.id === conversation.id)) {
+      return;
+    }
+
+    const newPanels = [
+      ...panels,
+      {
+        id: `panel-grp-${Date.now()}`,
+        type: "group" as PanelType,
         conversation,
         isMaximized: false,
       },
     ];
     setPanels(newPanels);
     setShowSelector(false);
-    saveMonitorPreferences(newPanels.map((p) => p.conversation.id));
+    setSearchTerm("");
+    saveMonitorPreferences(newPanels);
   };
 
   const removePanel = (panelId: string) => {
     const newPanels = panels.filter((p) => p.id !== panelId);
     setPanels(newPanels);
-    saveMonitorPreferences(newPanels.map((p) => p.conversation.id));
+    saveMonitorPreferences(newPanels);
   };
 
   const toggleMaximize = (panelId: string) => {
@@ -171,29 +251,53 @@ export default function MonitorPage() {
     );
   };
 
-  const getConversationTitle = (conv: Conversation) => {
-    if (conv.conversation_name) return conv.conversation_name;
-    const names = conv.participants
-      ?.map((p) => p.external_name || p.external_id)
-      .filter(Boolean)
-      .join(", ");
-    return names || "Unnamed Conversation";
+  const getExtensionTitle = (ext: Extension) => {
+    const name = ext.display_name ||
+      [ext.first_name, ext.last_name].filter(Boolean).join(" ") ||
+      ext.extension_number;
+    return `${name} (${ext.extension_number})`;
   };
 
-  const filteredConversations = conversations.filter((conv) => {
-    const title = getConversationTitle(conv).toLowerCase();
+  const getGroupTitle = (conv: Conversation) => {
+    return conv.conversation_name || "Unnamed Group";
+  };
+
+  const getPanelTitle = (panel: MonitorPanel) => {
+    if (panel.type === "extension" && panel.extension) {
+      return getExtensionTitle(panel.extension);
+    }
+    if (panel.type === "group" && panel.conversation) {
+      return getGroupTitle(panel.conversation);
+    }
+    return "Unknown";
+  };
+
+  const getPanelIcon = (panel: MonitorPanel) => {
+    if (panel.type === "group") {
+      return <Users className="h-3.5 w-3.5 text-purple-500" />;
+    }
+    return <Phone className="h-3.5 w-3.5 text-teal-600" />;
+  };
+
+  // Filter for selector
+  const filteredExtensions = extensions.filter((ext) => {
+    const title = getExtensionTitle(ext).toLowerCase();
     return title.includes(searchTerm.toLowerCase());
   });
-
-  // Get available conversations (not already in panels)
-  const availableConversations = filteredConversations.filter(
-    (conv) => !panels.some((p) => p.conversation.id === conv.id)
+  const availableExtensions = filteredExtensions.filter(
+    (ext) => !panels.some((p) => p.type === "extension" && p.extension?.id === ext.id)
   );
 
-  // Check if any panel is maximized
+  const filteredGroups = groupChats.filter((conv) => {
+    const title = getGroupTitle(conv).toLowerCase();
+    return title.includes(searchTerm.toLowerCase());
+  });
+  const availableGroups = filteredGroups.filter(
+    (conv) => !panels.some((p) => p.type === "group" && p.conversation?.id === conv.id)
+  );
+
   const maximizedPanel = panels.find((p) => p.isMaximized);
 
-  // Calculate grid columns based on panel count
   const getGridCols = () => {
     if (panels.length <= 1) return "grid-cols-1";
     if (panels.length === 2) return "grid-cols-2";
@@ -215,25 +319,20 @@ export default function MonitorPage() {
 
   return (
     <div className="flex flex-col h-[calc(100vh-8rem)]">
-      <Navigation
-        breadcrumbs={[{ label: "Multi-Chat Monitor" }]}
-      />
+      <Navigation breadcrumbs={[{ label: "Multi-Chat Monitor" }]} />
 
-      {/* Header with controls */}
+      {/* Header */}
       <div className="bg-white rounded-lg shadow mb-4 p-4">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">
-              Multi-Chat Monitor
-            </h1>
+            <h1 className="text-xl font-bold text-gray-900">Multi-Chat Monitor</h1>
             <p className="text-sm text-gray-500 mt-1">
               {viewMode === "grid"
-                ? "View multiple conversations simultaneously"
+                ? "Monitor extensions and group chats"
                 : "Live activity feed from all conversations"}
             </p>
           </div>
           <div className="flex items-center gap-3">
-            {/* View Toggle */}
             <div className="flex items-center bg-slate-100 rounded-lg p-1">
               <button
                 onClick={() => handleViewModeChange("grid")}
@@ -268,12 +367,12 @@ export default function MonitorPage() {
                   {panels.length} active
                 </span>
                 <Button
-                  onClick={() => setShowSelector(true)}
+                  onClick={() => { setShowSelector(true); setSearchTerm(""); }}
                   className="flex items-center gap-2"
                   disabled={showSelector}
                 >
                   <Plus className="h-4 w-4" />
-                  Add Conversation
+                  Add Monitor
                 </Button>
               </>
             )}
@@ -281,103 +380,166 @@ export default function MonitorPage() {
         </div>
       </div>
 
-      {/* Conversation Selector Modal */}
+      {/* Selector Modal */}
       {showSelector && (
         <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center">
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg max-h-[80vh] flex flex-col">
             <div className="p-4 border-b flex items-center justify-between">
-              <h2 className="text-lg font-semibold">Select Conversation</h2>
+              <h2 className="text-lg font-semibold text-gray-900">Add to Monitor</h2>
               <button
                 onClick={() => setShowSelector(false)}
                 className="p-1 hover:bg-gray-100 rounded"
               >
-                <X className="h-5 w-5" />
+                <X className="h-5 w-5 text-gray-500" />
               </button>
             </div>
 
+            {/* Tabs */}
+            <div className="flex border-b">
+              <button
+                onClick={() => { setSelectorTab("extensions"); setSearchTerm(""); }}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+                  selectorTab === "extensions"
+                    ? "text-teal-600 border-b-2 border-teal-600"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <Phone className="h-4 w-4" />
+                Extensions
+              </button>
+              <button
+                onClick={() => { setSelectorTab("groups"); setSearchTerm(""); }}
+                className={`flex-1 flex items-center justify-center gap-2 px-4 py-3 text-sm font-medium transition-colors ${
+                  selectorTab === "groups"
+                    ? "text-purple-600 border-b-2 border-purple-600"
+                    : "text-gray-500 hover:text-gray-700"
+                }`}
+              >
+                <Users className="h-4 w-4" />
+                Group Chats
+              </button>
+            </div>
+
+            {/* Search */}
             <div className="p-4 border-b">
               <input
                 type="text"
-                placeholder="Search conversations..."
+                placeholder={selectorTab === "extensions" ? "Search extensions..." : "Search group chats..."}
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500 text-gray-900 placeholder-gray-400 bg-white"
               />
             </div>
 
+            {/* List */}
             <div className="flex-1 overflow-y-auto p-2">
-              {isLoadingConversations ? (
+              {isLoadingSelector ? (
                 <div className="flex items-center justify-center py-8">
                   <Spinner size="lg" />
                 </div>
-              ) : availableConversations.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  {searchTerm
-                    ? "No matching conversations found"
-                    : "All conversations are already being monitored"}
-                </div>
+              ) : selectorTab === "extensions" ? (
+                availableExtensions.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    {searchTerm
+                      ? "No matching extensions found"
+                      : "All extensions are already being monitored"}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {availableExtensions.map((ext) => (
+                      <button
+                        key={ext.id}
+                        onClick={() => addExtensionPanel(ext)}
+                        className="w-full text-left px-3 py-3 hover:bg-gray-50 rounded-lg transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-teal-100 flex items-center justify-center">
+                            <Phone className="h-4 w-4 text-teal-600" />
+                          </div>
+                          <div>
+                            <div className="font-medium text-gray-900">
+                              {getExtensionTitle(ext)}
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              All direct messages
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
               ) : (
-                <div className="space-y-1">
-                  {availableConversations.map((conv) => (
-                    <button
-                      key={conv.id}
-                      onClick={() => addPanel(conv)}
-                      className="w-full text-left px-3 py-3 hover:bg-gray-50 rounded-lg transition-colors"
-                    >
-                      <div className="font-medium text-gray-900">
-                        {getConversationTitle(conv)}
-                      </div>
-                      <div className="text-sm text-gray-500 flex items-center gap-2 mt-1">
-                        <span>{conv.participant_count} participants</span>
-                        <span>•</span>
-                        <span>{conv.message_count} messages</span>
-                        {conv.is_group_chat && (
-                          <>
-                            <span>•</span>
-                            <span className="text-teal-600">Group</span>
-                          </>
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                availableGroups.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    {searchTerm
+                      ? "No matching group chats found"
+                      : "All group chats are already being monitored"}
+                  </div>
+                ) : (
+                  <div className="space-y-1">
+                    {availableGroups.map((conv) => (
+                      <button
+                        key={conv.id}
+                        onClick={() => addGroupPanel(conv)}
+                        className="w-full text-left px-3 py-3 hover:bg-gray-50 rounded-lg transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="flex-shrink-0 w-8 h-8 rounded-full bg-purple-100 flex items-center justify-center">
+                            <Users className="h-4 w-4 text-purple-600" />
+                          </div>
+                          <div>
+                            <div className="font-medium text-gray-900">
+                              {getGroupTitle(conv)}
+                            </div>
+                            <div className="text-sm text-gray-500">
+                              {conv.participant_count} participants &middot; {conv.message_count} messages
+                            </div>
+                          </div>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )
               )}
             </div>
           </div>
         </div>
       )}
 
-      {/* Content based on view mode */}
+      {/* Content */}
       {viewMode === "feed" ? (
-        // Feed View
         <div className="flex-1 bg-white rounded-lg shadow overflow-hidden">
           <ActivityFeed />
         </div>
       ) : (
-        // Grid View
         <>
           {panels.length === 0 ? (
             <div className="flex-1 bg-white rounded-lg shadow flex items-center justify-center">
               <div className="text-center">
                 <Columns className="h-12 w-12 text-gray-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">
-                  No conversations selected
+                  No monitors active
                 </h3>
                 <p className="text-gray-500 mb-4">
-                  Click &quot;Add Conversation&quot; to start monitoring chats
+                  Add extensions or group chats to start monitoring
                 </p>
                 <Button onClick={() => setShowSelector(true)}>
                   <Plus className="h-4 w-4 mr-2" />
-                  Add Conversation
+                  Add Monitor
                 </Button>
               </div>
             </div>
           ) : maximizedPanel ? (
-            // Show only maximized panel
             <div className="flex-1 bg-white rounded-lg shadow overflow-hidden flex flex-col">
               <div className="p-3 border-b bg-gray-50 flex items-center justify-between">
-                <h3 className="font-medium text-gray-900 truncate">
-                  {getConversationTitle(maximizedPanel.conversation)}
+                <h3 className="font-medium text-gray-900 truncate flex items-center gap-2">
+                  {maximizedPanel.type === "group" ? (
+                    <Users className="h-4 w-4 text-purple-500" />
+                  ) : (
+                    <Phone className="h-4 w-4 text-teal-600" />
+                  )}
+                  {getPanelTitle(maximizedPanel)}
                 </h3>
                 <div className="flex items-center gap-1">
                   <button
@@ -397,11 +559,14 @@ export default function MonitorPage() {
                 </div>
               </div>
               <div className="flex-1 overflow-auto min-h-0">
-                <MessageList conversationId={maximizedPanel.conversation.id} />
+                {maximizedPanel.type === "extension" && maximizedPanel.extension ? (
+                  <ExtensionMessageList extensionId={maximizedPanel.extension.id} />
+                ) : maximizedPanel.type === "group" && maximizedPanel.conversation ? (
+                  <MessageList conversationId={maximizedPanel.conversation.id} />
+                ) : null}
               </div>
             </div>
           ) : (
-            // Show grid of panels
             <div className={`flex-1 grid ${getGridCols()} gap-4 overflow-auto`}>
               {panels.map((panel) => (
                 <div
@@ -409,8 +574,9 @@ export default function MonitorPage() {
                   className="bg-white rounded-lg shadow overflow-hidden flex flex-col min-h-0"
                 >
                   <div className="p-3 border-b bg-gray-50 flex items-center justify-between shrink-0">
-                    <h3 className="font-medium text-gray-900 truncate text-sm">
-                      {getConversationTitle(panel.conversation)}
+                    <h3 className="font-medium text-gray-900 truncate text-sm flex items-center gap-2">
+                      {getPanelIcon(panel)}
+                      {getPanelTitle(panel)}
                     </h3>
                     <div className="flex items-center gap-1">
                       <button
@@ -430,7 +596,11 @@ export default function MonitorPage() {
                     </div>
                   </div>
                   <div className="flex-1 overflow-auto min-h-0">
-                    <MessageList conversationId={panel.conversation.id} />
+                    {panel.type === "extension" && panel.extension ? (
+                      <ExtensionMessageList extensionId={panel.extension.id} />
+                    ) : panel.type === "group" && panel.conversation ? (
+                      <MessageList conversationId={panel.conversation.id} />
+                    ) : null}
                   </div>
                 </div>
               ))}

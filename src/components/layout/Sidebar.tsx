@@ -25,6 +25,7 @@ import {
   User,
   ChevronRight,
   Sparkles,
+  ClipboardList,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useState } from "react";
@@ -44,6 +45,7 @@ const navigation: NavItem[] = [
   { name: "Media", href: "/media", icon: Image },
   { name: "Search", href: "/search", icon: Search },
   { name: "Analytics", href: "/analytics", icon: BarChart3 },
+  { name: "Reports", href: "/reports", icon: ClipboardList },
   { name: "Extensions", href: "/extensions", icon: Users },
 ];
 

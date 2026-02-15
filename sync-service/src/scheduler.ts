@@ -19,14 +19,17 @@ let backgroundSyncTask: cron.ScheduledTask | null = null;
 let chatCycleCount = 0;
 
 // Sync intervals (configurable via env)
-const SYNC_INTERVALS = {
-  chat: parseInt(process.env.SYNC_INTERVAL_CHAT || "20"), // seconds
-  media: parseInt(process.env.SYNC_INTERVAL_MEDIA || "5"), // minutes
-  recordings: parseInt(process.env.SYNC_INTERVAL_RECORDINGS || "15"), // minutes
-  cdr: parseInt(process.env.SYNC_INTERVAL_CDR || "5"), // minutes
-  extensions: parseInt(process.env.SYNC_INTERVAL_EXTENSIONS || "60"), // minutes
-  background: parseInt(process.env.SYNC_INTERVAL_BACKGROUND || "30"), // minutes - full sync for inactive tenants
-};
+// NOTE: Computed lazily via getSyncIntervals() because dotenv.config() runs after module imports
+function getSyncIntervals() {
+  return {
+    chat: parseInt(process.env.SYNC_INTERVAL_CHAT || "20"), // seconds
+    media: parseInt(process.env.SYNC_INTERVAL_MEDIA || "5"), // minutes
+    recordings: parseInt(process.env.SYNC_INTERVAL_RECORDINGS || "15"), // minutes
+    cdr: parseInt(process.env.SYNC_INTERVAL_CDR || "5"), // minutes
+    extensions: parseInt(process.env.SYNC_INTERVAL_EXTENSIONS || "60"), // minutes
+    background: parseInt(process.env.SYNC_INTERVAL_BACKGROUND || "30"), // minutes - full sync for inactive tenants
+  };
+}
 
 // Check if any tenant has requested a manual sync trigger
 async function checkForManualTriggers(): Promise<boolean> {
@@ -58,9 +61,32 @@ async function clearManualTriggers(): Promise<void> {
     .gt("trigger_requested_at", twoMinutesAgo);
 }
 
+// Check if there are recent messages with media that haven't been linked to media files yet
+async function hasRecentUnlinkedMedia(): Promise<boolean> {
+  try {
+    const supabase = getSupabaseClient();
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000).toISOString();
+
+    // Find messages created in the last 2 minutes with has_media=true
+    const { data } = await supabase
+      .from("messages")
+      .select("id, media_files(id)")
+      .eq("has_media", true)
+      .gt("created_at", twoMinutesAgo)
+      .limit(10);
+
+    // Check if any have no linked media_files
+    return (data || []).some((m: { media_files?: { id: string }[] }) => !m.media_files || m.media_files.length === 0);
+  } catch {
+    return false;
+  }
+}
+
 // Run chat/messages sync (fast - every 15-30 seconds)
+// CRITICAL: Messages sync should NEVER be blocked by media/recordings/full sync
+// This ensures chats are always up to date regardless of what else is running
 async function runChatSync(): Promise<void> {
-  if (runningSync.has("messages") || runningSync.has("full")) {
+  if (runningSync.has("messages")) {
     logger.debug("Chat sync skipped - already running");
     return;
   }
@@ -98,6 +124,16 @@ async function runChatSync(): Promise<void> {
       ["messages"],
       activeTenants.map((t) => t.id)
     );
+
+    // After chat sync, check if new media messages need files downloaded
+    // Triggers an immediate media sync so thumbnails appear quickly
+    if (!runningSync.has("media") && !runningSync.has("full")) {
+      const needsMedia = await hasRecentUnlinkedMedia();
+      if (needsMedia) {
+        logger.info("New media messages detected - triggering immediate media sync");
+        runMediaSync();
+      }
+    }
   } catch (error) {
     logger.error("Chat sync failed", { error: (error as Error).message });
   } finally {
@@ -106,6 +142,8 @@ async function runChatSync(): Promise<void> {
 }
 
 // Run media sync (every 5 minutes)
+// CRITICAL: Media sync runs for ALL active tenants, not just those with active users
+// This ensures media files are always backed up regardless of user activity
 async function runMediaSync(): Promise<void> {
   if (runningSync.has("media") || runningSync.has("full")) {
     logger.debug("Media sync skipped - already running");
@@ -113,18 +151,20 @@ async function runMediaSync(): Promise<void> {
   }
 
   try {
-    const activeTenants = await getActiveUserTenants();
-    if (activeTenants.length === 0) {
+    // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
+    // Media backup should happen regardless of whether users are logged in
+    const allTenants = await getActiveTenants();
+    if (allTenants.length === 0) {
       return;
     }
 
     runningSync.add("media");
 
-    logger.info(`Media sync for ${activeTenants.length} tenant(s)`);
+    logger.info(`Media sync for ${allTenants.length} tenant(s)`);
 
     await runMultiTenantSyncByType(
       ["media", "voicemails"],
-      activeTenants.map((t) => t.id)
+      allTenants.map((t) => t.id)
     );
   } catch (error) {
     logger.error("Media sync failed", { error: (error as Error).message });
@@ -134,6 +174,8 @@ async function runMediaSync(): Promise<void> {
 }
 
 // Run recordings sync (every 15 minutes)
+// CRITICAL: Recordings sync runs for ALL active tenants, not just those with active users
+// This ensures call recordings are always backed up regardless of user activity
 async function runRecordingsSync(): Promise<void> {
   if (runningSync.has("recordings") || runningSync.has("full")) {
     logger.debug("Recordings sync skipped - already running");
@@ -141,18 +183,20 @@ async function runRecordingsSync(): Promise<void> {
   }
 
   try {
-    const activeTenants = await getActiveUserTenants();
-    if (activeTenants.length === 0) {
+    // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
+    // Recording backup should happen regardless of whether users are logged in
+    const allTenants = await getActiveTenants();
+    if (allTenants.length === 0) {
       return;
     }
 
     runningSync.add("recordings");
 
-    logger.info(`Recordings sync for ${activeTenants.length} tenant(s)`);
+    logger.info(`Recordings sync for ${allTenants.length} tenant(s)`);
 
     await runMultiTenantSyncByType(
       ["recordings", "meetings", "faxes"],
-      activeTenants.map((t) => t.id)
+      allTenants.map((t) => t.id)
     );
   } catch (error) {
     logger.error("Recordings sync failed", { error: (error as Error).message });
@@ -162,8 +206,9 @@ async function runRecordingsSync(): Promise<void> {
 }
 
 // Run CDR sync (every 5 minutes)
+// CDR is lightweight like messages, so don't block on full sync
 async function runCdrSync(): Promise<void> {
-  if (runningSync.has("cdr") || runningSync.has("full")) {
+  if (runningSync.has("cdr")) {
     logger.debug("CDR sync skipped - already running");
     return;
   }
@@ -219,8 +264,8 @@ async function runExtensionsSync(): Promise<void> {
   }
 }
 
-// Run full sync for inactive tenants (every 30 minutes)
-// This ensures data stays fresh even when no users are logged in
+// Run lightweight sync for inactive tenants (every 30 minutes)
+// Only syncs messages and CDR - media/recordings now run for all tenants via dedicated schedulers
 async function runBackgroundSync(): Promise<void> {
   if (runningSync.size > 0) {
     logger.debug("Background sync skipped - other sync running");
@@ -239,10 +284,12 @@ async function runBackgroundSync(): Promise<void> {
 
     logger.info(`Background full sync for ${inactiveTenants.length} inactive tenant(s)`);
 
-    // Run full sync for inactive tenants so next login doesn't need a huge catch-up
-    await runMultiTenantSync({
-      tenantIds: inactiveTenants.map((t) => t.id),
-    });
+    // Only sync messages and CDR for inactive tenants to keep data fresh
+    // Media/recordings sync is heavier and only runs when users are active
+    await runMultiTenantSyncByType(
+      ["messages", "cdr"],
+      inactiveTenants.map((t) => t.id)
+    );
   } catch (error) {
     logger.error("Background sync failed", { error: (error as Error).message });
   } finally {
@@ -251,17 +298,19 @@ async function runBackgroundSync(): Promise<void> {
 }
 
 export function startScheduler(): void {
+  const intervals = getSyncIntervals();
+
   logger.info("Starting multi-interval scheduler", {
-    chatInterval: `${SYNC_INTERVALS.chat}s`,
-    mediaInterval: `${SYNC_INTERVALS.media}m`,
-    recordingsInterval: `${SYNC_INTERVALS.recordings}m`,
-    cdrInterval: `${SYNC_INTERVALS.cdr}m`,
-    extensionsInterval: `${SYNC_INTERVALS.extensions}m`,
-    backgroundInterval: `${SYNC_INTERVALS.background}m`,
+    chatInterval: `${intervals.chat}s`,
+    mediaInterval: `${intervals.media}m`,
+    recordingsInterval: `${intervals.recordings}m`,
+    cdrInterval: `${intervals.cdr}m`,
+    extensionsInterval: `${intervals.extensions}m`,
+    backgroundInterval: `${intervals.background}m`,
   });
 
   // Chat sync: every N seconds (use setInterval for sub-minute)
-  const chatIntervalMs = SYNC_INTERVALS.chat * 1000;
+  const chatIntervalMs = intervals.chat * 1000;
   const chatIntervalId = setInterval(runChatSync, chatIntervalMs);
   chatSyncTask = {
     start: () => {},
@@ -269,32 +318,32 @@ export function startScheduler(): void {
   } as cron.ScheduledTask;
 
   // Media sync: every N minutes
-  mediaSyncTask = cron.schedule(`*/${SYNC_INTERVALS.media} * * * *`, runMediaSync);
+  mediaSyncTask = cron.schedule(`*/${intervals.media} * * * *`, runMediaSync);
   mediaSyncTask.start();
 
   // Recordings sync: every N minutes
-  recordingsSyncTask = cron.schedule(`*/${SYNC_INTERVALS.recordings} * * * *`, runRecordingsSync);
+  recordingsSyncTask = cron.schedule(`*/${intervals.recordings} * * * *`, runRecordingsSync);
   recordingsSyncTask.start();
 
   // CDR sync: every N minutes
-  cdrSyncTask = cron.schedule(`*/${SYNC_INTERVALS.cdr} * * * *`, runCdrSync);
+  cdrSyncTask = cron.schedule(`*/${intervals.cdr} * * * *`, runCdrSync);
   cdrSyncTask.start();
 
   // Extensions sync: every N minutes
-  extensionsSyncTask = cron.schedule(`*/${SYNC_INTERVALS.extensions} * * * *`, runExtensionsSync);
+  extensionsSyncTask = cron.schedule(`*/${intervals.extensions} * * * *`, runExtensionsSync);
   extensionsSyncTask.start();
 
   // Background sync: every N minutes
-  backgroundSyncTask = cron.schedule(`*/${SYNC_INTERVALS.background} * * * *`, runBackgroundSync);
+  backgroundSyncTask = cron.schedule(`*/${intervals.background} * * * *`, runBackgroundSync);
   backgroundSyncTask.start();
 
   logger.info("Multi-interval scheduler started:");
-  logger.info(`  - Chat messages: every ${SYNC_INTERVALS.chat} seconds`);
-  logger.info(`  - Media files: every ${SYNC_INTERVALS.media} minutes`);
-  logger.info(`  - Recordings: every ${SYNC_INTERVALS.recordings} minutes`);
-  logger.info(`  - CDR: every ${SYNC_INTERVALS.cdr} minutes`);
-  logger.info(`  - Extensions: every ${SYNC_INTERVALS.extensions} minutes`);
-  logger.info(`  - Background full sync (inactive tenants): every ${SYNC_INTERVALS.background} minutes`);
+  logger.info(`  - Chat messages: every ${intervals.chat} seconds`);
+  logger.info(`  - Media files: every ${intervals.media} minutes`);
+  logger.info(`  - Recordings: every ${intervals.recordings} minutes`);
+  logger.info(`  - CDR: every ${intervals.cdr} minutes`);
+  logger.info(`  - Extensions: every ${intervals.extensions} minutes`);
+  logger.info(`  - Background full sync (inactive tenants): every ${intervals.background} minutes`);
 }
 
 export function stopScheduler(): void {

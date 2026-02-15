@@ -4,7 +4,7 @@ import http from "http";
 import { logger } from "./utils/logger";
 import { getSupabaseClient } from "./storage/supabase";
 import { startScheduler, stopScheduler } from "./scheduler";
-import { runMultiTenantSync } from "./sync";
+import { runMultiTenantSync, runMultiTenantSyncByType } from "./sync";
 import { getActiveTenants, closeAllTenantPools, testTenantConnection } from "./tenant";
 import { resetAllCircuits } from "./utils/circuit-breaker";
 
@@ -350,28 +350,24 @@ async function main(): Promise<void> {
     // Start control server
     startControlServer();
 
-    // Run initial sync
+    // Start scheduled sync FIRST - don't wait for full initial sync
+    // This ensures the scheduler is running and can handle periodic syncs
+    startScheduler();
+
+    // Run lightweight initial sync (messages only) to get started quickly
+    // The scheduler will handle full syncs for media, recordings, etc.
     logger.info("");
-    logger.info("Running initial sync...");
+    logger.info("Running lightweight initial sync (messages only)...");
 
     isSyncing = true;
-    const result = await runMultiTenantSync();
+    const startTime = Date.now();
+    await runMultiTenantSyncByType(["messages"]);
     lastSyncTime = new Date();
-    lastSyncResult = result;
-
-    // Update per-tenant statuses
-    updateTenantStatusesFromResults(result.results);
-
     isSyncing = false;
 
     logger.info("Initial sync completed", {
-      successCount: result.successCount,
-      failureCount: result.failureCount,
-      duration: `${result.totalDuration}ms`,
+      duration: `${Date.now() - startTime}ms`,
     });
-
-    // Start scheduled sync
-    startScheduler();
 
     logger.info("");
     logger.info("Sync service is now running");

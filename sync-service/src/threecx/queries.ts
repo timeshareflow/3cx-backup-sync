@@ -642,12 +642,12 @@ export async function getCallRecords(
     // 3CX stores call logs in different tables depending on version
     // Try cl (call log) table first, then callhistory3, then fallback to cdr table
 
-    // Check which tables exist
+    // Check which tables exist (including myphone_callhistory_v14 for hosted 3CX)
     const schemaCheck = await client.query(`
       SELECT table_name
       FROM information_schema.tables
       WHERE table_schema = 'public'
-      AND table_name IN ('cl', 'callhistory3', 'cdr', 'callhistory', 'call_history')
+      AND table_name IN ('cl', 'callhistory3', 'cdr', 'callhistory', 'call_history', 'myphone_callhistory_v14')
     `);
     const availableTables = schemaCheck.rows.map((r) => r.table_name);
 
@@ -656,13 +656,96 @@ export async function getCallRecords(
       return [];
     }
 
-    // Try each possible table
-    for (const tableName of availableTables) {
+    // Prioritize myphone_callhistory_v14 for hosted 3CX (most reliable)
+    const orderedTables = [
+      "myphone_callhistory_v14",
+      "cl",
+      "callhistory3",
+      ...availableTables.filter(t => !["myphone_callhistory_v14", "cl", "callhistory3"].includes(t))
+    ].filter(t => availableTables.includes(t));
+
+    // Try each possible table in priority order
+    for (const tableName of orderedTables) {
       try {
         let query: string;
         let params: (Date | number)[];
 
-        if (tableName === "cl") {
+        if (tableName === "myphone_callhistory_v14") {
+          // 3CX Hosted - myphone_callhistory_v14 is the most reliable call history table
+          // Columns: idmpch14, call_id, calltype, dnowner, party_dn, party_name, party_callerid,
+          //          start_time, established_time, end_time, end_status, dialed_number
+          query = since
+            ? `
+              SELECT
+                idmpch14::text as call_id,
+                party_callerid as caller_number,
+                party_name as caller_name,
+                dialed_number as callee_number,
+                party_name as callee_name,
+                dnowner::text as extension_number,
+                CASE
+                  WHEN calltype = 1 THEN 'inbound'
+                  WHEN calltype = 2 THEN 'outbound'
+                  ELSE 'internal'
+                END as direction,
+                calltype::text as call_type,
+                CASE
+                  WHEN established_time IS NOT NULL THEN 'answered'
+                  WHEN end_status = 5 THEN 'missed'
+                  ELSE 'missed'
+                END as status,
+                NULL::integer as ring_duration,
+                CASE
+                  WHEN established_time IS NOT NULL
+                  THEN EXTRACT(EPOCH FROM (end_time - established_time))::integer
+                  ELSE 0
+                END as talk_duration,
+                EXTRACT(EPOCH FROM (end_time - start_time))::integer as total_duration,
+                start_time as call_started_at,
+                established_time as call_answered_at,
+                end_time as call_ended_at,
+                false as has_recording
+              FROM myphone_callhistory_v14
+              WHERE start_time > $1
+              ORDER BY start_time ASC
+              LIMIT $2
+            `
+            : `
+              SELECT
+                idmpch14::text as call_id,
+                party_callerid as caller_number,
+                party_name as caller_name,
+                dialed_number as callee_number,
+                party_name as callee_name,
+                dnowner::text as extension_number,
+                CASE
+                  WHEN calltype = 1 THEN 'inbound'
+                  WHEN calltype = 2 THEN 'outbound'
+                  ELSE 'internal'
+                END as direction,
+                calltype::text as call_type,
+                CASE
+                  WHEN established_time IS NOT NULL THEN 'answered'
+                  WHEN end_status = 5 THEN 'missed'
+                  ELSE 'missed'
+                END as status,
+                NULL::integer as ring_duration,
+                CASE
+                  WHEN established_time IS NOT NULL
+                  THEN EXTRACT(EPOCH FROM (end_time - established_time))::integer
+                  ELSE 0
+                END as talk_duration,
+                EXTRACT(EPOCH FROM (end_time - start_time))::integer as total_duration,
+                start_time as call_started_at,
+                established_time as call_answered_at,
+                end_time as call_ended_at,
+                false as has_recording
+              FROM myphone_callhistory_v14
+              ORDER BY start_time ASC
+              LIMIT $1
+            `;
+          params = since ? [since, limit] : [limit];
+        } else if (tableName === "cl") {
           // 3CX V18+ cl table schema
           query = since
             ? `
@@ -859,5 +942,84 @@ export async function getCallRecords(
 
     logger.warn("All CDR query attempts failed");
     return [];
+  }, pool);
+}
+
+// ============================================
+// VOICEMAILS
+// ============================================
+
+export interface ThreeCXVoicemail {
+  voicemail_id: string;
+  wav_file: string;
+  extension: string;
+  caller_number: string | null;
+  caller_name: string | null;
+  duration_ms: number | null;
+  created_at: Date;
+  is_heard: boolean;
+  transcription: string | null;
+}
+
+export async function getVoicemails(
+  since: Date | null,
+  limit: number,
+  pool: Pool
+): Promise<ThreeCXVoicemail[]> {
+  return withClient(async (client) => {
+    // Check if s_voicemail table exists
+    const schemaCheck = await client.query(`
+      SELECT table_name
+      FROM information_schema.tables
+      WHERE table_schema = 'public'
+      AND table_name = 's_voicemail'
+    `);
+
+    if (schemaCheck.rows.length === 0) {
+      logger.warn("No s_voicemail table found in 3CX database");
+      return [];
+    }
+
+    // Query voicemails
+    const query = since
+      ? `
+        SELECT
+          id::text as voicemail_id,
+          wav_file,
+          callee as extension,
+          caller as caller_number,
+          caller_name,
+          CAST(duration AS integer) as duration_ms,
+          TO_TIMESTAMP(created_time, 'YYYYMMDDHH24MISS.FF') as created_at,
+          COALESCE(heard = '1', false) as is_heard,
+          transcription
+        FROM s_voicemail
+        WHERE removed IS NULL
+        AND TO_TIMESTAMP(created_time, 'YYYYMMDDHH24MISS.FF') > $1
+        ORDER BY created_time ASC
+        LIMIT $2
+      `
+      : `
+        SELECT
+          id::text as voicemail_id,
+          wav_file,
+          callee as extension,
+          caller as caller_number,
+          caller_name,
+          CAST(duration AS integer) as duration_ms,
+          TO_TIMESTAMP(created_time, 'YYYYMMDDHH24MISS.FF') as created_at,
+          COALESCE(heard = '1', false) as is_heard,
+          transcription
+        FROM s_voicemail
+        WHERE removed IS NULL
+        ORDER BY created_time ASC
+        LIMIT $1
+      `;
+
+    const params = since ? [since, limit] : [limit];
+    const result = await client.query(query, params);
+
+    logger.info(`Fetched ${result.rows.length} voicemails from 3CX database`);
+    return result.rows;
   }, pool);
 }

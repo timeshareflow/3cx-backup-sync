@@ -7,8 +7,18 @@ import {
   generateStoragePath,
   fileExists,
   detectFileType,
-} from "../storage/supabase-storage";
-import { createSftpClient, downloadFile, closeSftpClient } from "../storage/sftp";
+  getFileInfo,
+  streamUpload,
+} from "../storage/spaces-storage";
+import {
+  createSftpClient,
+  downloadFile,
+  downloadFileStream,
+  closeSftpClient,
+  getRemoteFileSize,
+  MAX_FILE_SIZE_BYTES,
+  MAX_STREAM_FILE_SIZE_BYTES,
+} from "../storage/sftp";
 import { insertCallRecording, updateSyncStatus, getLastSyncedTimestamp } from "../storage/supabase";
 import { TenantConfig, getTenantSftpConfig } from "../tenant";
 import { getRecordings } from "../threecx/queries";
@@ -22,6 +32,84 @@ export interface RecordingsSyncResult {
 
 // Default recordings base path on 3CX servers
 const DEFAULT_RECORDINGS_BASE = "/var/lib/3cxpbx/Instance1/Data/Recordings";
+
+/**
+ * Parse recording filename to extract caller/callee information
+ * Filename patterns:
+ * - [Extension Name]_ExtNumber-PhoneNumber_DateTime(ID).wav
+ * - Example: [Tampa South]_302-+18139975575_20260130152748(84).wav
+ * - Example: [Sales]_101-102_20260130120000(12).wav (internal call)
+ */
+interface ParsedFilename {
+  extensionName: string | null;
+  extensionNumber: string | null;
+  phoneNumber: string | null;
+  callerNumber: string | null;
+  calleeNumber: string | null;
+  callerName: string | null;
+  direction: "inbound" | "outbound" | "internal" | null;
+}
+
+function parseRecordingFilename(filename: string): ParsedFilename {
+  const result: ParsedFilename = {
+    extensionName: null,
+    extensionNumber: null,
+    phoneNumber: null,
+    callerNumber: null,
+    calleeNumber: null,
+    callerName: null,
+    direction: null,
+  };
+
+  // Pattern: [Extension Name]_ExtNumber-PhoneNumber_DateTime(ID).wav
+  // or: [Extension Name]_ExtNumber-ExtNumber_DateTime(ID).wav (internal)
+  const match = filename.match(/^\[([^\]]+)\]_(\d+)-([^_]+)_\d+\(\d+\)/);
+
+  if (!match) {
+    // Try alternate pattern without brackets: ExtNumber-PhoneNumber_DateTime.wav
+    const altMatch = filename.match(/^(\d+)-([^_]+)_\d+/);
+    if (altMatch) {
+      result.extensionNumber = altMatch[1];
+      result.phoneNumber = altMatch[2];
+    }
+    return result;
+  }
+
+  result.extensionName = match[1];
+  result.extensionNumber = match[2];
+  result.phoneNumber = match[3];
+
+  // Determine if this is an internal call (extension to extension)
+  const isPhoneExtension = /^\d{2,4}$/.test(result.phoneNumber);
+  const isPhoneExternal = result.phoneNumber.length >= 10 || result.phoneNumber.startsWith("+");
+
+  // The extension number in the filename is the local party
+  // The phone number is the remote party
+  // For recordings, the local extension is typically the one doing the recording
+
+  if (isPhoneExtension) {
+    // Internal call between two extensions
+    result.direction = "internal";
+    result.callerNumber = result.extensionNumber;
+    result.calleeNumber = result.phoneNumber;
+    result.callerName = result.extensionName;
+  } else if (isPhoneExternal) {
+    // External call - need to determine direction
+    // If the external number starts with + or has many digits, it's likely an external number
+    // The extension in the filename is the local party
+    // For outbound: extension calls external number
+    // For inbound: external number calls extension
+
+    // Check if this looks like an outbound call based on filename structure
+    // Typically [Ext Name]_ExtNum-ExternalNum means extension called external
+    result.direction = "outbound";
+    result.callerNumber = result.extensionNumber;
+    result.callerName = result.extensionName;
+    result.calleeNumber = result.phoneNumber;
+  }
+
+  return result;
+}
 
 // Convert a recording URL to a filesystem path for SFTP download
 function urlToFilesystemPath(recordingUrl: string, basePath: string): string {
@@ -172,10 +260,11 @@ export async function syncRecordings(
             remotePath,
           });
 
-          let buffer: Buffer;
-          try {
-            buffer = await downloadFile(sftp, remotePath);
-          } catch (downloadError) {
+          // Find valid path and get file size first
+          let validPath = remotePath;
+          let fileSize = await getRemoteFileSize(sftp, remotePath);
+
+          if (fileSize < 0) {
             // Try alternate path patterns if the first one fails
             const altPaths = [
               path.posix.join(recordingsBasePath, recording.extension_number || "", "Recordings", filename),
@@ -183,20 +272,18 @@ export async function syncRecordings(
               path.posix.join(recordingsBasePath, filename),
             ];
 
-            let downloaded = false;
             for (const altPath of altPaths) {
               if (altPath === remotePath) continue;
-              try {
-                logger.debug("Trying alternate path", { altPath });
-                buffer = await downloadFile(sftp, altPath);
-                downloaded = true;
+              const altSize = await getRemoteFileSize(sftp, altPath);
+              if (altSize >= 0) {
+                validPath = altPath;
+                fileSize = altSize;
+                logger.debug("Found file at alternate path", { altPath, size: fileSize });
                 break;
-              } catch {
-                // Continue to next path
               }
             }
 
-            if (!downloaded) {
+            if (fileSize < 0) {
               result.errors.push({
                 recordingId: recording.recording_id,
                 error: `Failed to download: file not found at ${remotePath}`,
@@ -205,15 +292,58 @@ export async function syncRecordings(
             }
           }
 
-          // Detect content type and upload with compression
-          const { fileType, extension } = detectFileType(buffer!);
-          uploadResult = await uploadBufferWithCompression(
-            buffer!,
-            storagePath,
-            fileType,
-            extension,
-            DEFAULT_COMPRESSION_SETTINGS
-          );
+          // Skip files over streaming limit (500MB)
+          if (fileSize > MAX_STREAM_FILE_SIZE_BYTES) {
+            logger.warn("Skipping extremely large recording", {
+              tenantId: tenant.id,
+              recordingId: recording.recording_id,
+              size: `${(fileSize / 1024 / 1024).toFixed(1)}MB`,
+            });
+            result.filesSkipped++;
+            continue;
+          }
+
+          // Decide strategy based on file size
+          const useStreaming = fileSize > MAX_FILE_SIZE_BYTES;
+          const fileInfo = getFileInfo(filename);
+
+          if (useStreaming) {
+            // STREAMING: Large files (25MB-500MB) - stream directly, no compression
+            logger.info("Using streaming upload for large recording", {
+              tenantId: tenant.id,
+              recordingId: recording.recording_id,
+              size: `${(fileSize / 1024 / 1024).toFixed(1)}MB`,
+            });
+
+            const stream = await downloadFileStream(sftp, validPath);
+            const streamResult = await streamUpload(stream, storagePath, fileInfo.mimeType, fileSize);
+
+            uploadResult = {
+              path: streamResult.path,
+              size: fileSize,
+              newMimeType: fileInfo.mimeType,
+              wasCompressed: false,
+              originalSize: fileSize,
+              compressionRatio: 0,
+            };
+
+            logger.info("Large recording streamed successfully", {
+              tenantId: tenant.id,
+              recordingId: recording.recording_id,
+            });
+          } else {
+            // BUFFER: Smaller files (<25MB) - download to buffer and compress
+            const buffer = await downloadFile(sftp, validPath);
+            const { fileType, extension } = detectFileType(buffer);
+
+            uploadResult = await uploadBufferWithCompression(
+              buffer,
+              storagePath,
+              fileType,
+              extension,
+              DEFAULT_COMPRESSION_SETTINGS
+            );
+          }
         }
 
         // Calculate duration
@@ -222,30 +352,50 @@ export async function syncRecordings(
             ? Math.floor((new Date(recording.end_time).getTime() - new Date(recording.start_time).getTime()) / 1000)
             : null);
 
-        // Determine direction from caller/callee numbers
-        let direction: "inbound" | "outbound" | "internal" | undefined;
-        const callerNum = recording.caller_number || "";
-        const calleeNum = recording.callee_number || "";
-        const isCallerExtension = /^\d{2,4}$/.test(callerNum);
-        const isCalleeExtension = /^\d{2,4}$/.test(calleeNum);
-        const isCallerExternal = callerNum.length >= 10 || callerNum.startsWith("+");
-        const isCalleeExternal = calleeNum.length >= 10 || calleeNum.startsWith("+");
+        // Parse filename to extract caller/callee info if not available from query
+        const parsedFilename = parseRecordingFilename(filename);
 
-        if (isCallerExtension && isCalleeExternal) {
-          direction = "outbound";
-        } else if (isCallerExternal && isCalleeExtension) {
-          direction = "inbound";
-        } else if (isCallerExtension && isCalleeExtension) {
-          direction = "internal";
+        // Use query data first, fall back to parsed filename
+        const callerNum = recording.caller_number || parsedFilename.callerNumber || "";
+        const calleeNum = recording.callee_number || parsedFilename.calleeNumber || "";
+        const callerName = parsedFilename.callerName || undefined;
+        const extensionNum = recording.extension_number || parsedFilename.extensionNumber || undefined;
+
+        // Determine direction from caller/callee numbers or parsed filename
+        let direction: "inbound" | "outbound" | "internal" | undefined = parsedFilename.direction || undefined;
+
+        if (!direction) {
+          const isCallerExtension = /^\d{2,4}$/.test(callerNum);
+          const isCalleeExtension = /^\d{2,4}$/.test(calleeNum);
+          const isCallerExternal = callerNum.length >= 10 || callerNum.startsWith("+");
+          const isCalleeExternal = calleeNum.length >= 10 || calleeNum.startsWith("+");
+
+          if (isCallerExtension && isCalleeExternal) {
+            direction = "outbound";
+          } else if (isCallerExternal && isCalleeExtension) {
+            direction = "inbound";
+          } else if (isCallerExtension && isCalleeExtension) {
+            direction = "internal";
+          }
+        }
+
+        // Log the parsed data for debugging
+        if (parsedFilename.extensionNumber || parsedFilename.phoneNumber) {
+          logger.debug("Parsed filename data", {
+            tenantId: tenant.id,
+            filename,
+            parsed: parsedFilename,
+          });
         }
 
         // Record in database with compressed file info
         await insertCallRecording({
           tenant_id: tenant.id,
           threecx_recording_id: recording.recording_id,
-          extension: recording.extension_number || undefined,
-          caller_number: recording.caller_number || undefined,
-          callee_number: recording.callee_number || undefined,
+          extension: extensionNum,
+          caller_number: callerNum || undefined,
+          callee_number: calleeNum || undefined,
+          caller_name: callerName,
           original_filename: filename,
           file_size: uploadResult.size,
           storage_path: uploadResult.path,
@@ -256,6 +406,7 @@ export async function syncRecordings(
           recorded_at: recording.start_time?.toISOString() || new Date().toISOString(),
           call_started_at: recording.start_time?.toISOString(),
           call_ended_at: recording.end_time?.toISOString(),
+          storage_backend: "spaces",
         });
 
         result.filesSynced++;

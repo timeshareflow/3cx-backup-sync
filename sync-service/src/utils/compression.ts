@@ -17,10 +17,11 @@ export interface CompressionSettings {
   audioFormat: "mp3" | "aac"; // Output format
 
   // Video settings
-  videoBitrate: string; // e.g., "1000k"
+  videoBitrate: string; // e.g., "1000k" - leave empty to use CRF-only mode
   videoMaxHeight: number; // Max video height (e.g., 720 for 720p)
   videoFormat: "mp4"; // Output format
   videoCodec: string; // e.g., "libx264"
+  videoPreset: string; // e.g., "veryfast" - faster = less CPU, slightly larger files
   audioCodecForVideo: string; // e.g., "aac"
 
   // General
@@ -39,10 +40,11 @@ export const DEFAULT_COMPRESSION_SETTINGS: CompressionSettings = {
   audioFormat: "mp3",
 
   // Video: Compress to 720p MP4
-  videoBitrate: "1500k", // Reasonable quality
+  videoBitrate: "", // Empty = CRF-only mode (better quality-per-bit)
   videoMaxHeight: 720, // 720p max
   videoFormat: "mp4",
   videoCodec: "libx264",
+  videoPreset: "veryfast", // Fast encoding, slightly larger files - good for backup
   audioCodecForVideo: "aac",
 
   enabled: true,
@@ -231,7 +233,9 @@ export async function compressAudio(
 }
 
 /**
- * Compress a video buffer
+ * Compress a video buffer.
+ * Optimization: If the video is already H.264 and <= max height, remux to MP4
+ * (stream copy) instead of re-encoding. This is near-instant vs minutes.
  */
 export async function compressVideo(
   buffer: Buffer,
@@ -241,8 +245,9 @@ export async function compressVideo(
   const originalSize = buffer.length;
 
   const tempDir = os.tmpdir();
-  const inputPath = path.join(tempDir, `input_${Date.now()}.${originalExtension}`);
-  const outputPath = path.join(tempDir, `output_${Date.now()}.${settings.videoFormat}`);
+  const timestamp = Date.now();
+  const inputPath = path.join(tempDir, `input_${timestamp}.${originalExtension}`);
+  const outputPath = path.join(tempDir, `output_${timestamp}.${settings.videoFormat}`);
 
   try {
     // Write buffer to temp file
@@ -257,24 +262,19 @@ export async function compressVideo(
     });
 
     const videoStream = metadata.streams.find((s) => s.codec_type === "video");
+    const audioStream = metadata.streams.find((s) => s.codec_type === "audio");
     const currentHeight = videoStream?.height || 0;
     const currentWidth = videoStream?.width || 0;
+    const videoCodecName = videoStream?.codec_name || "";
+    const audioCodecName = audioStream?.codec_name || "";
 
-    // Calculate target resolution maintaining aspect ratio
-    let targetHeight = Math.min(currentHeight, settings.videoMaxHeight);
-    let targetWidth = Math.round((targetHeight / currentHeight) * currentWidth);
-
-    // Ensure dimensions are even (required by most codecs)
-    targetHeight = Math.floor(targetHeight / 2) * 2;
-    targetWidth = Math.floor(targetWidth / 2) * 2;
-
-    // Skip compression if already small enough and in MP4 format
+    // Skip entirely if already optimized MP4
     if (
       currentHeight <= settings.videoMaxHeight &&
       originalExtension.toLowerCase() === "mp4" &&
-      originalSize < 50 * 1024 * 1024 // Less than 50MB
+      originalSize < 50 * 1024 * 1024
     ) {
-      logger.debug("Video already optimized, skipping compression", {
+      logger.debug("Video already optimized MP4, skipping", {
         height: currentHeight,
         size: originalSize,
       });
@@ -289,22 +289,91 @@ export async function compressVideo(
       };
     }
 
-    // Compress using ffmpeg
+    // FAST PATH: If already H.264 and resolution is acceptable, just remux to MP4
+    // This copies the streams without re-encoding - near instant
+    const isH264 = ["h264", "avc", "avc1"].includes(videoCodecName.toLowerCase());
+    const needsResize = currentHeight > settings.videoMaxHeight;
+
+    if (isH264 && !needsResize) {
+      logger.info("Video is H.264 and <= max height, remuxing to MP4 (no re-encode)", {
+        codec: videoCodecName,
+        audioCodec: audioCodecName,
+        height: currentHeight,
+        size: `${(originalSize / 1024 / 1024).toFixed(2)}MB`,
+      });
+
+      // Copy video stream as-is; transcode audio to AAC only if needed
+      const audioIsAac = ["aac"].includes(audioCodecName.toLowerCase());
+
+      await new Promise<void>((resolve, reject) => {
+        const command = ffmpeg(inputPath)
+          .videoCodec("copy")
+          .audioCodec(audioIsAac ? "copy" : "aac")
+          .format(settings.videoFormat)
+          .outputOptions(["-movflags", "+faststart"])
+          .on("error", (err: Error) => reject(err))
+          .on("end", () => resolve())
+          .save(outputPath);
+      });
+
+      const remuxedBuffer = fs.readFileSync(outputPath);
+      const compressionRatio =
+        originalSize > 0 ? (1 - remuxedBuffer.length / originalSize) * 100 : 0;
+
+      logger.info("Video remuxed to MP4 (no re-encode)", {
+        originalSize: `${(originalSize / 1024 / 1024).toFixed(2)}MB`,
+        remuxedSize: `${(remuxedBuffer.length / 1024 / 1024).toFixed(2)}MB`,
+        resolution: `${currentWidth}x${currentHeight}`,
+      });
+
+      return {
+        buffer: remuxedBuffer,
+        originalSize,
+        compressedSize: remuxedBuffer.length,
+        compressionRatio,
+        newMimeType: "video/mp4",
+        newExtension: "mp4",
+        wasCompressed: true,
+      };
+    }
+
+    // SLOW PATH: Needs re-encoding (non-H.264 codec or needs resize)
+    // Calculate target resolution maintaining aspect ratio
+    let targetHeight = Math.min(currentHeight, settings.videoMaxHeight);
+    let targetWidth = Math.round((targetHeight / currentHeight) * currentWidth);
+
+    // Ensure dimensions are even (required by most codecs)
+    targetHeight = Math.floor(targetHeight / 2) * 2;
+    targetWidth = Math.floor(targetWidth / 2) * 2;
+
+    logger.info("Video needs re-encoding", {
+      codec: videoCodecName,
+      height: currentHeight,
+      needsResize,
+      preset: settings.videoPreset,
+    });
+
+    const outputOptions: string[] = [
+      `-preset ${settings.videoPreset}`,
+      "-crf 23",
+      "-movflags +faststart",
+    ];
+
     await new Promise<void>((resolve, reject) => {
       let command = ffmpeg(inputPath)
         .videoCodec(settings.videoCodec)
-        .videoBitrate(settings.videoBitrate)
         .audioCodec(settings.audioCodecForVideo)
         .audioBitrate("128k")
         .format(settings.videoFormat)
-        .outputOptions([
-          "-preset medium", // Balance between speed and compression
-          "-crf 23", // Constant Rate Factor for quality
-          "-movflags +faststart", // Enable streaming
-        ]);
+        .outputOptions(outputOptions);
+
+      // Apply bitrate cap only if configured
+      if (settings.videoBitrate) {
+        command = command.videoBitrate(settings.videoBitrate);
+      }
 
       // Only resize if needed
-      if (currentHeight > settings.videoMaxHeight) {
+      if (needsResize) {
         command = command.size(`${targetWidth}x${targetHeight}`);
       }
 
@@ -316,7 +385,7 @@ export async function compressVideo(
     const compressionRatio =
       originalSize > 0 ? (1 - compressedBuffer.length / originalSize) * 100 : 0;
 
-    logger.info("Video compressed", {
+    logger.info("Video re-encoded", {
       originalSize: `${(originalSize / 1024 / 1024).toFixed(2)}MB`,
       compressedSize: `${(compressedBuffer.length / 1024 / 1024).toFixed(2)}MB`,
       compressionRatio: `${compressionRatio.toFixed(1)}%`,

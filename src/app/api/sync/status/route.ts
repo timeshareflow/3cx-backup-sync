@@ -2,6 +2,20 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
 
+export const dynamic = "force-dynamic";
+
+// Expected max intervals per sync type (minutes)
+const EXPECTED_INTERVALS: Record<string, { warning: number; critical: number }> = {
+  messages:   { warning: 10,  critical: 15 },
+  media:      { warning: 20,  critical: 30 },
+  cdr:        { warning: 15,  critical: 30 },
+  recordings: { warning: 30,  critical: 60 },
+  voicemails: { warning: 30,  critical: 60 },
+  faxes:      { warning: 30,  critical: 60 },
+  meetings:   { warning: 30,  critical: 60 },
+  extensions: { warning: 90,  critical: 120 },
+};
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const includeLogs = searchParams.get("include_logs") === "true";
@@ -75,17 +89,44 @@ export async function GET(request: NextRequest) {
       extensionQuery,
     ]);
 
+    // Enrich sync status with health metadata
+    const now = Date.now();
+    const enrichedSyncStatus = (syncStatus || []).map((sync) => {
+      const thresholds = EXPECTED_INTERVALS[sync.sync_type] || { warning: 30, critical: 60 };
+      const lastSuccess = sync.last_success_at ? new Date(sync.last_success_at).getTime() : 0;
+      const stalenessMinutes = lastSuccess > 0 ? Math.round((now - lastSuccess) / 60000) : 9999;
+      const lastError = sync.last_error_at ? new Date(sync.last_error_at).getTime() : 0;
+
+      let health: "healthy" | "warning" | "critical" = "healthy";
+      if (stalenessMinutes >= thresholds.critical) health = "critical";
+      else if (stalenessMinutes >= thresholds.warning) health = "warning";
+      if (lastError > lastSuccess && sync.status === "error") health = "critical";
+
+      return {
+        ...sync,
+        health,
+        staleness_minutes: stalenessMinutes,
+        expected_interval_minutes: thresholds.critical,
+      };
+    });
+
     const response: {
-      sync_status: typeof syncStatus;
+      sync_status: typeof enrichedSyncStatus;
       stats: {
         total_conversations: number;
         total_messages: number;
         total_media: number;
         total_extensions: number;
       };
+      overall_health: "healthy" | "warning" | "critical";
       logs?: unknown[];
     } = {
-      sync_status: syncStatus || [],
+      sync_status: enrichedSyncStatus,
+      overall_health: enrichedSyncStatus.some((s) => s.health === "critical")
+        ? "critical"
+        : enrichedSyncStatus.some((s) => s.health === "warning")
+          ? "warning"
+          : "healthy",
       stats: {
         total_conversations: conversationCount || 0,
         total_messages: messageCount || 0,
