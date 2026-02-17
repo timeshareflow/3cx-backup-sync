@@ -34,11 +34,16 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isNearBottomRef = useRef(true);
   const newestTimestampRef = useRef<string | null>(null);
+  const searchActiveRef = useRef(false);
 
-  // Keep ref in sync with state
+  // Keep refs in sync with state
   useEffect(() => {
     newestTimestampRef.current = newestTimestamp;
   }, [newestTimestamp]);
+
+  useEffect(() => {
+    searchActiveRef.current = showSearch && searchQuery.trim().length > 0;
+  }, [showSearch, searchQuery]);
 
   const fetchMessages = useCallback(async (before?: string, isPolling?: boolean) => {
     try {
@@ -70,8 +75,8 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
         setMessages((prev) => [...data.data, ...prev]);
       } else {
         setMessages(data.data);
-        // Scroll to bottom on initial load
-        if (!isPolling) {
+        // Scroll to bottom on initial load (skip if searching)
+        if (!isPolling && !searchActiveRef.current) {
           setTimeout(() => {
             bottomRef.current?.scrollIntoView();
           }, 100);
@@ -102,9 +107,9 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
     }
   }, [conversationId, initialMessages, fetchMessages]);
 
-  // Auto-load all messages when loadAll is true
+  // Auto-load all messages when loadAll is true (pause while searching to prevent scroll jumps)
   useEffect(() => {
-    if (loadAll && hasMore && !isLoadingMore && !isLoading && oldestTimestamp) {
+    if (loadAll && hasMore && !isLoadingMore && !isLoading && oldestTimestamp && !searchActiveRef.current) {
       fetchMessages(oldestTimestamp);
     }
   }, [loadAll, hasMore, isLoadingMore, isLoading, oldestTimestamp, fetchMessages]);
@@ -134,8 +139,8 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
           setNewestTimestamp(latestMsg.sent_at);
         }
 
-        // Auto-scroll to bottom if user was near bottom
-        if (isNearBottomRef.current) {
+        // Auto-scroll to bottom if user was near bottom (skip if searching)
+        if (isNearBottomRef.current && !searchActiveRef.current) {
           setTimeout(() => {
             bottomRef.current?.scrollIntoView({ behavior: "smooth" });
           }, 100);
@@ -170,11 +175,11 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
 
   const handleScroll = () => {
     checkIfNearBottom();
-    if (!containerRef.current || isLoadingMore || !hasMore) return;
+    if (!containerRef.current || isLoadingMore || !hasMore || searchActiveRef.current) return;
 
     const { scrollTop } = containerRef.current;
 
-    // Load more when scrolled near the top
+    // Load more when scrolled near the top (disabled during search)
     if (scrollTop < 200 && oldestTimestamp) {
       fetchMessages(oldestTimestamp);
     }

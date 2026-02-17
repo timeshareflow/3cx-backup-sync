@@ -37,6 +37,12 @@ export function ExtensionMessageList({ extensionId }: ExtensionMessageListProps)
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const isNearBottomRef = useRef(true);
   const initialScrollDone = useRef(false);
+  const searchActiveRef = useRef(false);
+
+  // Keep search ref in sync
+  useEffect(() => {
+    searchActiveRef.current = showSearch && searchQuery.trim().length > 0;
+  }, [showSearch, searchQuery]);
 
   const fetchMessages = useCallback(async (before?: string, isPolling?: boolean) => {
     try {
@@ -91,9 +97,9 @@ export function ExtensionMessageList({ extensionId }: ExtensionMessageListProps)
     fetchMessages();
   }, [extensionId, fetchMessages]);
 
-  // Scroll to bottom after initial load
+  // Scroll to bottom after initial load (skip if searching)
   useEffect(() => {
-    if (!isLoading && messages.length > 0 && !initialScrollDone.current) {
+    if (!isLoading && messages.length > 0 && !initialScrollDone.current && !searchActiveRef.current) {
       initialScrollDone.current = true;
       setTimeout(() => {
         bottomRef.current?.scrollIntoView();
@@ -125,8 +131,8 @@ export function ExtensionMessageList({ extensionId }: ExtensionMessageListProps)
           setNewestTimestamp(latestMsg.sent_at);
         }
 
-        // Auto-scroll to bottom if user was near bottom
-        if (isNearBottomRef.current) {
+        // Auto-scroll to bottom if user was near bottom (skip if searching)
+        if (isNearBottomRef.current && !searchActiveRef.current) {
           setTimeout(() => {
             bottomRef.current?.scrollIntoView({ behavior: "smooth" });
           }, 100);
@@ -160,7 +166,7 @@ export function ExtensionMessageList({ extensionId }: ExtensionMessageListProps)
 
   const handleScroll = () => {
     checkIfNearBottom();
-    if (!containerRef.current || isLoadingMore || !hasMore) return;
+    if (!containerRef.current || isLoadingMore || !hasMore || searchActiveRef.current) return;
 
     const { scrollTop } = containerRef.current;
     if (scrollTop < 200 && oldestTimestamp) {
