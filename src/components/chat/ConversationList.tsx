@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { ConversationCard } from "./ConversationItem";
 import { Spinner } from "@/components/ui/Spinner";
-import { ArrowUpDown, Clock, MessageSquare, User, Users, Globe, UserCircle } from "lucide-react";
+import { ArrowUpDown, Clock, MessageSquare, User, Users, Globe, UserCircle, Search, X } from "lucide-react";
 import type { ConversationWithParticipants } from "@/types";
 
 type SortOption = "recent" | "name" | "messages" | "oldest";
@@ -27,6 +27,7 @@ export function ConversationList({ initialConversations }: ConversationListProps
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(true);
   const [sortBy, setSortBy] = useState<SortOption>("recent");
+  const [searchQuery, setSearchQuery] = useState("");
 
   useEffect(() => {
     if (!initialConversations) {
@@ -88,12 +89,26 @@ export function ConversationList({ initialConversations }: ConversationListProps
     }
   };
 
+  const filteredConversations = useMemo(() => {
+    if (!searchQuery.trim()) return conversations;
+    const q = searchQuery.toLowerCase();
+    return conversations.filter((conv) => {
+      if (conv.conversation_name?.toLowerCase().includes(q)) return true;
+      return conv.participants.some(
+        (p) =>
+          p.external_name?.toLowerCase().includes(q) ||
+          p.external_id?.toLowerCase().includes(q) ||
+          p.external_number?.toLowerCase().includes(q)
+      );
+    });
+  }, [conversations, searchQuery]);
+
   const groupedConversations = useMemo((): GroupedConversations => {
     const external: ConversationWithParticipants[] = [];
     const group: ConversationWithParticipants[] = [];
     const direct: ConversationWithParticipants[] = [];
 
-    for (const conv of conversations) {
+    for (const conv of filteredConversations) {
       if (conv.is_external) {
         external.push(conv);
       } else if (conv.is_group_chat) {
@@ -108,7 +123,7 @@ export function ConversationList({ initialConversations }: ConversationListProps
       group: sortConversations(group),
       direct: sortConversations(direct),
     };
-  }, [conversations, sortBy]);
+  }, [filteredConversations, sortBy]);
 
   const loadMore = () => {
     if (!isLoading && hasMore) {
@@ -151,6 +166,26 @@ export function ConversationList({ initialConversations }: ConversationListProps
 
   return (
     <div className="p-4">
+      {/* Search */}
+      <div className="relative mb-4">
+        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />
+        <input
+          type="text"
+          placeholder="Search conversations by name or participant..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          className="w-full pl-10 pr-10 py-2.5 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 bg-slate-50 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/40 focus:border-teal-400 transition-colors"
+        />
+        {searchQuery && (
+          <button
+            onClick={() => setSearchQuery("")}
+            className="absolute right-3 top-1/2 -translate-y-1/2 p-0.5 hover:bg-slate-200 rounded"
+          >
+            <X className="h-4 w-4 text-slate-400" />
+          </button>
+        )}
+      </div>
+
       {/* Sort Controls */}
       <div className="flex items-center gap-2 mb-4 pb-4 border-b border-slate-200">
         <ArrowUpDown className="h-4 w-4 text-slate-500" />
@@ -202,7 +237,9 @@ export function ConversationList({ initialConversations }: ConversationListProps
           </button>
         </div>
         <span className="ml-auto text-sm text-slate-500">
-          {conversations.length} conversations
+          {searchQuery
+            ? `${filteredConversations.length} of ${conversations.length} conversations`
+            : `${conversations.length} conversations`}
         </span>
       </div>
 

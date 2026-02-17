@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useMemo } from "react";
 import { MessageBubble } from "./MessageBubble";
 import { Spinner } from "@/components/ui/Spinner";
 import { formatDateDivider, isSameDay } from "@/lib/utils/date";
+import { Search, X, ChevronUp, ChevronDown } from "lucide-react";
 import type { MessageWithMedia } from "@/types";
 
 const POLL_INTERVAL = 5000; // Poll every 5 seconds for new messages
@@ -23,6 +24,10 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
   const [hasMore, setHasMore] = useState(true);
   const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
   const [newestTimestamp, setNewestTimestamp] = useState<string | null>(null);
+
+  const [searchQuery, setSearchQuery] = useState("");
+  const [showSearch, setShowSearch] = useState(false);
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -175,6 +180,42 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
     }
   };
 
+  // Search: find matching message IDs
+  const matchingMessageIds = useMemo(() => {
+    if (!searchQuery.trim()) return new Set<string>();
+    const q = searchQuery.toLowerCase();
+    return new Set(
+      messages
+        .filter(
+          (m) =>
+            m.content?.toLowerCase().includes(q) ||
+            m.sender_name?.toLowerCase().includes(q) ||
+            m.sender_identifier?.toLowerCase().includes(q)
+        )
+        .map((m) => m.id)
+    );
+  }, [messages, searchQuery]);
+
+  const matchingIds = useMemo(
+    () => Array.from(matchingMessageIds),
+    [matchingMessageIds]
+  );
+
+  // Scroll to active match
+  useEffect(() => {
+    if (matchingIds.length === 0 || !containerRef.current) return;
+    const id = matchingIds[activeMatchIndex];
+    const el = document.getElementById(`msg-${id}`);
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [activeMatchIndex, matchingIds]);
+
+  // Reset active match when query changes
+  useEffect(() => {
+    setActiveMatchIndex(0);
+  }, [searchQuery]);
+
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-red-600">
@@ -226,42 +267,116 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
   });
 
   return (
-    <div
-      ref={containerRef}
-      onScroll={handleScroll}
-      className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4"
-    >
-      {isLoadingMore && (
-        <div className="flex justify-center items-center gap-2 py-4">
-          <Spinner size="sm" />
-          {loadAll && hasMore && (
-            <span className="text-sm text-gray-500">Loading full history...</span>
-          )}
-        </div>
-      )}
+    <div className="flex-1 min-h-0 flex flex-col">
+      {/* Search Bar */}
+      <div className="shrink-0 border-b border-gray-100">
+        {!showSearch ? (
+          <div className="flex justify-end px-3 py-1.5">
+            <button
+              onClick={() => setShowSearch(true)}
+              className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
+            >
+              <Search className="h-3.5 w-3.5" />
+              Search
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2 px-3 py-2 bg-slate-50">
+            <Search className="h-4 w-4 text-slate-400 shrink-0" />
+            <input
+              type="text"
+              autoFocus
+              placeholder="Search messages..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="flex-1 min-w-0 text-sm bg-transparent text-slate-800 placeholder-slate-400 focus:outline-none"
+            />
+            {searchQuery && matchingIds.length > 0 && (
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="text-xs text-slate-500 tabular-nums">
+                  {activeMatchIndex + 1}/{matchingIds.length}
+                </span>
+                <button
+                  onClick={() =>
+                    setActiveMatchIndex((i) =>
+                      i > 0 ? i - 1 : matchingIds.length - 1
+                    )
+                  }
+                  className="p-0.5 hover:bg-slate-200 rounded"
+                >
+                  <ChevronUp className="h-4 w-4 text-slate-500" />
+                </button>
+                <button
+                  onClick={() =>
+                    setActiveMatchIndex((i) =>
+                      i < matchingIds.length - 1 ? i + 1 : 0
+                    )
+                  }
+                  className="p-0.5 hover:bg-slate-200 rounded"
+                >
+                  <ChevronDown className="h-4 w-4 text-slate-500" />
+                </button>
+              </div>
+            )}
+            {searchQuery && matchingIds.length === 0 && (
+              <span className="text-xs text-slate-400 shrink-0">No results</span>
+            )}
+            <button
+              onClick={() => {
+                setShowSearch(false);
+                setSearchQuery("");
+              }}
+              className="p-0.5 hover:bg-slate-200 rounded shrink-0"
+            >
+              <X className="h-4 w-4 text-slate-400" />
+            </button>
+          </div>
+        )}
+      </div>
 
-      {messagesWithDividers.map((item, index) => {
-        if (item.type === "divider") {
+      {/* Messages */}
+      <div
+        ref={containerRef}
+        onScroll={handleScroll}
+        className="flex-1 min-h-0 overflow-y-auto p-4 space-y-4"
+      >
+        {isLoadingMore && (
+          <div className="flex justify-center items-center gap-2 py-4">
+            <Spinner size="sm" />
+            {loadAll && hasMore && (
+              <span className="text-sm text-gray-500">Loading full history...</span>
+            )}
+          </div>
+        )}
+
+        {messagesWithDividers.map((item) => {
+          if (item.type === "divider") {
+            return (
+              <div key={`divider-${item.date}`} className="flex items-center gap-4 my-6">
+                <div className="flex-1 h-px bg-gray-200" />
+                <span className="text-sm text-gray-500 font-medium">
+                  {formatDateDivider(item.date)}
+                </span>
+                <div className="flex-1 h-px bg-gray-200" />
+              </div>
+            );
+          }
+
+          const isMatch = matchingMessageIds.has(item.message.id);
+          const isActive = isMatch && matchingIds[activeMatchIndex] === item.message.id;
+
           return (
-            <div key={`divider-${item.date}`} className="flex items-center gap-4 my-6">
-              <div className="flex-1 h-px bg-gray-200" />
-              <span className="text-sm text-gray-500 font-medium">
-                {formatDateDivider(item.date)}
-              </span>
-              <div className="flex-1 h-px bg-gray-200" />
+            <div key={item.message.id} id={`msg-${item.message.id}`}>
+              <MessageBubble
+                message={item.message}
+                isHighlighted={isActive}
+              />
             </div>
           );
-        }
+        })}
 
-        return (
-          <MessageBubble
-            key={item.message.id}
-            message={item.message}
-          />
-        );
-      })}
-
-      <div ref={bottomRef} />
+        <div ref={bottomRef} />
+      </div>
     </div>
   );
 }
