@@ -9,6 +9,7 @@ import { formatFullDate } from "@/lib/utils/date";
 
 interface PageProps {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ highlight?: string }>;
 }
 
 export async function generateMetadata({ params }: PageProps) {
@@ -30,8 +31,9 @@ export async function generateMetadata({ params }: PageProps) {
   };
 }
 
-export default async function ConversationPage({ params }: PageProps) {
+export default async function ConversationPage({ params, searchParams }: PageProps) {
   const { id } = await params;
+  const { highlight: highlightMessageId } = await searchParams;
   const supabase = createAdminClient();
 
   const { data: conversation, error } = await supabase
@@ -122,7 +124,7 @@ export default async function ConversationPage({ params }: PageProps) {
       {/* Messages */}
       <div className="flex-1 min-h-0 flex flex-col bg-white rounded-lg shadow overflow-hidden">
         <Suspense fallback={<LoadingScreen message="Loading messages..." />}>
-          <MessageList conversationId={id} loadAll={true} />
+          <MessageList conversationId={id} loadAll={true} highlightMessageId={highlightMessageId} />
         </Suspense>
       </div>
     </div>

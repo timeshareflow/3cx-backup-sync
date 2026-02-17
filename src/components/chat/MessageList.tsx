@@ -14,9 +14,10 @@ interface MessageListProps {
   initialMessages?: MessageWithMedia[];
   loadAll?: boolean; // If true, automatically loads all messages for full history access
   enablePolling?: boolean; // If true, polls for new messages (default: true)
+  highlightMessageId?: string; // If set, scroll to and highlight this message once loaded
 }
 
-export function MessageList({ conversationId, initialMessages, loadAll = false, enablePolling = true }: MessageListProps) {
+export function MessageList({ conversationId, initialMessages, loadAll = false, enablePolling = true, highlightMessageId }: MessageListProps) {
   const [messages, setMessages] = useState<MessageWithMedia[]>(initialMessages || []);
   const [isLoading, setIsLoading] = useState(!initialMessages);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -35,6 +36,7 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
   const isNearBottomRef = useRef(true);
   const newestTimestampRef = useRef<string | null>(null);
   const searchActiveRef = useRef(false);
+  const highlightScrollDone = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -75,8 +77,8 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
         setMessages((prev) => [...data.data, ...prev]);
       } else {
         setMessages(data.data);
-        // Scroll to bottom on initial load (skip if searching)
-        if (!isPolling && !searchActiveRef.current) {
+        // Scroll to bottom on initial load (skip if searching or deep-linking to a message)
+        if (!isPolling && !searchActiveRef.current && !highlightMessageId) {
           setTimeout(() => {
             bottomRef.current?.scrollIntoView();
           }, 100);
@@ -114,6 +116,21 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
     }
   }, [loadAll, hasMore, isLoadingMore, isLoading, oldestTimestamp, fetchMessages]);
 
+  // Scroll to highlighted message from deep-link (e.g. search results page)
+  useEffect(() => {
+    if (!highlightMessageId || highlightScrollDone.current) return;
+    const found = messages.some((m) => m.id === highlightMessageId);
+    if (!found) return; // Still loading — loadAll will bring it in
+    highlightScrollDone.current = true;
+    // Give the DOM time to render the message element
+    setTimeout(() => {
+      const el = document.getElementById(`msg-${highlightMessageId}`);
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    }, 150);
+  }, [highlightMessageId, messages]);
+
   // Poll for new messages
   const pollForNewMessages = useCallback(async () => {
     if (!newestTimestamp) return;
@@ -139,8 +156,8 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
           setNewestTimestamp(latestMsg.sent_at);
         }
 
-        // Auto-scroll to bottom if user was near bottom (skip if searching)
-        if (isNearBottomRef.current && !searchActiveRef.current) {
+        // Auto-scroll to bottom if user was near bottom (skip if searching or deep-linking)
+        if (isNearBottomRef.current && !searchActiveRef.current && !highlightMessageId) {
           setTimeout(() => {
             bottomRef.current?.scrollIntoView({ behavior: "smooth" });
           }, 100);
@@ -369,12 +386,13 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
 
           const isMatch = matchingMessageIds.has(item.message.id);
           const isActive = isMatch && matchingIds[activeMatchIndex] === item.message.id;
+          const isDeepLinked = item.message.id === highlightMessageId;
 
           return (
             <div key={item.message.id} id={`msg-${item.message.id}`}>
               <MessageBubble
                 message={item.message}
-                isHighlighted={isActive}
+                isHighlighted={isActive || isDeepLinked}
               />
             </div>
           );
