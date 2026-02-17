@@ -30,7 +30,8 @@ yarn-error.log*
 
 # Env files
 .env
-.env*.local
+.env*
+!.env.example
 
 # Vercel
 .vercel
@@ -57,6 +58,3 @@ next-env.d.ts
 
 # Misc
 nul
-
-.vercel
-.env*.local
