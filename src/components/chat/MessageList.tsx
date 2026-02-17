@@ -15,9 +15,10 @@ interface MessageListProps {
   loadAll?: boolean; // If true, automatically loads all messages for full history access
   enablePolling?: boolean; // If true, polls for new messages (default: true)
   highlightMessageId?: string; // If set, scroll to and highlight this message once loaded
+  highlightQuery?: string; // If set, highlight matching text within the target message
 }
 
-export function MessageList({ conversationId, initialMessages, loadAll = false, enablePolling = true, highlightMessageId }: MessageListProps) {
+export function MessageList({ conversationId, initialMessages, loadAll = false, enablePolling = true, highlightMessageId, highlightQuery }: MessageListProps) {
   const [messages, setMessages] = useState<MessageWithMedia[]>(initialMessages || []);
   const [isLoading, setIsLoading] = useState(!initialMessages);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -393,6 +394,7 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
               <MessageBubble
                 message={item.message}
                 isHighlighted={isActive || isDeepLinked}
+                highlightQuery={isDeepLinked ? highlightQuery : undefined}
               />
             </div>
           );

@@ -110,7 +110,7 @@ export function SearchResults({
         {results.map((message) => (
           <Link
             key={message.id}
-            href={`/conversations/${message.conversation_id}?highlight=${message.id}`}
+            href={`/conversations/${message.conversation_id}?highlight=${message.id}&q=${encodeURIComponent(query)}`}
             className="block bg-white rounded-xl border border-slate-200 p-4 hover:border-teal-300 hover:shadow-md hover:shadow-teal-500/10 transition-all"
           >
             <div className="flex items-start justify-between gap-3">

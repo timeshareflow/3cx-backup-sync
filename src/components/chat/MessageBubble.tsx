@@ -8,6 +8,7 @@ import type { MessageWithMedia } from "@/types";
 interface MessageBubbleProps {
   message: MessageWithMedia;
   isHighlighted?: boolean;
+  highlightQuery?: string;
 }
 
 const FILE_EXTENSIONS = /\.(jpg|jpeg|png|gif|webp|heic|mp4|mov|avi|webm|3gp|wav|mp3|ogg|aac|pdf|doc|docx)$/i;
@@ -63,7 +64,26 @@ function FileAttachmentCard({ filename }: { filename: string }) {
   );
 }
 
-export function MessageBubble({ message, isHighlighted = false }: MessageBubbleProps) {
+function highlightText(text: string, query: string | undefined): React.ReactNode {
+  if (!query || !text) return text;
+  try {
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+    return parts.map((part, i) =>
+      part.toLowerCase() === query.toLowerCase() ? (
+        <mark key={i} className="bg-yellow-200 rounded px-0.5">
+          {part}
+        </mark>
+      ) : (
+        part
+      )
+    );
+  } catch {
+    return text;
+  }
+}
+
+export function MessageBubble({ message, isHighlighted = false, highlightQuery }: MessageBubbleProps) {
   const hasMedia = message.media_files && message.media_files.length > 0;
   const hasText = message.content && message.content.trim().length > 0;
   const contentIsFilename = hasText && FILE_EXTENSIONS.test(message.content!.trim());
@@ -108,7 +128,7 @@ export function MessageBubble({ message, isHighlighted = false }: MessageBubbleP
           {shouldShowText && (
             <div className="bg-gray-100 rounded-2xl rounded-tl-md px-4 py-2 inline-block max-w-[80%]">
               <p className="text-gray-800 whitespace-pre-wrap break-words">
-                {message.content}
+                {highlightQuery ? highlightText(message.content!, highlightQuery) : message.content}
               </p>
             </div>
           )}
