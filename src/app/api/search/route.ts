@@ -68,9 +68,10 @@ export async function GET(request: NextRequest) {
       .order("sent_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    // Apply text search (use ilike for simple search, works without full-text index)
+    // Apply text search on content and sender name
     if (query && query.trim()) {
-      dbQuery = dbQuery.ilike("content", `%${query.trim()}%`);
+      const q = query.trim();
+      dbQuery = dbQuery.or(`content.ilike.%${q}%,sender_name.ilike.%${q}%,sender_identifier.ilike.%${q}%`);
     }
 
     // Apply filters

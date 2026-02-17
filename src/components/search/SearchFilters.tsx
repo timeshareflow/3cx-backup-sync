@@ -61,7 +61,7 @@ export function SearchFiltersPanel({
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200">
+    <div className="bg-white rounded-xl border border-slate-200">
       <button
         onClick={() => setIsExpanded(!isExpanded)}
         className="w-full flex items-center justify-between p-4"
@@ -70,7 +70,7 @@ export function SearchFiltersPanel({
           <Filter className="h-5 w-5 text-gray-500" />
           <span className="font-medium">Filters</span>
           {activeFilterCount > 0 && (
-            <span className="px-2 py-0.5 bg-blue-100 text-blue-700 text-sm rounded-full">
+            <span className="px-2 py-0.5 bg-teal-100 text-teal-700 text-sm rounded-full">
               {activeFilterCount}
             </span>
           )}
@@ -106,7 +106,7 @@ export function SearchFiltersPanel({
               onChange={(e) =>
                 onFiltersChange({ ...filters, channelType: e.target.value })
               }
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
             >
               {CHANNEL_TYPES.map((channel) => (
                 <option key={channel.value} value={channel.value}>
@@ -126,7 +126,7 @@ export function SearchFiltersPanel({
               onChange={(e) =>
                 onFiltersChange({ ...filters, sender: e.target.value })
               }
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-500"
             >
               <option value="">All senders</option>
               {extensions.map((ext) => (
@@ -152,7 +152,7 @@ export function SearchFiltersPanel({
                 }
                 className={`px-3 py-1.5 rounded-lg text-sm ${
                   filters.hasMedia === null
-                    ? "bg-blue-100 text-blue-700"
+                    ? "bg-teal-100 text-teal-700"
                     : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                 }`}
               >
@@ -162,7 +162,7 @@ export function SearchFiltersPanel({
                 onClick={() => onFiltersChange({ ...filters, hasMedia: true })}
                 className={`px-3 py-1.5 rounded-lg text-sm ${
                   filters.hasMedia === true
-                    ? "bg-blue-100 text-blue-700"
+                    ? "bg-teal-100 text-teal-700"
                     : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                 }`}
               >
@@ -172,7 +172,7 @@ export function SearchFiltersPanel({
                 onClick={() => onFiltersChange({ ...filters, hasMedia: false })}
                 className={`px-3 py-1.5 rounded-lg text-sm ${
                   filters.hasMedia === false
-                    ? "bg-blue-100 text-blue-700"
+                    ? "bg-teal-100 text-teal-700"
                     : "bg-gray-100 text-gray-700 hover:bg-gray-200"
                 }`}
               >

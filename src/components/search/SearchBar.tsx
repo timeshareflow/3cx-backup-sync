@@ -68,7 +68,7 @@ export function SearchBar({
           onChange={handleChange}
           placeholder={placeholder}
           autoFocus={autoFocus}
-          className="w-full pl-12 pr-10 py-3 text-lg border border-gray-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          className="w-full pl-12 pr-10 py-3 text-lg border border-slate-200 rounded-xl bg-slate-50 text-slate-800 placeholder-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-500/40 focus:border-teal-400 transition-colors"
         />
         {query && (
           <button

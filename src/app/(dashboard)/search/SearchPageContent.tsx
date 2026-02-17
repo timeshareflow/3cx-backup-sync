@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { SearchBar } from "@/components/search/SearchBar";
 import { SearchFiltersPanel, type SearchFilters } from "@/components/search/SearchFilters";
 import { SearchResults } from "@/components/search/SearchResults";
+import { Search as SearchIcon } from "lucide-react";
 import type { MessageWithMedia, Extension } from "@/types";
 
 export function SearchPageContent() {
@@ -15,6 +16,9 @@ export function SearchPageContent() {
   const [results, setResults] = useState<MessageWithMedia[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [page, setPage] = useState(1);
+  const [hasMore, setHasMore] = useState(false);
   const [extensions, setExtensions] = useState<Extension[]>([]);
   const [filters, setFilters] = useState<SearchFilters>({
     startDate: "",
@@ -25,32 +29,35 @@ export function SearchPageContent() {
     channelType: "",
   });
 
-  // Fetch extensions for filter dropdown
+  // Fetch extensions for sender filter dropdown
   useEffect(() => {
-    fetch("/api/sync/status")
+    fetch("/api/extensions")
       .then((res) => res.json())
-      .then(() => {
-        // In a real app, you'd have an extensions endpoint
-        // For now, we'll leave this empty
-      })
+      .then((data) => setExtensions(data || []))
       .catch(console.error);
   }, []);
 
-  const performSearch = useCallback(async (searchQuery: string) => {
-    // Allow search with date filters even without text query
+  const performSearch = useCallback(async (searchQuery: string, pageNum: number = 1) => {
     const hasFilters = filters.startDate || filters.endDate || filters.channelType;
     if (!hasFilters && (!searchQuery || searchQuery.trim().length < 2)) {
       setResults([]);
       setTotalCount(0);
+      setHasMore(false);
       return;
     }
 
-    setIsLoading(true);
+    if (pageNum === 1) {
+      setIsLoading(true);
+    } else {
+      setIsLoadingMore(true);
+    }
+
     try {
       const params = new URLSearchParams();
       if (searchQuery && searchQuery.trim()) {
         params.set("q", searchQuery);
       }
+      params.set("page", String(pageNum));
       params.set("limit", "50");
 
       if (filters.startDate) params.set("start_date", filters.startDate);
@@ -64,25 +71,33 @@ export function SearchPageContent() {
       const data = await response.json();
 
       if (response.ok) {
-        setResults(data.data || []);
+        const newResults = data.data || [];
+        if (pageNum === 1) {
+          setResults(newResults);
+        } else {
+          setResults((prev) => [...prev, ...newResults]);
+        }
         setTotalCount(data.total || 0);
+        setPage(pageNum);
+        setHasMore(data.has_more || false);
       } else {
         console.error("Search error:", data.error);
-        setResults([]);
+        if (pageNum === 1) setResults([]);
       }
     } catch (error) {
       console.error("Search failed:", error);
-      setResults([]);
+      if (pageNum === 1) setResults([]);
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
     }
   }, [filters]);
 
-  // Search when query or filters change
+  // Search when query or filters change (reset to page 1)
   useEffect(() => {
     const hasFilters = filters.startDate || filters.endDate || filters.channelType;
     if (query || hasFilters) {
-      performSearch(query);
+      performSearch(query, 1);
     }
   }, [query, filters, performSearch]);
 
@@ -97,11 +112,22 @@ export function SearchPageContent() {
     setQuery(newQuery);
   };
 
+  const handleLoadMore = () => {
+    if (!isLoadingMore && hasMore) {
+      performSearch(query, page + 1);
+    }
+  };
+
   return (
-    <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Search Messages</h1>
-        <p className="text-gray-600">Search through all archived conversations</p>
+    <div className="space-y-6 p-6 max-w-7xl mx-auto">
+      <div className="flex items-center gap-4">
+        <div className="p-3 bg-gradient-to-br from-teal-500 to-cyan-600 rounded-2xl shadow-lg shadow-teal-500/25">
+          <SearchIcon className="h-8 w-8 text-white" />
+        </div>
+        <div>
+          <h1 className="text-3xl font-bold text-slate-800">Search Messages</h1>
+          <p className="text-slate-500 mt-1">Search through all archived conversations</p>
+        </div>
       </div>
 
       <SearchBar
@@ -125,6 +151,9 @@ export function SearchPageContent() {
             isLoading={isLoading}
             query={query}
             totalCount={totalCount}
+            hasMore={hasMore}
+            isLoadingMore={isLoadingMore}
+            onLoadMore={handleLoadMore}
           />
         </div>
       </div>
