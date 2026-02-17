@@ -22,6 +22,7 @@ export async function GET(request: NextRequest) {
   const before = searchParams.get("before");
   const after = searchParams.get("after");
   const latest = searchParams.get("latest"); // Fetch most recent messages
+  const around = searchParams.get("around"); // Fetch messages around a specific message ID
   const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
 
   if (!conversationId) {
@@ -60,15 +61,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // When "latest" is set, fetch the most recent messages (for initial monitor load)
-    // When "before" is set, fetch older messages (for infinite scroll up)
-    // When "after" is set, fetch newer messages (for polling new messages)
-    const isLatestMode = latest === "true" && !before && !after;
-
-    let query = supabase
-      .from("messages")
-      .select(
-        `
+    const selectFields = `
         id,
         conversation_id,
         threecx_message_id,
@@ -80,9 +73,119 @@ export async function GET(request: NextRequest) {
         sent_at,
         created_at,
         media_files (*)
-      `,
-        { count: "exact" }
-      )
+      `;
+
+    // Helper: fix orphaned media links
+    async function fixOrphanedMedia(msgs: MessageWithMedia[]) {
+      for (const msg of msgs) {
+        if (msg.has_media && (!msg.media_files || msg.media_files.length === 0) && msg.content) {
+          const filename = msg.content.trim();
+          const { data: matchedMedia } = await supabase
+            .from("media_files")
+            .select("*")
+            .eq("file_name", filename)
+            .limit(1);
+
+          if (matchedMedia && matchedMedia.length > 0) {
+            msg.media_files = matchedMedia;
+            await supabase
+              .from("media_files")
+              .update({ message_id: msg.id, conversation_id: msg.conversation_id })
+              .eq("id", matchedMedia[0].id);
+          }
+        }
+      }
+    }
+
+    // "Around" mode: fetch a window of messages centered on a specific message
+    if (around) {
+      // Look up the target message's timestamp
+      const { data: targetMsg, error: targetErr } = await supabase
+        .from("messages")
+        .select("sent_at")
+        .eq("id", around)
+        .eq("conversation_id", conversationId)
+        .single();
+
+      if (targetErr || !targetMsg) {
+        return NextResponse.json(
+          { error: "Target message not found" },
+          { status: 404 }
+        );
+      }
+
+      const targetTime = targetMsg.sent_at;
+      const halfWindow = 25;
+
+      // Fetch messages before (including the target)
+      const { data: beforeData } = await supabase
+        .from("messages")
+        .select(selectFields)
+        .eq("conversation_id", conversationId)
+        .lte("sent_at", targetTime)
+        .order("sent_at", { ascending: false })
+        .limit(halfWindow + 1); // +1 to include the target itself
+
+      // Fetch messages after the target
+      const { data: afterData } = await supabase
+        .from("messages")
+        .select(selectFields)
+        .eq("conversation_id", conversationId)
+        .gt("sent_at", targetTime)
+        .order("sent_at", { ascending: true })
+        .limit(halfWindow);
+
+      // Merge and deduplicate by id, in chronological order
+      const beforeMsgs = ((beforeData || []) as unknown as MessageWithMedia[]).reverse();
+      const afterMsgs = (afterData || []) as unknown as MessageWithMedia[];
+      const seen = new Set<string>();
+      const messages: MessageWithMedia[] = [];
+      for (const m of [...beforeMsgs, ...afterMsgs]) {
+        if (!seen.has(m.id)) {
+          seen.add(m.id);
+          messages.push(m);
+        }
+      }
+
+      await fixOrphanedMedia(messages);
+
+      // Check for older/newer messages beyond the window
+      let hasMore = false;
+      if (messages.length > 0) {
+        const { count: olderCount } = await supabase
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .eq("conversation_id", conversationId)
+          .lt("sent_at", messages[0].sent_at);
+        hasMore = (olderCount || 0) > 0;
+      }
+
+      let hasNewer = false;
+      if (messages.length > 0) {
+        const { count: newerCount } = await supabase
+          .from("messages")
+          .select("id", { count: "exact", head: true })
+          .eq("conversation_id", conversationId)
+          .gt("sent_at", messages[messages.length - 1].sent_at);
+        hasNewer = (newerCount || 0) > 0;
+      }
+
+      return NextResponse.json({
+        data: messages,
+        total: messages.length,
+        has_more: hasMore,
+        has_newer: hasNewer,
+      });
+    }
+
+    // When "latest" is set, fetch the most recent messages (for initial monitor load)
+    // When "before" is set, fetch older messages (for infinite scroll up)
+    // When "after" is set, fetch newer messages (for polling new messages)
+    const isLatestMode = latest === "true" && !before && !after;
+
+    let query = supabase
+      .from("messages")
+      .select(selectFields, { count: "exact" })
       .eq("conversation_id", conversationId);
 
     // Handle pagination
@@ -117,27 +220,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Fallback: for messages with has_media=true but no linked media_files,
-    // try to find media by matching filename in content
-    for (const msg of messages) {
-      if (msg.has_media && (!msg.media_files || msg.media_files.length === 0) && msg.content) {
-        const filename = msg.content.trim();
-        const { data: matchedMedia } = await supabase
-          .from("media_files")
-          .select("*")
-          .eq("file_name", filename)
-          .limit(1);
-
-        if (matchedMedia && matchedMedia.length > 0) {
-          msg.media_files = matchedMedia;
-          // Also fix the FK link for future requests
-          await supabase
-            .from("media_files")
-            .update({ message_id: msg.id, conversation_id: msg.conversation_id })
-            .eq("id", matchedMedia[0].id);
-        }
-      }
-    }
+    await fixOrphanedMedia(messages);
 
     // Check if there are older messages (for infinite scroll up)
     let hasMore = false;

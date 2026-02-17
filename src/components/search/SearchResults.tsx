@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { MessageSquare, ArrowRight, Users, Globe, UserCircle } from "lucide-react";
+import { MessageSquare, ArrowRight, Users, Globe, UserCircle, Image as ImageIcon, Film, FileText, Music } from "lucide-react";
 import { formatMessageTime } from "@/lib/utils/date";
 import { Spinner } from "@/components/ui/Spinner";
-import type { MessageWithMedia, Conversation } from "@/types";
+import type { MessageWithMedia, Conversation, MediaFile } from "@/types";
 
 interface SearchResultMessage extends MessageWithMedia {
   conversations?: Pick<Conversation, "id" | "conversation_name" | "is_external" | "is_group_chat">;
@@ -18,6 +18,27 @@ interface SearchResultsProps {
   hasMore?: boolean;
   isLoadingMore?: boolean;
   onLoadMore?: () => void;
+}
+
+function getMediaType(mimeType: string | null): "image" | "video" | "audio" | "document" {
+  if (!mimeType) return "document";
+  if (mimeType.startsWith("image/")) return "image";
+  if (mimeType.startsWith("video/")) return "video";
+  if (mimeType.startsWith("audio/")) return "audio";
+  return "document";
+}
+
+function MediaThumbnail({ media }: { media: MediaFile }) {
+  const type = getMediaType(media.mime_type);
+  const Icon = type === "image" ? ImageIcon : type === "video" ? Film : type === "audio" ? Music : FileText;
+  const bg = type === "image" ? "bg-blue-50 border-blue-200" : type === "video" ? "bg-purple-50 border-purple-200" : type === "audio" ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200";
+  const iconColor = type === "image" ? "text-blue-400" : type === "video" ? "text-purple-400" : type === "audio" ? "text-amber-400" : "text-gray-400";
+
+  return (
+    <div className={`h-12 w-12 rounded-lg border ${bg} flex items-center justify-center shrink-0`} title={media.file_name || type}>
+      <Icon className={`h-5 w-5 ${iconColor}`} />
+    </div>
+  );
 }
 
 export function SearchResults({
@@ -145,13 +166,17 @@ export function SearchResults({
                   </p>
                 )}
 
-                {/* Media indicator */}
+                {/* Media thumbnails */}
                 {message.has_media && message.media_files.length > 0 && (
-                  <div className="mt-2 flex items-center gap-1 text-xs text-slate-400">
-                    <span>
-                      {message.media_files.length} attachment
-                      {message.media_files.length !== 1 ? "s" : ""}
-                    </span>
+                  <div className="mt-2 flex items-center gap-1.5">
+                    {message.media_files.slice(0, 4).map((file) => (
+                      <MediaThumbnail key={file.id} media={file} />
+                    ))}
+                    {message.media_files.length > 4 && (
+                      <span className="text-xs text-slate-400 ml-1">
+                        +{message.media_files.length - 4} more
+                      </span>
+                    )}
                   </div>
                 )}
               </div>

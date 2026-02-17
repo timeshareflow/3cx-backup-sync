@@ -124,7 +124,7 @@ export default async function ConversationPage({ params, searchParams }: PagePro
       {/* Messages */}
       <div className="flex-1 min-h-0 flex flex-col bg-white rounded-lg shadow overflow-hidden">
         <Suspense fallback={<LoadingScreen message="Loading messages..." />}>
-          <MessageList conversationId={id} loadAll={true} highlightMessageId={highlightMessageId} highlightQuery={highlightQuery} />
+          <MessageList conversationId={id} loadAll={!highlightMessageId} highlightMessageId={highlightMessageId} highlightQuery={highlightQuery} />
         </Suspense>
       </div>
     </div>

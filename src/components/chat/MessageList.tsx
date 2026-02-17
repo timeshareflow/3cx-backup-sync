@@ -24,6 +24,8 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
+  const [hasNewer, setHasNewer] = useState(false);
+  const [isLoadingNewer, setIsLoadingNewer] = useState(false);
   const [oldestTimestamp, setOldestTimestamp] = useState<string | null>(null);
   const [newestTimestamp, setNewestTimestamp] = useState<string | null>(null);
 
@@ -61,6 +63,9 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
       url.searchParams.set("limit", "50");
       if (before) {
         url.searchParams.set("before", before);
+      } else if (highlightMessageId) {
+        // Deep-link mode: load a window around the target message
+        url.searchParams.set("around", highlightMessageId);
       } else {
         // Initial load: get the latest messages
         url.searchParams.set("latest", "true");
@@ -87,6 +92,9 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
       }
 
       setHasMore(data.has_more);
+      if (data.has_newer !== undefined) {
+        setHasNewer(data.has_newer);
+      }
 
       if (data.data.length > 0) {
         setOldestTimestamp(data.data[0].sent_at);
@@ -100,7 +108,7 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
       setIsLoading(false);
       setIsLoadingMore(false);
     }
-  }, [conversationId]);
+  }, [conversationId, highlightMessageId]);
 
   useEffect(() => {
     if (!initialMessages) {
@@ -131,6 +139,37 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
       }
     }, 150);
   }, [highlightMessageId, messages]);
+
+  // Load newer messages (scroll down in windowed mode)
+  const fetchNewerMessages = useCallback(async () => {
+    if (!newestTimestamp || isLoadingNewer) return;
+    setIsLoadingNewer(true);
+    try {
+      const url = new URL(`/api/messages`, window.location.origin);
+      url.searchParams.set("conversation_id", conversationId);
+      url.searchParams.set("after", newestTimestamp);
+      url.searchParams.set("limit", "50");
+
+      const response = await fetch(url.toString());
+      if (!response.ok) return;
+
+      const data = await response.json();
+      if (data.data && data.data.length > 0) {
+        setMessages((prev) => [...prev, ...data.data]);
+        const latestMsg = data.data[data.data.length - 1];
+        if (latestMsg) setNewestTimestamp(latestMsg.sent_at);
+      }
+      if (data.has_newer !== undefined) {
+        setHasNewer(data.has_newer);
+      } else {
+        setHasNewer(false);
+      }
+    } catch {
+      // Silently fail
+    } finally {
+      setIsLoadingNewer(false);
+    }
+  }, [conversationId, newestTimestamp, isLoadingNewer]);
 
   // Poll for new messages
   const pollForNewMessages = useCallback(async () => {
@@ -193,13 +232,18 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
 
   const handleScroll = () => {
     checkIfNearBottom();
-    if (!containerRef.current || isLoadingMore || !hasMore || searchActiveRef.current) return;
+    if (!containerRef.current || searchActiveRef.current) return;
 
-    const { scrollTop } = containerRef.current;
+    const { scrollTop, scrollHeight, clientHeight } = containerRef.current;
 
-    // Load more when scrolled near the top (disabled during search)
-    if (scrollTop < 200 && oldestTimestamp) {
+    // Load older messages when scrolled near the top
+    if (scrollTop < 200 && oldestTimestamp && hasMore && !isLoadingMore) {
       fetchMessages(oldestTimestamp);
+    }
+
+    // Load newer messages when scrolled near the bottom (windowed mode)
+    if (hasNewer && !isLoadingNewer && scrollHeight - scrollTop - clientHeight < 200) {
+      fetchNewerMessages();
     }
   };
 
@@ -399,6 +443,13 @@ export function MessageList({ conversationId, initialMessages, loadAll = false, 
             </div>
           );
         })}
+
+        {isLoadingNewer && (
+          <div className="flex justify-center items-center gap-2 py-4">
+            <Spinner size="sm" />
+            <span className="text-sm text-gray-500">Loading newer messages...</span>
+          </div>
+        )}
 
         <div ref={bottomRef} />
       </div>
