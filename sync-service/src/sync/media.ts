@@ -477,7 +477,7 @@ export async function syncVoicemails(
     }
 
     // Update sync status after voicemail sync completes
-    let notes = `Synced ${result.filesSynced}, skipped ${result.filesSkipped}`;
+    let notes = `Synced ${result.filesSynced} new, ${result.filesSkipped} already synced`;
     if (result.filesTooLarge > 0) notes += `, ${result.filesTooLarge} too large`;
     if (result.errors.length > 0) notes += `, ${result.errors.length} failed`;
 

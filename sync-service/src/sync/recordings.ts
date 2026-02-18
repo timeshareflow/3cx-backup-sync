@@ -442,7 +442,7 @@ export async function syncRecordings(
     }
 
     // Build notes with summary
-    let notes = `Synced ${result.filesSynced}, skipped ${result.filesSkipped}`;
+    let notes = `Synced ${result.filesSynced} new, ${result.filesSkipped} already synced`;
     if (result.errors.length > 0) {
       notes += `, ${result.errors.length} failed`;
     }

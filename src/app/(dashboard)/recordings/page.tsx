@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Phone, PhoneIncoming, PhoneOutgoing, Download, Play, Pause, Search, Filter, Loader2 } from "lucide-react";
+import { useState, useEffect, useCallback, useRef } from "react";
+import { Phone, PhoneIncoming, PhoneOutgoing, Download, Play, Pause, Search, Loader2, Square } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 
 interface CallRecording {
@@ -14,7 +14,7 @@ interface CallRecording {
   direction: string | null;
   duration_seconds: number | null;
   file_size: number | null;
-  started_at: string;  // Actual column name in database
+  started_at: string;
   storage_path: string;
 }
 
@@ -30,6 +30,9 @@ export default function RecordingsPage() {
   const [filter, setFilter] = useState<DirectionFilter>("all");
   const [searchQuery, setSearchQuery] = useState("");
   const [playingId, setPlayingId] = useState<string | null>(null);
+  const [loadingAudioId, setLoadingAudioId] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [audioUrls, setAudioUrls] = useState<Record<string, string>>({});
 
   const fetchRecordings = useCallback(async (pageNum: number, direction: DirectionFilter, search: string, append = false) => {
     setIsLoading(true);
@@ -75,6 +78,92 @@ export default function RecordingsPage() {
     setPage(1);
     fetchRecordings(1, filter, searchQuery);
   }, [filter, searchQuery, fetchRecordings]);
+
+  // Clean up audio on unmount
+  useEffect(() => {
+    return () => {
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
+      }
+    };
+  }, []);
+
+  const fetchAudioUrl = async (id: string): Promise<string | null> => {
+    if (audioUrls[id]) return audioUrls[id];
+    try {
+      const response = await fetch(`/api/recordings/${id}`);
+      if (!response.ok) return null;
+      const data = await response.json();
+      setAudioUrls((prev) => ({ ...prev, [id]: data.url }));
+      return data.url;
+    } catch {
+      return null;
+    }
+  };
+
+  const handlePlay = async (id: string) => {
+    // If already playing this recording, pause it
+    if (playingId === id && audioRef.current) {
+      audioRef.current.pause();
+      setPlayingId(null);
+      return;
+    }
+
+    // Stop any currently playing audio
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+
+    setLoadingAudioId(id);
+    const url = await fetchAudioUrl(id);
+    setLoadingAudioId(null);
+
+    if (!url) {
+      setError("Failed to load recording audio");
+      return;
+    }
+
+    const audio = new Audio(url);
+    audioRef.current = audio;
+    audio.onended = () => setPlayingId(null);
+    audio.onerror = () => {
+      setPlayingId(null);
+      setError("Failed to play recording");
+    };
+
+    try {
+      await audio.play();
+      setPlayingId(id);
+    } catch {
+      setError("Failed to play recording");
+    }
+  };
+
+  const handleStop = () => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
+      audioRef.current = null;
+    }
+    setPlayingId(null);
+  };
+
+  const handleDownload = async (id: string, callerName: string | null, callerNumber: string | null) => {
+    const url = await fetchAudioUrl(id);
+    if (!url) {
+      setError("Failed to get download URL");
+      return;
+    }
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `recording-${callerName || callerNumber || id}.wav`;
+    link.target = "_blank";
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   const loadMore = () => {
     const nextPage = page + 1;
@@ -202,7 +291,14 @@ export default function RecordingsPage() {
             </thead>
             <tbody className="divide-y divide-slate-100">
               {recordings.map((recording) => (
-                <tr key={recording.id} className="hover:bg-slate-50 transition-colors">
+                <tr
+                  key={recording.id}
+                  className={`transition-colors ${
+                    playingId === recording.id
+                      ? "bg-teal-50"
+                      : "hover:bg-slate-50"
+                  }`}
+                >
                   <td className="px-6 py-4">
                     <div className="flex items-center gap-2">
                       {getDirectionIcon(recording.direction)}
@@ -232,15 +328,30 @@ export default function RecordingsPage() {
                     {formatDistanceToNow(new Date(recording.started_at), { addSuffix: true })}
                   </td>
                   <td className="px-6 py-4 text-right">
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
+                      {loadingAudioId === recording.id ? (
+                        <div className="p-2">
+                          <Loader2 className="h-4 w-4 text-teal-500 animate-spin" />
+                        </div>
+                      ) : playingId === recording.id ? (
+                        <button
+                          onClick={handleStop}
+                          className="p-2 text-red-500 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+                          title="Stop"
+                        >
+                          <Square className="h-4 w-4" />
+                        </button>
+                      ) : (
+                        <button
+                          onClick={() => handlePlay(recording.id)}
+                          className="p-2 text-slate-500 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
+                          title="Play"
+                        >
+                          <Play className="h-4 w-4" />
+                        </button>
+                      )}
                       <button
-                        onClick={() => setPlayingId(playingId === recording.id ? null : recording.id)}
-                        className="p-2 text-slate-500 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
-                        title={playingId === recording.id ? "Pause" : "Play"}
-                      >
-                        {playingId === recording.id ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                      </button>
-                      <button
+                        onClick={() => handleDownload(recording.id, recording.caller_name, recording.caller_number)}
                         className="p-2 text-slate-500 hover:text-teal-600 hover:bg-teal-50 rounded-lg transition-colors"
                         title="Download"
                       >
