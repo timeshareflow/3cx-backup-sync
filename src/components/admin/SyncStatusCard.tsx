@@ -195,7 +195,12 @@ export function SyncStatusCard() {
                       {getStalenessText(sync)}
                       {sync.health === "critical" && sync.staleness_minutes !== undefined && sync.staleness_minutes < 9999 && " - stale"}
                     </p>
-                    {sync.notes && sync.items_synced === 0 && (
+                    {sync.health_note && (
+                      <p className={`text-xs mt-1 truncate font-medium ${sync.health === "critical" ? "text-red-600" : "text-amber-600"}`} title={sync.health_note}>
+                        {sync.health_note}
+                      </p>
+                    )}
+                    {!sync.health_note && sync.notes && sync.items_synced === 0 && (
                       <p className="text-xs text-amber-600 mt-1 truncate" title={sync.notes}>
                         {sync.notes}
                       </p>

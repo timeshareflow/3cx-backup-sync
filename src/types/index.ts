@@ -82,8 +82,10 @@ export interface SyncStatus {
   status: "idle" | "running" | "success" | "error";
   created_at: string;
   updated_at: string;
+  last_synced_message_at?: string | null;
   // Enriched health fields from API
   health?: "healthy" | "warning" | "critical";
+  health_note?: string;
   staleness_minutes?: number;
   expected_interval_minutes?: number;
 }

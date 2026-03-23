@@ -4,7 +4,7 @@ import { getTenantContext } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
-// Expected max intervals per sync type (minutes)
+// Expected max intervals per sync type (minutes) — how long since last successful sync run
 const EXPECTED_INTERVALS: Record<string, { warning: number; critical: number }> = {
   messages:   { warning: 10,  critical: 15 },
   media:      { warning: 20,  critical: 30 },
@@ -14,6 +14,12 @@ const EXPECTED_INTERVALS: Record<string, { warning: number; critical: number }> 
   faxes:      { warning: 30,  critical: 60 },
   meetings:   { warning: 30,  critical: 60 },
   extensions: { warning: 90,  critical: 120 },
+};
+
+// How long since the last actual message/record was synced before we alert
+// This catches cases where the sync runs fine but the source system has stopped producing data
+const DATA_STALENESS_THRESHOLDS: Record<string, { warning: number; critical: number }> = {
+  messages: { warning: 8 * 60, critical: 24 * 60 }, // 8h warning, 24h critical
 };
 
 export async function GET(request: NextRequest) {
@@ -98,15 +104,38 @@ export async function GET(request: NextRequest) {
       const lastError = sync.last_error_at ? new Date(sync.last_error_at).getTime() : 0;
 
       let health: "healthy" | "warning" | "critical" = "healthy";
+      let healthNote: string | undefined;
+
       if (stalenessMinutes >= thresholds.critical) health = "critical";
       else if (stalenessMinutes >= thresholds.warning) health = "warning";
       if (lastError > lastSuccess && sync.status === "error") health = "critical";
+
+      // Check data staleness — detect when source system stops producing data
+      // even though the sync service itself is running fine
+      const dataStalenessThreshold = DATA_STALENESS_THRESHOLDS[sync.sync_type];
+      if (dataStalenessThreshold && sync.last_synced_message_at) {
+        const lastDataAt = new Date(sync.last_synced_message_at).getTime();
+        const dataStaleMinutes = Math.round((now - lastDataAt) / 60000);
+        if (dataStaleMinutes >= dataStalenessThreshold.critical) {
+          health = "critical";
+          const hours = Math.floor(dataStaleMinutes / 60);
+          healthNote = `No new messages from 3CX in ${hours}h — chat may be broken on the phone system`;
+        } else if (dataStaleMinutes >= dataStalenessThreshold.warning && health === "healthy") {
+          health = "warning";
+          const hours = Math.floor(dataStaleMinutes / 60);
+          healthNote = `No new messages from 3CX in ${hours}h — verify chat is active`;
+        }
+      } else if (dataStalenessThreshold && !sync.last_synced_message_at) {
+        // Never synced any messages at all
+        healthNote = sync.notes || undefined;
+      }
 
       return {
         ...sync,
         health,
         staleness_minutes: stalenessMinutes,
         expected_interval_minutes: thresholds.critical,
+        health_note: healthNote,
       };
     });
 
