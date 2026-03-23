@@ -76,26 +76,35 @@ export const MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024;
 export async function listRemoteFilesRecursive(
   sftp: SftpClient,
   remotePath: string,
-  basePath?: string
+  basePath?: string,
+  timeoutMs: number = 30000 // 30 second timeout per directory operation
 ): Promise<RemoteFileInfo[]> {
   const results: RemoteFileInfo[] = [];
   const currentBase = basePath || remotePath;
 
   try {
-    const exists = await sftp.exists(remotePath);
+    const exists = await withTimeout(
+      sftp.exists(remotePath),
+      timeoutMs,
+      `exists check for ${remotePath}`
+    );
     if (!exists) {
       logger.warn("Remote directory does not exist", { path: remotePath });
       return results;
     }
 
-    const listing = await sftp.list(remotePath);
+    const listing = await withTimeout(
+      sftp.list(remotePath),
+      timeoutMs,
+      `list directory ${remotePath}`
+    );
 
     for (const item of listing) {
       const itemPath = `${remotePath}/${item.name}`;
 
       if (item.type === "d") {
         // It's a directory - recurse into it
-        const subFiles = await listRemoteFilesRecursive(sftp, itemPath, currentBase);
+        const subFiles = await listRemoteFilesRecursive(sftp, itemPath, currentBase, timeoutMs);
         results.push(...subFiles);
       } else if (item.type === "-") {
         // It's a file - include size

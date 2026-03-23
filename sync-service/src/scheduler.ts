@@ -141,6 +141,9 @@ async function runChatSync(): Promise<void> {
   }
 }
 
+// Max time allowed for the entire media+voicemails sync across all tenants (8 minutes)
+const MEDIA_SYNC_TIMEOUT_MS = 8 * 60 * 1000;
+
 // Run media sync (every 5 minutes)
 // CRITICAL: Media sync runs for ALL active tenants, not just those with active users
 // This ensures media files are always backed up regardless of user activity
@@ -162,16 +165,27 @@ async function runMediaSync(): Promise<void> {
 
     logger.info(`Media sync for ${allTenants.length} tenant(s)`);
 
-    await runMultiTenantSyncByType(
-      ["media", "voicemails"],
-      allTenants.map((t) => t.id)
-    );
+    await Promise.race([
+      runMultiTenantSyncByType(
+        ["media", "voicemails"],
+        allTenants.map((t) => t.id)
+      ),
+      new Promise<void>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Media sync timed out after ${MEDIA_SYNC_TIMEOUT_MS / 1000}s`)),
+          MEDIA_SYNC_TIMEOUT_MS
+        )
+      ),
+    ]);
   } catch (error) {
     logger.error("Media sync failed", { error: (error as Error).message });
   } finally {
     runningSync.delete("media");
   }
 }
+
+// Max time allowed for the entire recordings+meetings+faxes sync across all tenants (8 minutes)
+const RECORDINGS_SYNC_TIMEOUT_MS = 8 * 60 * 1000;
 
 // Run recordings sync (every 15 minutes)
 // CRITICAL: Recordings sync runs for ALL active tenants, not just those with active users
@@ -194,10 +208,18 @@ async function runRecordingsSync(): Promise<void> {
 
     logger.info(`Recordings sync for ${allTenants.length} tenant(s)`);
 
-    await runMultiTenantSyncByType(
-      ["recordings", "meetings", "faxes"],
-      allTenants.map((t) => t.id)
-    );
+    await Promise.race([
+      runMultiTenantSyncByType(
+        ["recordings", "meetings", "faxes"],
+        allTenants.map((t) => t.id)
+      ),
+      new Promise<void>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Recordings sync timed out after ${RECORDINGS_SYNC_TIMEOUT_MS / 1000}s`)),
+          RECORDINGS_SYNC_TIMEOUT_MS
+        )
+      ),
+    ]);
   } catch (error) {
     logger.error("Recordings sync failed", { error: (error as Error).message });
   } finally {
