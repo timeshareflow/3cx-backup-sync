@@ -26,6 +26,7 @@ import {
   ChevronRight,
   Sparkles,
   ClipboardList,
+  RotateCcw,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useState } from "react";
@@ -60,6 +61,7 @@ const communicationsNavigation: NavItem[] = [
 const adminNavigation: NavItem[] = [
   { name: "3CX Setup", href: "/setup", icon: Settings, requiredRoles: ["admin"] },
   { name: "Sync Status", href: "/admin/sync-status", icon: Activity, requiredRoles: ["super_admin", "admin"] },
+  { name: "Message Recovery", href: "/admin/recovery", icon: RotateCcw, requiredRoles: ["super_admin", "admin"] },
   { name: "User Management", href: "/admin/users", icon: UserCog, requiredRoles: ["super_admin", "admin"] },
   { name: "Billing", href: "/admin/billing", icon: CreditCard, requiredRoles: ["super_admin", "admin"] },
   { name: "Tenant Management", href: "/admin/tenants", icon: Building2, requiredRoles: ["super_admin"] },
