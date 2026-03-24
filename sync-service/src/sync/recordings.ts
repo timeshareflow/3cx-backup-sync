@@ -202,6 +202,15 @@ export async function syncRecordings(
 
     logger.info(`Processing ${recordings.length} recordings`, { tenantId: tenant.id });
 
+    // Track the latest timestamp to advance the cursor on every run (even all-skipped runs)
+    let latestRecordingTimestamp: string | undefined;
+    for (const r of recordings) {
+      const ts = r.start_time ? new Date(r.start_time).toISOString() : undefined;
+      if (ts && (!latestRecordingTimestamp || ts > latestRecordingTimestamp)) {
+        latestRecordingTimestamp = ts;
+      }
+    }
+
     // Connect to SFTP
     logger.info("Connecting to 3CX server via SFTP for recordings", {
       tenantId: tenant.id,
@@ -449,6 +458,7 @@ export async function syncRecordings(
 
     await updateSyncStatus("recordings", "success", {
       recordsSynced: result.filesSynced,
+      lastSyncedTimestamp: latestRecordingTimestamp,
       notes,
       tenantId: tenant.id,
     });

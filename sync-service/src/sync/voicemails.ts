@@ -80,6 +80,15 @@ export async function syncVoicemails(
 
     logger.info(`Processing ${voicemails.length} voicemails`, { tenantId: tenant.id });
 
+    // Track latest timestamp to advance cursor even when all records are skipped
+    let latestVoicemailTimestamp: string | undefined;
+    for (const v of voicemails) {
+      const ts = v.created_at ? new Date(v.created_at).toISOString() : undefined;
+      if (ts && (!latestVoicemailTimestamp || ts > latestVoicemailTimestamp)) {
+        latestVoicemailTimestamp = ts;
+      }
+    }
+
     // Connect to SFTP
     logger.info("Connecting to 3CX server via SFTP for voicemails", {
       tenantId: tenant.id,
@@ -256,6 +265,7 @@ export async function syncVoicemails(
 
     await updateSyncStatus("voicemails", "success", {
       recordsSynced: result.filesSynced,
+      lastSyncedTimestamp: latestVoicemailTimestamp,
       notes,
       tenantId: tenant.id,
     });
