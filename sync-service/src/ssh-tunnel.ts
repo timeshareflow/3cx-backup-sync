@@ -20,8 +20,8 @@ const SSH_CONFIG = {
   maxRetries: 3,
   retryDelayMs: 5000,
   readyTimeout: 60000,  // 60 seconds (increased from 30)
-  keepaliveInterval: 10000,
-  keepaliveCountMax: 5,
+  keepaliveInterval: 5000,   // Send keepalive every 5s (was 10s)
+  keepaliveCountMax: 3,      // Declare dead after 3 missed keepalives = 15s (was 5 = 50s)
 };
 
 export interface SshTunnel {

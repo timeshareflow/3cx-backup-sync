@@ -212,6 +212,7 @@ export async function getTenantPool(tenant: TenantConfig): Promise<Pool | null> 
       max: 3,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 15000,
+      query_timeout: 25000,  // Kill any query that hangs >25s (SSH tunnel drop protection)
       ssl: false,
     });
 
