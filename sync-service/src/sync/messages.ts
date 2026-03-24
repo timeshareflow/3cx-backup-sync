@@ -22,6 +22,12 @@ import {
   getMessagesByThreecxIds,
 } from "../storage/supabase";
 
+// Rate-limit expensive backfills to avoid hammering Supabase every 20 seconds
+let lastConvSyncAt = 0;
+let lastMediaBackfillAt = 0;
+const CONV_SYNC_INTERVAL_MS = 2 * 60_000;    // sync all conversations at most once per 2 min
+const MEDIA_BACKFILL_INTERVAL_MS = 5 * 60_000; // media backfill at most once per 5 min
+
 export interface MessageSyncResult {
   messagesSynced: number;
   conversationsCreated: number;
@@ -192,10 +198,14 @@ export async function syncMessages(
   try {
     await updateSyncStatus("messages", "running", { tenantId });
 
-    // First, sync ALL conversations from live table (including empty group chats)
-    // This ensures new group chats are visible even before their first message
-    const conversationSync = await syncAllConversations(pool, tenantId);
-    result.conversationsCreated += conversationSync.created;
+    // Sync all conversations from live table (including empty group chats)
+    // Rate-limited to once per 2 minutes to avoid 346 Supabase queries every 20 seconds
+    const now = Date.now();
+    if (now - lastConvSyncAt >= CONV_SYNC_INTERVAL_MS) {
+      lastConvSyncAt = now;
+      const conversationSync = await syncAllConversations(pool, tenantId);
+      result.conversationsCreated += conversationSync.created;
+    }
 
     // Get last synced timestamp
     let lastSynced = await getLastSyncedTimestamp("messages", tenantId);
@@ -425,7 +435,9 @@ export async function syncMessages(
     }
 
     // Backfill: link any remaining unlinked media files using 3CX file mappings
-    if (tenantId) {
+    // Rate-limited to once per 5 minutes — fetches up to 5000 file mappings + Supabase queries per run
+    if (tenantId && Date.now() - lastMediaBackfillAt >= MEDIA_BACKFILL_INTERVAL_MS) {
+      lastMediaBackfillAt = Date.now();
       try {
         const unlinkedCount = await getUnlinkedMediaCount(tenantId);
         if (unlinkedCount > 0) {
