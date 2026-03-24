@@ -2,7 +2,7 @@ import { Pool } from "pg";
 import { logger } from "../utils/logger";
 import { handleError } from "../utils/errors";
 import { getCallRecords } from "../threecx/queries";
-import { insertCallLog, updateSyncStatus, getLastSyncedTimestamp } from "../storage/supabase";
+import { bulkInsertCallLogs, updateSyncStatus, getLastSyncedTimestamp } from "../storage/supabase";
 
 export interface CdrSyncResult {
   recordsSynced: number;
@@ -43,62 +43,45 @@ export async function syncCdr(
 
     logger.info(`Processing ${callRecords.length} CDR records`, { tenantId });
 
-    // Track the latest call timestamp so we can advance the cursor on each run
+    // Advance cursor to the latest record in this batch
     let latestCallTimestamp: string | undefined;
-
     for (const record of callRecords) {
-      // Always advance cursor to the latest record we attempted, whether new or dupe
       const callTs = record.call_started_at
         ? new Date(record.call_started_at).toISOString()
         : undefined;
       if (callTs && (!latestCallTimestamp || callTs > latestCallTimestamp)) {
         latestCallTimestamp = callTs;
       }
-
-      try {
-        const inserted = await insertCallLog({
-          tenant_id: tenantId,
-          threecx_call_id: record.call_id,
-          caller_number: record.caller_number || undefined,
-          caller_name: record.caller_name || undefined,
-          callee_number: record.callee_number || undefined,
-          callee_name: record.callee_name || undefined,
-          extension: record.extension_number || undefined,
-          direction: record.direction,
-          call_type: record.call_type || undefined,
-          status: record.status || undefined,
-          ring_duration_seconds: record.ring_duration || undefined,
-          talk_duration_seconds: record.talk_duration || undefined,
-          total_duration_seconds: record.total_duration || undefined,
-          call_started_at: new Date(record.call_started_at).toISOString(),
-          call_answered_at: record.call_answered_at
-            ? new Date(record.call_answered_at).toISOString()
-            : undefined,
-          call_ended_at: record.call_ended_at
-            ? new Date(record.call_ended_at).toISOString()
-            : undefined,
-          has_recording: record.has_recording,
-        });
-
-        if (inserted) {
-          result.recordsSynced++;
-        } else {
-          result.recordsSkipped++; // duplicate, silently ignored
-        }
-      } catch (error) {
-        const err = handleError(error);
-        if (err.message.includes("duplicate") || err.message.includes("23505")) {
-          result.recordsSkipped++;
-          continue;
-        }
-        result.errors.push({ callId: record.call_id, error: err.message });
-        logger.error("Failed to sync CDR record", {
-          tenantId,
-          callId: record.call_id,
-          error: err.message,
-        });
-      }
     }
+
+    // Bulk upsert all records in batches of 100 — 10 requests instead of 1000
+    const logs = callRecords.map((record) => ({
+      tenant_id: tenantId,
+      threecx_call_id: record.call_id,
+      caller_number: record.caller_number || undefined,
+      caller_name: record.caller_name || undefined,
+      callee_number: record.callee_number || undefined,
+      callee_name: record.callee_name || undefined,
+      extension: record.extension_number || undefined,
+      direction: record.direction,
+      call_type: record.call_type || undefined,
+      status: record.status || undefined,
+      ring_duration_seconds: record.ring_duration || undefined,
+      talk_duration_seconds: record.talk_duration || undefined,
+      total_duration_seconds: record.total_duration || undefined,
+      call_started_at: new Date(record.call_started_at).toISOString(),
+      call_answered_at: record.call_answered_at
+        ? new Date(record.call_answered_at).toISOString()
+        : undefined,
+      call_ended_at: record.call_ended_at
+        ? new Date(record.call_ended_at).toISOString()
+        : undefined,
+      has_recording: record.has_recording,
+    }));
+
+    const { inserted, skipped } = await bulkInsertCallLogs(logs);
+    result.recordsSynced = inserted;
+    result.recordsSkipped = skipped;
 
     await updateSyncStatus("cdr", "success", {
       recordsSynced: result.recordsSynced,

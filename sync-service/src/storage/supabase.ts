@@ -1202,6 +1202,34 @@ export async function insertFax(fax: {
   return data?.id || "";
 }
 
+// Bulk upsert conversations — one request instead of N individual upserts
+export async function bulkUpsertConversations(
+  conversations: Array<{
+    threecx_conversation_id: string;
+    conversation_name?: string | null;
+    channel_type?: string | null;
+    is_external?: boolean;
+    is_group_chat?: boolean;
+    tenant_id?: string;
+  }>
+): Promise<void> {
+  if (conversations.length === 0) return;
+  const client = getSupabaseClient();
+  const records = conversations.map((c) => ({
+    threecx_conversation_id: c.threecx_conversation_id,
+    conversation_name: c.conversation_name ?? null,
+    channel_type: c.channel_type ?? "internal",
+    is_external: c.is_external ?? false,
+    is_group_chat: c.is_group_chat ?? false,
+    participant_count: 2,
+    ...(c.tenant_id ? { tenant_id: c.tenant_id } : {}),
+  }));
+  const { error } = await client
+    .from("conversations")
+    .upsert(records, { onConflict: "tenant_id,threecx_conversation_id" });
+  if (error) throw new SupabaseError("Failed to bulk upsert conversations", { error });
+}
+
 // ============================================
 // CALL LOGS (CDR)
 // ============================================
@@ -1268,6 +1296,49 @@ export async function insertCallLog(callLog: {
   }
 
   return data?.id || "";
+}
+
+// Bulk upsert call logs — batches of 100 instead of 1000 individual requests
+export async function bulkInsertCallLogs(
+  callLogs: Array<Parameters<typeof insertCallLog>[0]>
+): Promise<{ inserted: number; skipped: number }> {
+  if (callLogs.length === 0) return { inserted: 0, skipped: 0 };
+  const client = getSupabaseClient();
+  const BATCH = 100;
+  let inserted = 0;
+  let skipped = 0;
+
+  for (let i = 0; i < callLogs.length; i += BATCH) {
+    const batch = callLogs.slice(i, i + BATCH);
+    const records = batch.map((callLog) => ({
+      tenant_id: callLog.tenant_id,
+      threecx_call_id: callLog.threecx_call_id,
+      caller_number: callLog.caller_number,
+      caller_name: callLog.caller_name,
+      callee_number: callLog.callee_number,
+      callee_name: callLog.callee_name,
+      direction: callLog.direction,
+      call_type: callLog.call_type,
+      status: callLog.status,
+      ring_duration_seconds: callLog.ring_duration_seconds,
+      duration_seconds: callLog.total_duration_seconds || callLog.talk_duration_seconds,
+      started_at: callLog.call_started_at,
+      answered_at: callLog.call_answered_at,
+      ended_at: callLog.call_ended_at,
+      recording_id: callLog.recording_id,
+    }));
+
+    const { data, error } = await client
+      .from("call_logs")
+      .upsert(records, { onConflict: "tenant_id,threecx_call_id", ignoreDuplicates: true })
+      .select("id");
+
+    if (error) throw new SupabaseError("Failed to bulk insert call logs", { error });
+    inserted += (data?.length ?? 0);
+    skipped += batch.length - (data?.length ?? 0);
+  }
+
+  return { inserted, skipped };
 }
 
 // ============================================

@@ -10,6 +10,7 @@ import {
 } from "../threecx/queries";
 import {
   upsertConversation,
+  bulkUpsertConversations,
   upsertParticipant,
   updateConversationNameFromParticipants,
   insertMessage,
@@ -25,8 +26,8 @@ import {
 // Rate-limit expensive backfills to avoid hammering Supabase every 20 seconds
 let lastConvSyncAt = 0;
 let lastMediaBackfillAt = 0;
-const CONV_SYNC_INTERVAL_MS = 2 * 60_000;    // sync all conversations at most once per 2 min
-const MEDIA_BACKFILL_INTERVAL_MS = 5 * 60_000; // media backfill at most once per 5 min
+const CONV_SYNC_INTERVAL_MS = 2 * 60_000;      // sync all conversations at most once per 2 min
+const MEDIA_BACKFILL_INTERVAL_MS = 30 * 60_000; // media backfill at most once per 30 min
 
 export interface MessageSyncResult {
   messagesSynced: number;
@@ -118,70 +119,28 @@ async function syncAllConversations(
   pool: Pool | undefined,
   tenantId: string | undefined
 ): Promise<{ created: number; updated: number }> {
-  let conversationsCreated = 0;
-  let conversationsUpdated = 0;
-
   try {
-    // Get ALL conversations from live table, including empty group chats
     const liveConversations = await getAllLiveConversations(pool);
+    if (liveConversations.length === 0) return { created: 0, updated: 0 };
 
-    for (const conv of liveConversations) {
-      try {
-        // Check if conversation already exists in Supabase
-        const existingId = await getConversationId(conv.conversation_id, tenantId);
+    // Single bulk upsert — 1 request instead of 346 individual upserts
+    await bulkUpsertConversations(
+      liveConversations.map((conv) => ({
+        threecx_conversation_id: conv.conversation_id,
+        conversation_name: conv.chat_name || null,
+        channel_type: "internal",
+        is_external: conv.is_external,
+        is_group_chat: conv.is_group_chat,
+        tenant_id: tenantId,
+      }))
+    );
 
-        if (!existingId) {
-          // Create the conversation - participants will be synced when messages come in
-          await upsertConversation({
-            threecx_conversation_id: conv.conversation_id,
-            conversation_name: conv.chat_name || null,
-            channel_type: "internal", // Default, will be updated when messages sync
-            is_external: conv.is_external,
-            is_group_chat: conv.is_group_chat, // Use is_group_chat from 3CX data
-            tenant_id: tenantId,
-          });
-
-          conversationsCreated++;
-
-          logger.debug(`Created conversation from live table: ${conv.conversation_id}`, {
-            name: conv.chat_name,
-            messageCount: conv.message_count,
-            isGroupChat: conv.is_group_chat,
-          });
-        } else {
-          // Update existing conversation with latest data (name and is_group_chat)
-          await upsertConversation({
-            threecx_conversation_id: conv.conversation_id,
-            conversation_name: conv.chat_name || null,
-            channel_type: "internal",
-            is_external: conv.is_external,
-            is_group_chat: conv.is_group_chat,
-            tenant_id: tenantId,
-          });
-          conversationsUpdated++;
-
-          logger.debug(`Updated conversation: ${conv.conversation_id}`, {
-            name: conv.chat_name,
-            isGroupChat: conv.is_group_chat,
-          });
-        }
-      } catch (error) {
-        logger.warn(`Failed to sync conversation ${conv.conversation_id}`, {
-          error: (error as Error).message,
-        });
-      }
-    }
-
-    if (conversationsCreated > 0 || conversationsUpdated > 0) {
-      logger.info(`Conversations from live table: ${conversationsCreated} created, ${conversationsUpdated} updated`);
-    }
+    logger.info(`Conversations from live table: ${liveConversations.length} upserted`);
+    return { created: 0, updated: liveConversations.length };
   } catch (error) {
-    logger.warn("Failed to sync live conversations", {
-      error: (error as Error).message,
-    });
+    logger.warn("Failed to sync live conversations", { error: (error as Error).message });
+    return { created: 0, updated: 0 };
   }
-
-  return { created: conversationsCreated, updated: conversationsUpdated };
 }
 
 export async function syncMessages(
