@@ -1256,18 +1256,9 @@ export async function insertCallLog(callLog: {
       ignoreDuplicates: true,
     })
     .select("id")
-    .single();
+    .maybeSingle();
 
   if (error) {
-    if (error.code === "23505") {
-      const { data: existing } = await client
-        .from("call_logs")
-        .select("id")
-        .eq("tenant_id", callLog.tenant_id)
-        .eq("threecx_call_id", callLog.threecx_call_id)
-        .single();
-      return existing?.id || "";
-    }
     logger.error("Call log insert failed", {
       errorCode: error.code,
       errorMessage: error.message,
