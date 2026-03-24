@@ -262,7 +262,12 @@ export async function POST(request: NextRequest) {
             results.conversationsCreated++;
           }
 
-          conversationIdCache.set(threecxConvId, convUUID);
+          if (convUUID) conversationIdCache.set(threecxConvId, convUUID);
+        }
+
+        if (!convUUID) {
+          results.errors.push({ index: i, reason: "Could not resolve conversation UUID" });
+          continue;
         }
 
         // ── Insert message ──────────────────────────────────────────────────
