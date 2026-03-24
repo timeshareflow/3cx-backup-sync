@@ -18,6 +18,20 @@ let backgroundSyncTask: cron.ScheduledTask | null = null;
 // Cycle counter for full syncs
 let chatCycleCount = 0;
 
+// Cache active tenants to avoid hitting Supabase every 20 seconds
+let activeTenantCache: { tenants: { id: string }[]; fetchedAt: number } | null = null;
+const TENANT_CACHE_TTL_MS = 60_000; // refresh every 60 seconds
+
+async function getCachedActiveUserTenants() {
+  const now = Date.now();
+  if (activeTenantCache && now - activeTenantCache.fetchedAt < TENANT_CACHE_TTL_MS) {
+    return activeTenantCache.tenants;
+  }
+  const tenants = await getActiveUserTenants();
+  activeTenantCache = { tenants, fetchedAt: now };
+  return tenants;
+}
+
 // Sync intervals (configurable via env)
 // NOTE: Computed lazily via getSyncIntervals() because dotenv.config() runs after module imports
 function getSyncIntervals() {
@@ -82,6 +96,10 @@ async function hasRecentUnlinkedMedia(): Promise<boolean> {
   }
 }
 
+// Max time allowed for chat/messages sync per run (90 seconds)
+// If SSH tunnel is dead the DB call hangs — this timeout forces recovery
+const CHAT_SYNC_TIMEOUT_MS = 90_000;
+
 // Run chat/messages sync (fast - every 15-30 seconds)
 // CRITICAL: Messages sync should NEVER be blocked by media/recordings/full sync
 // This ensures chats are always up to date regardless of what else is running
@@ -92,7 +110,7 @@ async function runChatSync(): Promise<void> {
   }
 
   try {
-    const activeTenants = await getActiveUserTenants();
+    const activeTenants = await getCachedActiveUserTenants();
     if (activeTenants.length === 0) {
       return;
     }
@@ -100,34 +118,43 @@ async function runChatSync(): Promise<void> {
     runningSync.add("messages");
     chatCycleCount++;
 
-    // Check for manual triggers
-    const hasManualTrigger = await checkForManualTriggers();
-    if (hasManualTrigger) {
-      logger.info("Manual sync triggered - running full sync");
-      await clearManualTriggers();
+    // Check for manual triggers (only every 3rd cycle to reduce Supabase queries)
+    if (chatCycleCount % 3 === 0) {
+      const hasManualTrigger = await checkForManualTriggers();
+      if (hasManualTrigger) {
+        logger.info("Manual sync triggered - running full sync");
+        await clearManualTriggers();
 
-      // Run full sync instead
-      runningSync.delete("messages");
-      runningSync.add("full");
+        runningSync.delete("messages");
+        runningSync.add("full");
 
-      await runMultiTenantSync({
-        tenantIds: activeTenants.map((t) => t.id),
-      });
+        await Promise.race([
+          runMultiTenantSync({ tenantIds: activeTenants.map((t) => t.id) }),
+          new Promise<void>((_, reject) =>
+            setTimeout(() => reject(new Error("Full sync timed out after 5m")), 5 * 60_000)
+          ),
+        ]);
 
-      runningSync.delete("full");
-      return;
+        runningSync.delete("full");
+        return;
+      }
     }
 
     logger.debug(`Chat sync for ${activeTenants.length} tenant(s)`);
 
-    await runMultiTenantSyncByType(
-      ["messages"],
-      activeTenants.map((t) => t.id)
-    );
+    await Promise.race([
+      runMultiTenantSyncByType(["messages"], activeTenants.map((t) => t.id)),
+      new Promise<void>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Chat sync timed out after ${CHAT_SYNC_TIMEOUT_MS / 1000}s`)),
+          CHAT_SYNC_TIMEOUT_MS
+        )
+      ),
+    ]);
 
     // After chat sync, check if new media messages need files downloaded
-    // Triggers an immediate media sync so thumbnails appear quickly
-    if (!runningSync.has("media") && !runningSync.has("full")) {
+    // Only check every 6th cycle (~2 minutes) to reduce Supabase read load
+    if (chatCycleCount % 6 === 0 && !runningSync.has("media") && !runningSync.has("full")) {
       const needsMedia = await hasRecentUnlinkedMedia();
       if (needsMedia) {
         logger.info("New media messages detected - triggering immediate media sync");
@@ -135,7 +162,12 @@ async function runChatSync(): Promise<void> {
       }
     }
   } catch (error) {
-    logger.error("Chat sync failed", { error: (error as Error).message });
+    const msg = (error as Error).message;
+    logger.error("Chat sync failed", { error: msg });
+    // Invalidate tenant cache on timeout so next run re-fetches fresh state
+    if (msg.includes("timed out")) {
+      activeTenantCache = null;
+    }
   } finally {
     runningSync.delete("messages");
   }
@@ -227,6 +259,9 @@ async function runRecordingsSync(): Promise<void> {
   }
 }
 
+// Max time allowed for CDR sync per run (3 minutes)
+const CDR_SYNC_TIMEOUT_MS = 3 * 60_000;
+
 // Run CDR sync (every 5 minutes)
 // CDR is lightweight like messages, so don't block on full sync
 async function runCdrSync(): Promise<void> {
@@ -236,7 +271,7 @@ async function runCdrSync(): Promise<void> {
   }
 
   try {
-    const activeTenants = await getActiveUserTenants();
+    const activeTenants = await getCachedActiveUserTenants();
     if (activeTenants.length === 0) {
       return;
     }
@@ -245,10 +280,15 @@ async function runCdrSync(): Promise<void> {
 
     logger.debug(`CDR sync for ${activeTenants.length} tenant(s)`);
 
-    await runMultiTenantSyncByType(
-      ["cdr"],
-      activeTenants.map((t) => t.id)
-    );
+    await Promise.race([
+      runMultiTenantSyncByType(["cdr"], activeTenants.map((t) => t.id)),
+      new Promise<void>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`CDR sync timed out after ${CDR_SYNC_TIMEOUT_MS / 1000}s`)),
+          CDR_SYNC_TIMEOUT_MS
+        )
+      ),
+    ]);
   } catch (error) {
     logger.error("CDR sync failed", { error: (error as Error).message });
   } finally {
@@ -286,6 +326,9 @@ async function runExtensionsSync(): Promise<void> {
   }
 }
 
+// Max time allowed for background sync (5 minutes)
+const BACKGROUND_SYNC_TIMEOUT_MS = 5 * 60_000;
+
 // Run lightweight sync for inactive tenants (every 30 minutes)
 // Only syncs messages and CDR - media/recordings now run for all tenants via dedicated schedulers
 async function runBackgroundSync(): Promise<void> {
@@ -308,10 +351,15 @@ async function runBackgroundSync(): Promise<void> {
 
     // Only sync messages and CDR for inactive tenants to keep data fresh
     // Media/recordings sync is heavier and only runs when users are active
-    await runMultiTenantSyncByType(
-      ["messages", "cdr"],
-      inactiveTenants.map((t) => t.id)
-    );
+    await Promise.race([
+      runMultiTenantSyncByType(["messages", "cdr"], inactiveTenants.map((t) => t.id)),
+      new Promise<void>((_, reject) =>
+        setTimeout(
+          () => reject(new Error(`Background sync timed out after ${BACKGROUND_SYNC_TIMEOUT_MS / 1000}s`)),
+          BACKGROUND_SYNC_TIMEOUT_MS
+        )
+      ),
+    ]);
   } catch (error) {
     logger.error("Background sync failed", { error: (error as Error).message });
   } finally {
