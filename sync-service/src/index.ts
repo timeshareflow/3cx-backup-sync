@@ -42,7 +42,7 @@ async function validateEnvironment(): Promise<void> {
   }
 }
 
-async function initialize(): Promise<void> {
+async function initialize(): Promise<boolean> {
   logger.info("=====================================================");
   logger.info("  3CX BackupWiz - Centralized Sync Service");
   logger.info("  Connects remotely to customer 3CX servers");
@@ -58,13 +58,27 @@ async function initialize(): Promise<void> {
   resetAllCircuits();
   logger.info("Circuit breakers reset");
 
-  // Test Supabase connection
+  // Test Supabase connection — retry with backoff so a transient outage
+  // doesn't cause a PM2 crash-loop hammering Supabase 100+ times
   const supabase = getSupabaseClient();
-  const { error } = await supabase.from("sync_status").select("id").limit(1);
-  if (error) {
-    throw new Error(`Supabase connection failed: ${error.message}`);
+  let supabaseReady = false;
+  const delays = [0, 5000, 15000, 30000, 60000]; // 0s, 5s, 15s, 30s, 60s
+  for (const delay of delays) {
+    if (delay > 0) {
+      logger.warn(`Supabase not ready, retrying in ${delay / 1000}s...`);
+      await new Promise((r) => setTimeout(r, delay));
+    }
+    const { error: connErr } = await supabase.from("sync_status").select("id").limit(1);
+    if (!connErr) { supabaseReady = true; break; }
+    logger.warn(`Supabase connection attempt failed: ${connErr.message}`);
   }
-  logger.info("Supabase connection verified");
+  if (!supabaseReady) {
+    logger.error("Supabase unavailable after retries — starting scheduler anyway, syncs will retry automatically");
+  } else {
+    logger.info("Supabase connection verified");
+  }
+
+  return supabaseReady;
 
   // Fetch active tenants from Supabase
   const tenants = await getActiveTenants();
@@ -345,7 +359,7 @@ async function runManualSync(): Promise<void> {
 
 async function main(): Promise<void> {
   try {
-    await initialize();
+    const supabaseReady = await initialize();
 
     // Start control server
     startControlServer();
@@ -355,19 +369,21 @@ async function main(): Promise<void> {
     startScheduler();
 
     // Run lightweight initial sync (messages only) to get started quickly
-    // The scheduler will handle full syncs for media, recordings, etc.
-    logger.info("");
-    logger.info("Running lightweight initial sync (messages only)...");
+    // Skip if Supabase was unavailable at startup — scheduler will catch up
+    if (supabaseReady) {
+      logger.info("");
+      logger.info("Running lightweight initial sync (messages only)...");
 
-    isSyncing = true;
-    const startTime = Date.now();
-    await runMultiTenantSyncByType(["messages"]);
-    lastSyncTime = new Date();
-    isSyncing = false;
+      isSyncing = true;
+      const startTime = Date.now();
+      await runMultiTenantSyncByType(["messages"]);
+      lastSyncTime = new Date();
+      isSyncing = false;
 
-    logger.info("Initial sync completed", {
-      duration: `${Date.now() - startTime}ms`,
-    });
+      logger.info("Initial sync completed", {
+        duration: `${Date.now() - startTime}ms`,
+      });
+    }
 
     logger.info("");
     logger.info("Sync service is now running");
@@ -376,7 +392,8 @@ async function main(): Promise<void> {
     logger.error("Failed to start sync service", {
       error: (error as Error).message,
     });
-    process.exit(1);
+    // Don't exit — PM2 crash-loops make Supabase outages worse.
+    // Log the error and let the scheduler retry on its own intervals.
   }
 }
 
