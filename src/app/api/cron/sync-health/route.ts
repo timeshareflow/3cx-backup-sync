@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendSyncError, sendEmail } from "@/lib/notifications";
+import { sendEmail } from "@/lib/notifications";
 
 export const dynamic = "force-dynamic";
 
@@ -114,7 +114,7 @@ export async function GET(request: NextRequest) {
               ? `${sync.sync_type} sync has been failing: ${sync.last_error}`
               : `${sync.sync_type} sync has not succeeded in ${stalenessMinutes} minutes`;
 
-            // Always alert the override email (ALERT_EMAIL env var) directly
+            // Only alert the super admin (ALERT_EMAIL env var) — never tenant admins
             const alertEmail = process.env.ALERT_EMAIL;
             if (alertEmail) {
               try {
@@ -134,34 +134,9 @@ export async function GET(request: NextRequest) {
                   `,
                   text: `BackupWiz Alert\n\nTenant: ${tenant.name}\nSync type: ${sync.sync_type}\nStatus: ${sync.status}\nStaleness: ${stalenessMinutes} minutes\nError: ${sync.last_error || "none"}\n\n${errorMessage}`,
                 });
-                alertsSent.push(`${sync.sync_type} -> ${alertEmail} (override)`);
+                alertsSent.push(`${sync.sync_type} -> ${alertEmail}`);
               } catch (err) {
-                console.error(`Failed to send override alert to ${alertEmail}:`, err);
-              }
-            }
-
-            // Get admin users for this tenant
-            const { data: adminUsers } = await supabase
-              .from("user_tenants")
-              .select("user_id, user_profiles(id, full_name, email)")
-              .eq("tenant_id", tenant.id)
-              .in("role", ["admin", "owner"]);
-
-            if (adminUsers && adminUsers.length > 0) {
-              for (const admin of adminUsers) {
-                const profile = (Array.isArray(admin.user_profiles) ? admin.user_profiles[0] : admin.user_profiles) as { id: string; full_name: string | null; email: string } | null;
-                if (profile) {
-                  try {
-                    await sendSyncError(profile.id, tenant.id, {
-                      user_name: profile.full_name || profile.email.split("@")[0],
-                      tenant_name: tenant.name,
-                      error_message: errorMessage,
-                    });
-                    alertsSent.push(`${sync.sync_type} -> ${profile.email}`);
-                  } catch (err) {
-                    console.error(`Failed to send sync alert to ${profile.email}:`, err);
-                  }
-                }
+                console.error(`Failed to send alert to ${alertEmail}:`, err);
               }
             }
 
