@@ -43,9 +43,20 @@ export async function syncCdr(
 
     logger.info(`Processing ${callRecords.length} CDR records`, { tenantId });
 
+    // Track the latest call timestamp so we can advance the cursor on each run
+    let latestCallTimestamp: string | undefined;
+
     for (const record of callRecords) {
+      // Always advance cursor to the latest record we attempted, whether new or dupe
+      const callTs = record.call_started_at
+        ? new Date(record.call_started_at).toISOString()
+        : undefined;
+      if (callTs && (!latestCallTimestamp || callTs > latestCallTimestamp)) {
+        latestCallTimestamp = callTs;
+      }
+
       try {
-        await insertCallLog({
+        const inserted = await insertCallLog({
           tenant_id: tenantId,
           threecx_call_id: record.call_id,
           caller_number: record.caller_number || undefined,
@@ -69,18 +80,18 @@ export async function syncCdr(
           has_recording: record.has_recording,
         });
 
-        result.recordsSynced++;
+        if (inserted) {
+          result.recordsSynced++;
+        } else {
+          result.recordsSkipped++; // duplicate, silently ignored
+        }
       } catch (error) {
         const err = handleError(error);
-        // Skip duplicates silently
         if (err.message.includes("duplicate") || err.message.includes("23505")) {
           result.recordsSkipped++;
           continue;
         }
-        result.errors.push({
-          callId: record.call_id,
-          error: err.message,
-        });
+        result.errors.push({ callId: record.call_id, error: err.message });
         logger.error("Failed to sync CDR record", {
           tenantId,
           callId: record.call_id,
@@ -91,6 +102,7 @@ export async function syncCdr(
 
     await updateSyncStatus("cdr", "success", {
       recordsSynced: result.recordsSynced,
+      lastSyncedTimestamp: latestCallTimestamp,
       tenantId,
     });
 
