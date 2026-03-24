@@ -1,6 +1,41 @@
 import { NextRequest, NextResponse } from "next/server";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getTenantContext } from "@/lib/tenant";
+
+function getS3Client() {
+  return new S3Client({
+    endpoint: `https://${process.env.DO_SPACES_ENDPOINT || "nyc3.digitaloceanspaces.com"}`,
+    region: process.env.DO_SPACES_REGION || "nyc3",
+    credentials: {
+      accessKeyId: process.env.DO_SPACES_KEY || "",
+      secretAccessKey: process.env.DO_SPACES_SECRET || "",
+    },
+    forcePathStyle: false,
+  });
+}
+
+async function uploadToSpaces(
+  tenantId: string,
+  filename: string,
+  buffer: Buffer,
+  contentType: string
+): Promise<string> {
+  const bucket = process.env.DO_SPACES_BUCKET || "3cxbackupwiz";
+  // Sanitize filename
+  const safeName = filename.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 200);
+  const key = `${tenantId}/recovered/${Date.now()}_${safeName}`;
+
+  await getS3Client().send(new PutObjectCommand({
+    Bucket: bucket,
+    Key: key,
+    Body: buffer,
+    ContentType: contentType,
+    ACL: "private",
+  }));
+
+  return key;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -21,6 +56,16 @@ interface ImportPayload {
   userAgent?: string;
   recoveryRange?: { from: string; to: string };
   recoveredMessages?: ExtractedRecord[];
+  recoveredMedia?: Array<{
+    url: string;
+    filename: string;
+    cacheName: string;
+    contentType: string;
+    sizeBytes: number;
+    base64?: string;   // data URL: "data:image/jpeg;base64,..."
+    skipped?: boolean;
+    reason?: string;
+  }>;
   otherData?: Record<string, unknown[]>;
   databases?: unknown[];
 }
@@ -174,6 +219,8 @@ export async function POST(request: NextRequest) {
       conversationsCreated: 0,
       messagesImported: 0,
       messagesSkipped: 0,
+      mediaImported: 0,
+      mediaSkipped: 0,
       errors: [] as Array<{ index: number; reason: string; record?: unknown }>,
     };
 
@@ -336,16 +383,90 @@ export async function POST(request: NextRequest) {
         .then(() => {}); // best-effort, ignore errors
     }
 
+    // ── Phase 2: Import media files ────────────────────────────────────────
+    const mediaItems = (payload.recoveredMedia || []).filter(m => !m.skipped && m.base64);
+    console.log(`[Recovery] Media files to process: ${mediaItems.length}`);
+
+    const spacesConfigured = !!(process.env.DO_SPACES_KEY && process.env.DO_SPACES_SECRET);
+
+    for (let i = 0; i < mediaItems.length; i++) {
+      const item = mediaItems[i];
+      try {
+        // Check for duplicate by original URL stored in metadata
+        const { data: existingMedia } = await supabase
+          .from("media_files")
+          .select("id")
+          .eq("tenant_id", context.tenantId)
+          .contains("metadata", { recovered_url: item.url })
+          .limit(1);
+
+        if (existingMedia && existingMedia.length > 0) {
+          results.mediaSkipped++;
+          continue;
+        }
+
+        // Decode base64 data URL → Buffer
+        // Format: "data:image/jpeg;base64,/9j/4AAQ..."
+        const commaIdx = item.base64!.indexOf(",");
+        if (commaIdx === -1) {
+          results.errors.push({ index: i, reason: `Media ${item.filename}: invalid base64 data URL` });
+          continue;
+        }
+        const base64Data = item.base64!.slice(commaIdx + 1);
+        const buffer = Buffer.from(base64Data, "base64");
+
+        let storagePath: string | null = null;
+        if (spacesConfigured) {
+          try {
+            storagePath = await uploadToSpaces(context.tenantId, item.filename, buffer, item.contentType);
+          } catch (uploadErr) {
+            console.error(`[Recovery] Spaces upload failed for ${item.filename}:`, uploadErr);
+            results.errors.push({ index: i, reason: `Upload failed: ${uploadErr instanceof Error ? uploadErr.message : "unknown"}` });
+            continue;
+          }
+        } else {
+          // Spaces not configured — store metadata only so we know what was recovered
+          storagePath = `recovered/${context.tenantId}/${item.filename}`;
+        }
+
+        const { error: mediaError } = await supabase.from("media_files").insert({
+          tenant_id: context.tenantId,
+          file_name: item.filename,
+          file_size: item.sizeBytes,
+          mime_type: item.contentType,
+          storage_path: storagePath,
+          metadata: {
+            recovered_url: item.url,
+            cache_name: item.cacheName,
+            recovered_at: new Date().toISOString(),
+            spaces_uploaded: spacesConfigured,
+          },
+        });
+
+        if (mediaError) {
+          if (mediaError.code === "23505") {
+            results.mediaSkipped++;
+          } else {
+            results.errors.push({ index: i, reason: `Media insert failed: ${mediaError.message}` });
+          }
+          continue;
+        }
+
+        results.mediaImported++;
+      } catch (err) {
+        results.errors.push({ index: i, reason: `Media ${item.filename}: ${err instanceof Error ? err.message : "unknown"}` });
+      }
+    }
+
     console.log(
-      `[Recovery] Import complete: ${results.messagesImported} imported, ` +
-      `${results.messagesSkipped} skipped, ${results.errors.length} errors`
+      `[Recovery] Import complete: ${results.messagesImported} messages, ` +
+      `${results.mediaImported} media imported, ${results.errors.length} errors`
     );
 
     return NextResponse.json({
       success: true,
       results: {
         ...results,
-        // Don't return full error records in response (may be large)
         errors: results.errors.slice(0, 20).map(e => ({ index: e.index, reason: e.reason })),
         errorCount: results.errors.length,
       },

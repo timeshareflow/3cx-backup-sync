@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { sendSyncError } from "@/lib/notifications";
+import { sendSyncError, sendEmail } from "@/lib/notifications";
 
 export const dynamic = "force-dynamic";
 
@@ -110,6 +110,36 @@ export async function GET(request: NextRequest) {
           const shouldNotify = await checkRateLimit(supabase, tenant.id, sync.sync_type);
 
           if (shouldNotify) {
+            const errorMessage = sync.last_error
+              ? `${sync.sync_type} sync has been failing: ${sync.last_error}`
+              : `${sync.sync_type} sync has not succeeded in ${stalenessMinutes} minutes`;
+
+            // Always alert the override email (ALERT_EMAIL env var) directly
+            const alertEmail = process.env.ALERT_EMAIL;
+            if (alertEmail) {
+              try {
+                await sendEmail({
+                  to: alertEmail,
+                  subject: `[BackupWiz ALERT] ${tenant.name} — ${sync.sync_type} sync stalled`,
+                  html: `
+                    <p><strong>Sync type:</strong> ${sync.sync_type}</p>
+                    <p><strong>Tenant:</strong> ${tenant.name}</p>
+                    <p><strong>Status:</strong> ${sync.status}</p>
+                    <p><strong>Last success:</strong> ${sync.last_success_at || "never"}</p>
+                    <p><strong>Staleness:</strong> ${stalenessMinutes} minutes</p>
+                    <p><strong>Error:</strong> ${sync.last_error || "none"}</p>
+                    <p><strong>Message:</strong> ${errorMessage}</p>
+                    <hr/>
+                    <p style="color:#888;font-size:12px">This alert was sent because the sync health check detected a critical issue. You will not receive another alert for this sync type for 1 hour.</p>
+                  `,
+                  text: `BackupWiz Alert\n\nTenant: ${tenant.name}\nSync type: ${sync.sync_type}\nStatus: ${sync.status}\nStaleness: ${stalenessMinutes} minutes\nError: ${sync.last_error || "none"}\n\n${errorMessage}`,
+                });
+                alertsSent.push(`${sync.sync_type} -> ${alertEmail} (override)`);
+              } catch (err) {
+                console.error(`Failed to send override alert to ${alertEmail}:`, err);
+              }
+            }
+
             // Get admin users for this tenant
             const { data: adminUsers } = await supabase
               .from("user_tenants")
@@ -118,10 +148,6 @@ export async function GET(request: NextRequest) {
               .in("role", ["admin", "owner"]);
 
             if (adminUsers && adminUsers.length > 0) {
-              const errorMessage = sync.last_error
-                ? `${sync.sync_type} sync has been failing: ${sync.last_error}`
-                : `${sync.sync_type} sync has not succeeded in ${stalenessMinutes} minutes`;
-
               for (const admin of adminUsers) {
                 const profile = (Array.isArray(admin.user_profiles) ? admin.user_profiles[0] : admin.user_profiles) as { id: string; full_name: string | null; email: string } | null;
                 if (profile) {
@@ -137,23 +163,23 @@ export async function GET(request: NextRequest) {
                   }
                 }
               }
-
-              // Log the notification to prevent spam
-              await supabase.from("notification_logs").insert({
-                tenant_id: tenant.id,
-                notification_type: "sync_health_alert",
-                channel: "email",
-                recipient: "admins",
-                subject: `Sync Alert: ${sync.sync_type} stalled`,
-                status: "sent",
-                metadata: {
-                  sync_type: sync.sync_type,
-                  staleness_minutes: stalenessMinutes,
-                  health,
-                },
-                sent_at: new Date().toISOString(),
-              });
             }
+
+            // Log the notification to prevent spam
+            await supabase.from("notification_logs").insert({
+              tenant_id: tenant.id,
+              notification_type: "sync_health_alert",
+              channel: "email",
+              recipient: "admins",
+              subject: `Sync Alert: ${sync.sync_type} stalled`,
+              status: "sent",
+              metadata: {
+                sync_type: sync.sync_type,
+                staleness_minutes: stalenessMinutes,
+                health,
+              },
+              sent_at: new Date().toISOString(),
+            });
           }
         }
       }

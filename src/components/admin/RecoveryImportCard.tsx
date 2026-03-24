@@ -10,6 +10,8 @@ interface ImportResults {
   conversationsCreated: number;
   messagesImported: number;
   messagesSkipped: number;
+  mediaImported: number;
+  mediaSkipped: number;
   errorCount: number;
   errors: Array<{ index: number; reason: string }>;
 }
@@ -250,6 +252,18 @@ It does NOT send anything to the internet automatically.`;
                 <dt className="text-slate-600">Already existed (skipped)</dt>
                 <dd className="font-semibold text-slate-800">{results.messagesSkipped}</dd>
               </div>
+              {(results.mediaImported > 0 || results.mediaSkipped > 0) && (
+                <>
+                  <div>
+                    <dt className="text-emerald-700">Media files imported</dt>
+                    <dd className="font-bold text-emerald-900 text-lg">{results.mediaImported.toLocaleString()}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-slate-600">Media already existed</dt>
+                    <dd className="font-semibold text-slate-800">{results.mediaSkipped}</dd>
+                  </div>
+                </>
+              )}
             </dl>
             {results.errorCount > 0 && (
               <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg">
