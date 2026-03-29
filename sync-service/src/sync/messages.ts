@@ -393,6 +393,22 @@ export async function syncMessages(
       }
     }
 
+    // Mark messages sync as successful NOW — before the backfill — so health checks
+    // don't see stale last_success_at while the backfill runs (can take 10-15+ min)
+    await updateSyncStatus("messages", "success", {
+      lastSyncedTimestamp: lastTimestamp || undefined,
+      recordsSynced: result.messagesSynced,
+      tenantId,
+    });
+
+    logger.info("Message sync completed", {
+      tenantId,
+      synced: result.messagesSynced,
+      conversations: result.conversationsCreated,
+      errors: result.errors.length,
+      totalProcessed,
+    });
+
     // Backfill: link any remaining unlinked media files using 3CX file mappings
     // Rate-limited to once per 5 minutes — fetches up to 5000 file mappings + Supabase queries per run
     if (tenantId && Date.now() - lastMediaBackfillAt >= MEDIA_BACKFILL_INTERVAL_MS) {
@@ -439,21 +455,6 @@ export async function syncMessages(
         });
       }
     }
-
-    // Final update sync status
-    await updateSyncStatus("messages", "success", {
-      lastSyncedTimestamp: lastTimestamp || undefined,
-      recordsSynced: result.messagesSynced,
-      tenantId,
-    });
-
-    logger.info("Message sync completed", {
-      tenantId,
-      synced: result.messagesSynced,
-      conversations: result.conversationsCreated,
-      errors: result.errors.length,
-      totalProcessed,
-    });
 
     return result;
   } catch (error) {

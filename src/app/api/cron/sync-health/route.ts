@@ -6,14 +6,14 @@ export const dynamic = "force-dynamic";
 
 // Max minutes since last success before alerting
 const STALENESS_THRESHOLDS: Record<string, { warning: number; critical: number }> = {
-  messages:   { warning: 10,  critical: 15 },
-  media:      { warning: 20,  critical: 30 },
-  cdr:        { warning: 15,  critical: 30 },
-  recordings: { warning: 30,  critical: 60 },
-  voicemails: { warning: 30,  critical: 60 },
-  faxes:      { warning: 30,  critical: 60 },
-  meetings:   { warning: 30,  critical: 60 },
-  extensions: { warning: 90,  critical: 120 },
+  messages:   { warning: 45,  critical: 90 },
+  media:      { warning: 30,  critical: 60 },
+  cdr:        { warning: 30,  critical: 60 },
+  recordings: { warning: 60,  critical: 120 },
+  voicemails: { warning: 60,  critical: 120 },
+  faxes:      { warning: 60,  critical: 120 },
+  meetings:   { warning: 60,  critical: 120 },
+  extensions: { warning: 120, critical: 240 },
 };
 
 type HealthLevel = "healthy" | "warning" | "critical";
