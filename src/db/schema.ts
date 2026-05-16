@@ -319,7 +319,7 @@ export const mediaFiles = pgTable(
     height: integer("height"),
     durationSeconds: integer("duration_seconds"),
     metadata: jsonb("metadata").default({}),
-    storageBackend: varchar("storage_backend", { length: 20 }).default("supabase"), // 'supabase' or 'spaces'
+    storageBackend: varchar("storage_backend", { length: 20 }).default("spaces"),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   },
   (table) => ({
@@ -353,6 +353,7 @@ export const callRecordings = pgTable(
     callEndedAt: timestamp("call_ended_at", { withTimezone: true }),
     recordedAt: timestamp("recorded_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    storageBackend: varchar("storage_backend", { length: 20 }).default("spaces"),
   },
   (table) => ({
     tenantIdx: index("idx_recordings_tenant").on(table.tenantId),
@@ -383,7 +384,7 @@ export const voicemails = pgTable(
     receivedAt: timestamp("received_at", { withTimezone: true }).notNull(),
     metadata: jsonb("metadata").default({}),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
-    storageBackend: varchar("storage_backend", { length: 20 }).default("supabase"),
+    storageBackend: varchar("storage_backend", { length: 20 }).default("spaces"),
   },
   (table) => ({
     tenantIdx: index("idx_voicemails_tenant").on(table.tenantId),
@@ -414,6 +415,7 @@ export const faxes = pgTable(
     status: varchar("status", { length: 50 }),
     sentReceivedAt: timestamp("sent_received_at", { withTimezone: true }).notNull(),
     createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+    storageBackend: varchar("storage_backend", { length: 20 }).default("spaces"),
   },
   (table) => ({
     tenantIdx: index("idx_faxes_tenant").on(table.tenantId),

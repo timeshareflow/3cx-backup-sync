@@ -9,5 +9,12 @@
       "tag": "0000_white_johnny_blaze",
       "breakpoints": true
     }
+    ,{
+      "idx": 1,
+      "version": "7",
+      "when": 1747353600000,
+      "tag": "0001_add_faxes_storage_backend",
+      "breakpoints": true
+    }
   ]
 }

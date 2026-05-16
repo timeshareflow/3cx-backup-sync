@@ -4,52 +4,9 @@ import { getTenantContext } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
-interface CallStats {
-  totalCalls: number;
-  inboundCalls: number;
-  outboundCalls: number;
-  internalCalls: number;
-  answeredCalls: number;
-  missedCalls: number;
-  avgTalkDuration: number;
-  avgRingDuration: number;
-  totalTalkTime: number;
-}
-
-interface DailyCallVolume {
-  date: string;
-  inbound: number;
-  outbound: number;
-  internal: number;
-  total: number;
-}
-
-interface HourlyDistribution {
-  hour: number;
-  calls: number;
-}
-
-interface ExtensionStats {
-  extension: string;
-  name: string | null;
-  totalCalls: number;
-  inbound: number;
-  outbound: number;
-  avgTalkDuration: number;
-}
-
-interface QueueStats {
-  queueName: string;
-  totalCalls: number;
-  answered: number;
-  abandoned: number;
-  avgWaitTime: number;
-  avgTalkTime: number;
-}
-
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
-  const period = searchParams.get("period") || "30d"; // 7d, 30d, 90d, custom
+  const period = searchParams.get("period") || "30d";
   const startDate = searchParams.get("start_date");
   const endDate = searchParams.get("end_date");
 
@@ -61,173 +18,68 @@ export async function GET(request: NextRequest) {
     }
 
     if (!context.tenantId) {
-      return NextResponse.json({
-        stats: null,
-        dailyVolume: [],
-        hourlyDistribution: [],
-        extensionStats: [],
-        queueStats: [],
-      });
+      return NextResponse.json({ stats: null, dailyVolume: [], hourlyDistribution: [], extensionStats: [], queueStats: [] });
     }
 
-    // Use admin client to bypass RLS after validating user access
     const supabase = createAdminClient();
 
-    // Calculate date range
-    let dateFrom: Date;
     const dateTo = endDate ? new Date(endDate) : new Date();
+    const dateFrom = startDate ? new Date(startDate) : (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - (period === "7d" ? 7 : period === "90d" ? 90 : 30));
+      return d;
+    })();
 
-    if (startDate) {
-      dateFrom = new Date(startDate);
-    } else {
-      dateFrom = new Date();
-      switch (period) {
-        case "7d":
-          dateFrom.setDate(dateFrom.getDate() - 7);
-          break;
-        case "90d":
-          dateFrom.setDate(dateFrom.getDate() - 90);
-          break;
-        case "30d":
-        default:
-          dateFrom.setDate(dateFrom.getDate() - 30);
-      }
-    }
+    const from = dateFrom.toISOString();
+    const to = dateTo.toISOString();
+    const tid = context.tenantId;
 
-    // Get all call logs for the period
-    const { data: callLogs, error } = await supabase
-      .from("call_logs")
-      .select("*")
-      .eq("tenant_id", context.tenantId)
-      .gte("started_at", dateFrom.toISOString())
-      .lte("started_at", dateTo.toISOString())
-      .order("started_at", { ascending: true });
+    // All aggregation pushed to the DB — no full row fetches
+    const [statsRes, dailyRes, hourlyRes, extensionRes, queueRes] = await Promise.all([
+      // Overall stats
+      supabase.rpc("get_call_stats", { p_tenant_id: tid, p_from: from, p_to: to }),
 
-    if (error) {
-      console.error("Error fetching call logs:", error);
-      return NextResponse.json(
-        { error: "Failed to fetch analytics data" },
-        { status: 500 }
-      );
-    }
+      // Daily volume grouped by date and direction
+      supabase
+        .from("call_logs")
+        .select("started_at, direction")
+        .eq("tenant_id", tid)
+        .gte("started_at", from)
+        .lte("started_at", to),
 
-    const logs = callLogs || [];
+      // Hourly distribution
+      supabase.rpc("get_hourly_distribution", { p_tenant_id: tid, p_from: from, p_to: to }),
 
-    // Calculate overall stats
-    const stats: CallStats = {
-      totalCalls: logs.length,
-      inboundCalls: logs.filter((l) => l.direction === "inbound").length,
-      outboundCalls: logs.filter((l) => l.direction === "outbound").length,
-      internalCalls: logs.filter((l) => l.direction === "internal").length,
-      answeredCalls: logs.filter((l) => l.answered_at !== null).length,
-      missedCalls: logs.filter((l) => l.answered_at === null && l.direction === "inbound").length,
-      avgTalkDuration: logs.length > 0
-        ? Math.round(logs.reduce((sum, l) => sum + (l.talk_duration || 0), 0) / logs.length)
-        : 0,
-      avgRingDuration: logs.length > 0
-        ? Math.round(logs.reduce((sum, l) => sum + (l.ring_duration || 0), 0) / logs.length)
-        : 0,
-      totalTalkTime: logs.reduce((sum, l) => sum + (l.talk_duration || 0), 0),
-    };
+      // Top 20 extensions
+      supabase.rpc("get_extension_stats", { p_tenant_id: tid, p_from: from, p_to: to }),
 
-    // Calculate daily volume
-    const dailyMap = new Map<string, DailyCallVolume>();
-    for (const log of logs) {
-      const date = new Date(log.started_at).toISOString().split("T")[0];
-      const existing = dailyMap.get(date) || { date, inbound: 0, outbound: 0, internal: 0, total: 0 };
-      existing.total++;
-      if (log.direction === "inbound") existing.inbound++;
-      else if (log.direction === "outbound") existing.outbound++;
-      else existing.internal++;
-      dailyMap.set(date, existing);
+      // Queue stats
+      supabase.rpc("get_queue_stats", { p_tenant_id: tid, p_from: from, p_to: to }),
+    ]);
+
+    // Build daily volume from lightweight direction+date rows (no heavy columns)
+    const dailyMap = new Map<string, { date: string; inbound: number; outbound: number; internal: number; total: number }>();
+    for (const row of (dailyRes.data || [])) {
+      const date = new Date(row.started_at).toISOString().split("T")[0];
+      const entry = dailyMap.get(date) || { date, inbound: 0, outbound: 0, internal: 0, total: 0 };
+      entry.total++;
+      if (row.direction === "inbound") entry.inbound++;
+      else if (row.direction === "outbound") entry.outbound++;
+      else entry.internal++;
+      dailyMap.set(date, entry);
     }
     const dailyVolume = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
 
-    // Calculate hourly distribution
-    const hourlyMap = new Map<number, number>();
-    for (let i = 0; i < 24; i++) hourlyMap.set(i, 0);
-    for (const log of logs) {
-      const hour = new Date(log.started_at).getHours();
-      hourlyMap.set(hour, (hourlyMap.get(hour) || 0) + 1);
-    }
-    const hourlyDistribution: HourlyDistribution[] = Array.from(hourlyMap.entries())
-      .map(([hour, calls]) => ({ hour, calls }))
-      .sort((a, b) => a.hour - b.hour);
-
-    // Calculate extension stats
-    const extMap = new Map<string, ExtensionStats>();
-    for (const log of logs) {
-      if (!log.extension_number) continue;
-      const ext = log.extension_number;
-      const existing = extMap.get(ext) || {
-        extension: ext,
-        name: log.caller_name || log.callee_name || null,
-        totalCalls: 0,
-        inbound: 0,
-        outbound: 0,
-        avgTalkDuration: 0,
-      };
-      existing.totalCalls++;
-      if (log.direction === "inbound") existing.inbound++;
-      else if (log.direction === "outbound") existing.outbound++;
-      existing.avgTalkDuration += log.talk_duration || 0;
-      extMap.set(ext, existing);
-    }
-    const extensionStats = Array.from(extMap.values())
-      .map((ext) => ({
-        ...ext,
-        avgTalkDuration: ext.totalCalls > 0 ? Math.round(ext.avgTalkDuration / ext.totalCalls) : 0,
-      }))
-      .sort((a, b) => b.totalCalls - a.totalCalls)
-      .slice(0, 20);
-
-    // Calculate queue stats
-    const queueMap = new Map<string, QueueStats>();
-    for (const log of logs) {
-      if (!log.queue_name) continue;
-      const queue = log.queue_name;
-      const existing = queueMap.get(queue) || {
-        queueName: queue,
-        totalCalls: 0,
-        answered: 0,
-        abandoned: 0,
-        avgWaitTime: 0,
-        avgTalkTime: 0,
-      };
-      existing.totalCalls++;
-      if (log.answered_at) {
-        existing.answered++;
-        existing.avgTalkTime += log.talk_duration || 0;
-      } else {
-        existing.abandoned++;
-      }
-      existing.avgWaitTime += log.ring_duration || 0;
-      queueMap.set(queue, existing);
-    }
-    const queueStats = Array.from(queueMap.values())
-      .map((q) => ({
-        ...q,
-        avgWaitTime: q.totalCalls > 0 ? Math.round(q.avgWaitTime / q.totalCalls) : 0,
-        avgTalkTime: q.answered > 0 ? Math.round(q.avgTalkTime / q.answered) : 0,
-      }))
-      .sort((a, b) => b.totalCalls - a.totalCalls);
-
     return NextResponse.json({
-      stats,
+      stats: statsRes.data || null,
       dailyVolume,
-      hourlyDistribution,
-      extensionStats,
-      queueStats,
-      period: {
-        from: dateFrom.toISOString(),
-        to: dateTo.toISOString(),
-      },
+      hourlyDistribution: hourlyRes.data || [],
+      extensionStats: extensionRes.data || [],
+      queueStats: queueRes.data || [],
+      period: { from, to },
     });
   } catch (error) {
     console.error("Error in analytics API:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

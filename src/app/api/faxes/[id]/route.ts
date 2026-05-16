@@ -20,13 +20,34 @@ export async function GET(
 
     const supabase = createAdminClient();
 
-    // Fetch the recording
+    // Check permissions for non-admins
+    if (context.role !== "super_admin" && context.role !== "admin") {
+      const { data: tenantRole } = await supabase
+        .from("user_tenants")
+        .select("role")
+        .eq("user_id", context.userId)
+        .eq("tenant_id", context.tenantId)
+        .single();
+
+      if (tenantRole?.role !== "admin") {
+        const { data: featurePerms } = await supabase
+          .from("user_feature_permissions")
+          .select("can_view_faxes")
+          .eq("user_id", context.userId)
+          .eq("tenant_id", context.tenantId)
+          .single();
+
+        if (!featurePerms?.can_view_faxes) {
+          return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+        }
+      }
+    }
+
     let query = supabase
-      .from("call_recordings")
+      .from("faxes")
       .select("*")
       .eq("id", id);
 
-    // Non-super-admin users: restrict to their tenant
     if (context.role !== "super_admin" && context.tenantId) {
       query = query.eq("tenant_id", context.tenantId);
     }
@@ -34,10 +55,7 @@ export async function GET(
     const { data, error } = await query.single();
 
     if (error || !data) {
-      return NextResponse.json(
-        { error: "Recording not found" },
-        { status: 404 }
-      );
+      return NextResponse.json({ error: "Fax not found" }, { status: 404 });
     }
 
     let signedUrl: string;
@@ -49,7 +67,7 @@ export async function GET(
         .createSignedUrl(data.storage_path, 3600);
 
       if (urlError || !signedUrlData?.signedUrl) {
-        console.error("Failed to generate Supabase signed URL for recording:", data.storage_path, urlError?.message);
+        console.error("Failed to generate Supabase signed URL for fax:", data.storage_path, urlError?.message);
         return NextResponse.json({ error: "Failed to generate URL" }, { status: 500 });
       }
       signedUrl = signedUrlData.signedUrl;
@@ -57,21 +75,18 @@ export async function GET(
       try {
         signedUrl = await getSpacesSignedUrl(data.storage_path, 3600);
       } catch (spacesError) {
-        console.error("Failed to generate DO Spaces signed URL for recording:", data.storage_path, spacesError);
+        console.error("Failed to generate DO Spaces signed URL for fax:", data.storage_path, spacesError);
         return NextResponse.json({ error: "Failed to generate URL" }, { status: 500 });
       }
     }
 
     return NextResponse.json({
       url: signedUrl,
-      filename: data.file_name,
-      mime_type: data.mime_type || "audio/wav",
+      filename: data.original_filename,
+      mime_type: data.mime_type || "application/pdf",
     });
   } catch (error) {
-    console.error("Error in recording playback API:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    console.error("Error in fax download API:", error);
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

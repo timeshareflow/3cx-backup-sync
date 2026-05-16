@@ -984,7 +984,7 @@ export async function getVoicemails(
     const query = since
       ? `
         SELECT
-          id::text as voicemail_id,
+          wav_file as voicemail_id,
           wav_file,
           callee as extension,
           caller as caller_number,
@@ -1001,7 +1001,7 @@ export async function getVoicemails(
       `
       : `
         SELECT
-          id::text as voicemail_id,
+          wav_file as voicemail_id,
           wav_file,
           callee as extension,
           caller as caller_number,

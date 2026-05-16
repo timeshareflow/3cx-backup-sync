@@ -55,33 +55,24 @@ export async function GET(
 
     let signedUrl: string;
 
-    // Check storage backend and generate appropriate signed URL
-    if (media.storage_backend === "spaces" && isSpacesConfigured()) {
-      // Generate signed URL from DO Spaces
-      try {
-        signedUrl = await getSpacesSignedUrl(media.storage_path, 3600);
-      } catch (spacesError) {
-        console.error("Failed to generate DO Spaces signed URL:", media.storage_path, spacesError);
-        return NextResponse.json(
-          { error: "Failed to generate URL" },
-          { status: 500 }
-        );
-      }
-    } else {
-      // Generate signed URL from Supabase Storage (default/fallback)
+    if (media.storage_backend === "supabase") {
       const { data: signedUrlData, error: urlError } = await supabase
         .storage
         .from("backupwiz-files")
         .createSignedUrl(media.storage_path, 3600);
 
       if (urlError || !signedUrlData?.signedUrl) {
-        console.error("Failed to generate signed URL:", media.storage_path, urlError?.message);
-        return NextResponse.json(
-          { error: "Failed to generate URL" },
-          { status: 500 }
-        );
+        console.error("Failed to generate Supabase signed URL:", media.storage_path, urlError?.message);
+        return NextResponse.json({ error: "Failed to generate URL" }, { status: 500 });
       }
       signedUrl = signedUrlData.signedUrl;
+    } else {
+      try {
+        signedUrl = await getSpacesSignedUrl(media.storage_path, 3600);
+      } catch (spacesError) {
+        console.error("Failed to generate DO Spaces signed URL:", media.storage_path, spacesError);
+        return NextResponse.json({ error: "Failed to generate URL" }, { status: 500 });
+      }
     }
 
     return NextResponse.json({

@@ -1054,15 +1054,18 @@ export async function recordingExists(tenantId: string, recordingId: string): Pr
   return (count || 0) > 0;
 }
 
-// Check if a voicemail already exists in database
-export async function voicemailExists(tenantId: string, voicemailId: string): Promise<boolean> {
+// Check if a voicemail already exists in database by wav_file name
+export async function voicemailExists(tenantId: string, wavFile: string): Promise<boolean> {
   const client = getSupabaseClient();
+
+  // Match on threecx_voicemail_id (now set to wav_file) OR file_name to catch legacy rows
+  const fileName = wavFile.endsWith(".wav") ? wavFile : `${wavFile}.wav`;
 
   const { count, error } = await client
     .from("voicemails")
     .select("*", { count: "exact", head: true })
     .eq("tenant_id", tenantId)
-    .eq("threecx_voicemail_id", voicemailId);
+    .or(`threecx_voicemail_id.eq.${wavFile},file_name.eq.${fileName}`);
 
   if (error) {
     return false;
