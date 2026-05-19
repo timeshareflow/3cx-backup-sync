@@ -1,5 +1,6 @@
 import { Pool } from "pg";
 import { getSupabaseClient } from "./storage/supabase";
+import { getPgPool } from "./storage/postgres";
 import { logger } from "./utils/logger";
 import { SftpConfig } from "./storage/sftp";
 import { createSshTunnel, closeTunnel, closeAllTunnels as closeAllSshTunnels, setOnTunnelDiedCallback } from "./ssh-tunnel";
@@ -120,42 +121,33 @@ setOnTunnelDiedCallback((tenantId: string) => {
 const ACTIVE_USER_THRESHOLD_MS = 15 * 60 * 1000;
 
 export async function getActiveTenants(): Promise<TenantConfig[]> {
-  const supabase = getSupabaseClient();
+  // Direct postgres — bypasses PostgREST entirely, survives schema cache errors
+  const pg = getPgPool();
 
-  // Fetch BOTH old and new columns - backward compatible
-  const { data: tenants, error } = await supabase
-    .from("tenants")
-    .select(`
-      id, name, slug,
-      threecx_host,
+  const { rows } = await pg.query<RawTenantData & { last_user_activity_at: string | null }>(`
+    SELECT
+      id, name, slug, threecx_host,
       ssh_port, ssh_user, ssh_password, threecx_db_password,
       sftp_port, sftp_user, sftp_password, threecx_password,
-      threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
-      backup_chats, backup_chat_media, backup_recordings, backup_voicemails, backup_faxes, backup_cdr, backup_meetings,
+      threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path,
+      threecx_fax_path, threecx_meetings_path,
+      backup_chats, backup_chat_media, backup_recordings, backup_voicemails,
+      backup_faxes, backup_cdr, backup_meetings,
       is_active, sync_enabled, last_user_activity_at
-    `)
-    .eq("is_active", true)
-    .eq("sync_enabled", true)
-    .not("threecx_host", "is", null);
-
-  if (error) {
-    logger.error("Failed to fetch active tenants", { error: error.message });
-    throw new Error(`Failed to fetch tenants: ${error.message}`);
-  }
+    FROM tenants
+    WHERE is_active = true AND sync_enabled = true AND threecx_host IS NOT NULL
+  `);
 
   const now = Date.now();
 
-  // Normalize each tenant (apply fallback logic) and add activity status
-  return (tenants || []).map((raw) => {
-    const tenant = normalizeTenant(raw as RawTenantData);
+  return rows.map((raw) => {
+    const tenant = normalizeTenant(raw);
     const lastActivity = raw.last_user_activity_at
       ? new Date(raw.last_user_activity_at).getTime()
       : 0;
-    const hasActiveUsers = now - lastActivity < ACTIVE_USER_THRESHOLD_MS;
-
     return {
       ...tenant,
-      has_active_users: hasActiveUsers,
+      has_active_users: now - lastActivity < ACTIVE_USER_THRESHOLD_MS,
       last_user_activity_at: raw.last_user_activity_at,
     };
   });

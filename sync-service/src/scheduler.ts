@@ -7,6 +7,29 @@ import { getActiveTenants, getActiveUserTenants, getInactiveTenants } from "./te
 // Track which sync types are currently running
 const runningSync: Set<SyncType | "full"> = new Set();
 
+// Backoff state — when DB is unavailable, pause all syncs
+let dbBackoffUntil = 0;
+let dbBackoffMs = 0;
+const DB_BACKOFF_MAX_MS = 5 * 60_000; // max 5 minute backoff
+
+function recordDbFailure() {
+  dbBackoffMs = dbBackoffMs === 0 ? 30_000 : Math.min(dbBackoffMs * 2, DB_BACKOFF_MAX_MS);
+  dbBackoffUntil = Date.now() + dbBackoffMs;
+  logger.warn(`DB unavailable — pausing syncs for ${dbBackoffMs / 1000}s`);
+}
+
+function recordDbSuccess() {
+  if (dbBackoffMs > 0) {
+    logger.info("DB back — resuming syncs");
+    dbBackoffMs = 0;
+    dbBackoffUntil = 0;
+  }
+}
+
+function isDbBackingOff(): boolean {
+  return Date.now() < dbBackoffUntil;
+}
+
 // Scheduled tasks
 let chatSyncTask: cron.ScheduledTask | null = null;
 let mediaSyncTask: cron.ScheduledTask | null = null;
@@ -104,6 +127,7 @@ const CHAT_SYNC_TIMEOUT_MS = 90_000;
 // CRITICAL: Messages sync should NEVER be blocked by media/recordings/full sync
 // This ensures chats are always up to date regardless of what else is running
 async function runChatSync(): Promise<void> {
+  if (isDbBackingOff()) return;
   if (runningSync.has("messages")) {
     logger.debug("Chat sync skipped - already running");
     return;
@@ -111,6 +135,7 @@ async function runChatSync(): Promise<void> {
 
   try {
     const activeTenants = await getCachedActiveUserTenants();
+    recordDbSuccess();
     if (activeTenants.length === 0) {
       return;
     }
@@ -164,8 +189,9 @@ async function runChatSync(): Promise<void> {
   } catch (error) {
     const msg = (error as Error).message;
     logger.error("Chat sync failed", { error: msg });
-    // Invalidate tenant cache on timeout so next run re-fetches fresh state
-    if (msg.includes("timed out")) {
+    if (msg.includes("timed out")) activeTenantCache = null;
+    if (msg.includes("schema cache") || msg.includes("connection") || msg.includes("timeout")) {
+      recordDbFailure();
       activeTenantCache = null;
     }
   } finally {
@@ -265,6 +291,7 @@ const CDR_SYNC_TIMEOUT_MS = 3 * 60_000;
 // Run CDR sync (every 5 minutes)
 // CDR is lightweight like messages, so don't block on full sync
 async function runCdrSync(): Promise<void> {
+  if (isDbBackingOff()) return;
   if (runningSync.has("cdr")) {
     logger.debug("CDR sync skipped - already running");
     return;
@@ -290,7 +317,12 @@ async function runCdrSync(): Promise<void> {
       ),
     ]);
   } catch (error) {
-    logger.error("CDR sync failed", { error: (error as Error).message });
+    const msg = (error as Error).message;
+    logger.error("CDR sync failed", { error: msg });
+    if (msg.includes("schema cache") || msg.includes("connection") || msg.includes("timeout")) {
+      recordDbFailure();
+      activeTenantCache = null;
+    }
   } finally {
     runningSync.delete("cdr");
   }
