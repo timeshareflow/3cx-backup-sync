@@ -3,15 +3,40 @@ import { logger } from "../utils/logger";
 
 let pool: Pool | null = null;
 
+function parseDbUrl(url: string) {
+  // Standard URL parsers break on # and @ in passwords.
+  // Split manually: everything between :// and the last @ is userinfo.
+  const withoutScheme = url.replace(/^postgres(?:ql)?:\/\//, "");
+  const lastAt = withoutScheme.lastIndexOf("@");
+  if (lastAt === -1) throw new Error("Invalid DATABASE_URL — missing @");
+
+  const userInfo = withoutScheme.slice(0, lastAt);
+  const hostPart = withoutScheme.slice(lastAt + 1);
+
+  const colonIdx = userInfo.indexOf(":");
+  const user = userInfo.slice(0, colonIdx);
+  const password = userInfo.slice(colonIdx + 1);
+
+  const slashIdx = hostPart.indexOf("/");
+  const hostPort = slashIdx === -1 ? hostPart : hostPart.slice(0, slashIdx);
+  const database = slashIdx === -1 ? "postgres" : hostPart.slice(slashIdx + 1).split("?")[0];
+  const portColon = hostPort.lastIndexOf(":");
+  const host = portColon === -1 ? hostPort : hostPort.slice(0, portColon);
+  const port = portColon === -1 ? 5432 : parseInt(hostPort.slice(portColon + 1));
+
+  return { user, password, host, port, database };
+}
+
 export function getPgPool(): Pool {
   if (!pool) {
     const url = process.env.DATABASE_URL;
     if (!url) throw new Error("DATABASE_URL not set — direct Postgres unavailable");
 
+    const parsed = parseDbUrl(url);
     pool = new Pool({
-      connectionString: url,
+      ...parsed,
       ssl: { rejectUnauthorized: false },
-      max: 5,               // keep connection count low
+      max: 5,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
     });

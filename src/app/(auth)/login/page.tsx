@@ -26,7 +26,10 @@ export default function LoginPage() {
       });
 
       if (signInError) {
-        setError(signInError.message);
+        const msg = typeof signInError.message === "string" && signInError.message.trim()
+          ? signInError.message
+          : "Login failed — the service may be temporarily unavailable. Please try again.";
+        setError(msg);
         setIsLoading(false);
         return;
       }
