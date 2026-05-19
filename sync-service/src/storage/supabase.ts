@@ -1,6 +1,12 @@
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import { logger } from "../utils/logger";
 import { SupabaseError } from "../utils/errors";
+import {
+  pgBulkInsertMessages,
+  pgBulkUpsertConversations,
+  pgBulkInsertCallLogs,
+  pgGetSyncedFilenames,
+} from "./postgres";
 
 let supabase: SupabaseClient | null = null;
 
@@ -208,7 +214,7 @@ export async function upsertParticipant(participant: {
   }
 }
 
-// Insert message (skip if exists)
+// Insert message — single direct Postgres INSERT ON CONFLICT DO NOTHING (no pre-check needed)
 export async function insertMessage(message: {
   conversation_id: string;
   threecx_message_id: string;
@@ -220,59 +226,19 @@ export async function insertMessage(message: {
   sent_at: string;
   tenant_id?: string;
 }): Promise<string | null> {
-  const client = getSupabaseClient();
-
-  // Check if message already exists
-  if (message.tenant_id) {
-    const { data: existing } = await client
-      .from("messages")
-      .select("id")
-      .eq("tenant_id", message.tenant_id)
-      .eq("threecx_message_id", message.threecx_message_id)
-      .single();
-
-    if (existing) {
-      return null; // Already exists
-    }
-  }
-
-  const insertData: Record<string, unknown> = {
+  if (!message.tenant_id) return null;
+  const ids = await pgBulkInsertMessages([{
     conversation_id: message.conversation_id,
     threecx_message_id: message.threecx_message_id,
-    sender_identifier: message.sender_extension,
-    sender_name: message.sender_name,
-    content: message.message_text,
+    sender_identifier: message.sender_extension ?? null,
+    sender_name: message.sender_name ?? null,
+    content: message.message_text ?? null,
     message_type: message.message_type || "text",
     has_media: message.has_media || false,
     sent_at: message.sent_at,
-  };
-
-  if (message.tenant_id) {
-    insertData.tenant_id = message.tenant_id;
-  }
-
-  const { data, error } = await client
-    .from("messages")
-    .insert(insertData)
-    .select("id")
-    .single();
-
-  if (error) {
-    if (error.code === "23505") {
-      // Duplicate - already exists
-      return null;
-    }
-    logger.error("Message insert failed", {
-      error: error.message,
-      code: error.code,
-      details: error.details,
-      hint: error.hint,
-      messageId: message.threecx_message_id,
-    });
-    throw new SupabaseError("Failed to insert message", { error });
-  }
-
-  return data?.id || null;
+    tenant_id: message.tenant_id,
+  }]);
+  return ids[0] ?? null;
 }
 
 // Insert media file record
@@ -1205,7 +1171,7 @@ export async function insertFax(fax: {
   return data?.id || "";
 }
 
-// Bulk upsert conversations — one request instead of N individual upserts
+// Bulk upsert conversations — direct Postgres, single query
 export async function bulkUpsertConversations(
   conversations: Array<{
     threecx_conversation_id: string;
@@ -1217,20 +1183,9 @@ export async function bulkUpsertConversations(
   }>
 ): Promise<void> {
   if (conversations.length === 0) return;
-  const client = getSupabaseClient();
-  const records = conversations.map((c) => ({
-    threecx_conversation_id: c.threecx_conversation_id,
-    conversation_name: c.conversation_name ?? null,
-    channel_type: c.channel_type ?? "internal",
-    is_external: c.is_external ?? false,
-    is_group_chat: c.is_group_chat ?? false,
-    participant_count: 2,
-    ...(c.tenant_id ? { tenant_id: c.tenant_id } : {}),
-  }));
-  const { error } = await client
-    .from("conversations")
-    .upsert(records, { onConflict: "tenant_id,threecx_conversation_id" });
-  if (error) throw new SupabaseError("Failed to bulk upsert conversations", { error });
+  const withTenant = conversations.filter((c) => c.tenant_id) as Array<typeof conversations[0] & { tenant_id: string }>;
+  if (withTenant.length === 0) return;
+  await pgBulkUpsertConversations(withTenant);
 }
 
 // ============================================
@@ -1301,47 +1256,11 @@ export async function insertCallLog(callLog: {
   return data?.id || "";
 }
 
-// Bulk upsert call logs — batches of 100 instead of 1000 individual requests
+// Bulk insert call logs — direct Postgres, single query for entire batch
 export async function bulkInsertCallLogs(
   callLogs: Array<Parameters<typeof insertCallLog>[0]>
 ): Promise<{ inserted: number; skipped: number }> {
-  if (callLogs.length === 0) return { inserted: 0, skipped: 0 };
-  const client = getSupabaseClient();
-  const BATCH = 100;
-  let inserted = 0;
-  let skipped = 0;
-
-  for (let i = 0; i < callLogs.length; i += BATCH) {
-    const batch = callLogs.slice(i, i + BATCH);
-    const records = batch.map((callLog) => ({
-      tenant_id: callLog.tenant_id,
-      threecx_call_id: callLog.threecx_call_id,
-      caller_number: callLog.caller_number,
-      caller_name: callLog.caller_name,
-      callee_number: callLog.callee_number,
-      callee_name: callLog.callee_name,
-      direction: callLog.direction,
-      call_type: callLog.call_type,
-      status: callLog.status,
-      ring_duration_seconds: callLog.ring_duration_seconds,
-      duration_seconds: callLog.total_duration_seconds || callLog.talk_duration_seconds,
-      started_at: callLog.call_started_at,
-      answered_at: callLog.call_answered_at,
-      ended_at: callLog.call_ended_at,
-      recording_id: callLog.recording_id,
-    }));
-
-    const { data, error } = await client
-      .from("call_logs")
-      .upsert(records, { onConflict: "tenant_id,threecx_call_id", ignoreDuplicates: true })
-      .select("id");
-
-    if (error) throw new SupabaseError("Failed to bulk insert call logs", { error });
-    inserted += (data?.length ?? 0);
-    skipped += batch.length - (data?.length ?? 0);
-  }
-
-  return { inserted, skipped };
+  return pgBulkInsertCallLogs(callLogs);
 }
 
 // ============================================
@@ -1477,55 +1396,12 @@ export async function insertMediaFileNew(media: {
   return data.id;
 }
 
-// Get all synced filenames for a tenant+category (for fast duplicate checking)
-// Extracts just the filename from storage_path to avoid date-based path mismatches
+// Get all synced filenames — direct Postgres, single query (no pagination limit)
 export async function getSyncedFilenames(
   tenantId: string,
   category: string
 ): Promise<Set<string>> {
-  const client = getSupabaseClient();
-  const filenames = new Set<string>();
-  const prefix = `${tenantId}/${category}/`;
-
-  // Paginate through all media files for this tenant/category
-  let offset = 0;
-  const pageSize = 1000;
-
-  while (true) {
-    const { data, error } = await client
-      .from("media_files")
-      .select("storage_path")
-      .eq("tenant_id", tenantId)
-      .like("storage_path", `${prefix}%`)
-      .range(offset, offset + pageSize - 1);
-
-    if (error) {
-      logger.error("Failed to fetch synced filenames", { tenantId, category, error: error.message });
-      break;
-    }
-
-    if (!data || data.length === 0) break;
-
-    for (const row of data) {
-      if (row.storage_path) {
-        // Extract just the base name WITHOUT extension (last segment of path, strip extension)
-        // Extension changes after compression (e.g., .MOV -> .mp4, .jpeg -> .webp)
-        // so we only compare the base name which is deterministic from the source file
-        const parts = row.storage_path.split("/");
-        const filename = parts[parts.length - 1];
-        if (filename) {
-          const dotIdx = filename.lastIndexOf(".");
-          const baseName = dotIdx > 0 ? filename.substring(0, dotIdx) : filename;
-          filenames.add(baseName);
-        }
-      }
-    }
-
-    if (data.length < pageSize) break;
-    offset += pageSize;
-  }
-
-  return filenames;
+  return pgGetSyncedFilenames(tenantId, category);
 }
 
 // Update media file with message link and original filename

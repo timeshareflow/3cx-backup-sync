@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { RefreshCw, CheckCircle, XCircle, Clock, AlertCircle, Activity, ChevronRight, AlertTriangle } from "lucide-react";
 import { formatRelativeTime } from "@/lib/utils/date";
+import { createClient } from "@/lib/supabase/client";
 import type { SyncStatus } from "@/types";
 
 type OverallHealth = "healthy" | "warning" | "critical";
@@ -28,11 +29,20 @@ export function SyncStatusCard() {
 
   useEffect(() => {
     fetchSyncStatus();
-    const interval = setInterval(fetchSyncStatus, 30000);
-    return () => clearInterval(interval);
-  }, []);
 
-  const fetchSyncStatus = async () => {
+    // Realtime subscription — get instant updates when sync_status changes
+    const supabase = createClient();
+    const channel = supabase
+      .channel("sync-status-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "sync_status" }, () => {
+        fetchSyncStatus();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchSyncStatus]);
+
+  const fetchSyncStatus = useCallback(async () => {
     try {
       const response = await fetch("/api/sync/status");
       if (response.ok) {
@@ -45,7 +55,7 @@ export function SyncStatusCard() {
     } finally {
       setIsLoading(false);
     }
-  };
+  }, []);
 
   const getStatusIcon = (status: string) => {
     switch (status) {

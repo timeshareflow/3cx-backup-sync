@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createClient } from "@/lib/supabase/client";
 import { Spinner } from "@/components/ui/Spinner";
 import {
   MessageSquare,
@@ -139,19 +140,19 @@ export function ActivityFeed({ onConfigureClick }: ActivityFeedProps) {
     fetchMessages();
   }, [selectedConversations]);
 
-  // Polling for new messages
+  // Realtime subscription — replaces 5s polling entirely
   useEffect(() => {
-    if (isLive) {
-      pollIntervalRef.current = setInterval(() => {
-        fetchMessages(true);
-      }, 5000); // Poll every 5 seconds
-    }
+    if (!isLive) return;
 
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current);
-      }
-    };
+    const supabase = createClient();
+    const channel = supabase
+      .channel("activity-feed-messages")
+      .on("postgres_changes", { event: "INSERT", schema: "public", table: "messages" }, () => {
+        fetchMessages(true);
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [isLive, fetchMessages]);
 
   const formatTime = (timestamp: string) => {
