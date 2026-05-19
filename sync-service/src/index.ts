@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import http from "http";
 import { logger } from "./utils/logger";
 import { getSupabaseClient } from "./storage/supabase";
+import { getPgPool } from "./storage/postgres";
 import { startScheduler, stopScheduler } from "./scheduler";
 import { runMultiTenantSync, runMultiTenantSyncByType } from "./sync";
 import { getActiveTenants, closeAllTenantPools, testTenantConnection } from "./tenant";
@@ -58,27 +59,29 @@ async function initialize(): Promise<boolean> {
   resetAllCircuits();
   logger.info("Circuit breakers reset");
 
-  // Test Supabase connection — retry with backoff so a transient outage
-  // doesn't cause a PM2 crash-loop hammering Supabase 100+ times
-  const supabase = getSupabaseClient();
-  let supabaseReady = false;
-  const delays = [0, 5000, 15000, 30000, 60000]; // 0s, 5s, 15s, 30s, 60s
+  // Test DB connection via direct Postgres — avoids PostgREST schema cache issues
+  let dbReady = false;
+  const delays = [0, 5000, 15000, 30000, 60000];
   for (const delay of delays) {
     if (delay > 0) {
-      logger.warn(`Supabase not ready, retrying in ${delay / 1000}s...`);
+      logger.warn(`DB not ready, retrying in ${delay / 1000}s...`);
       await new Promise((r) => setTimeout(r, delay));
     }
-    const { error: connErr } = await supabase.from("sync_status").select("id").limit(1);
-    if (!connErr) { supabaseReady = true; break; }
-    logger.warn(`Supabase connection attempt failed: ${connErr.message}`);
+    try {
+      await getPgPool().query("SELECT 1");
+      dbReady = true;
+      break;
+    } catch (err) {
+      logger.warn(`DB connection attempt failed: ${(err as Error).message}`);
+    }
   }
-  if (!supabaseReady) {
-    logger.error("Supabase unavailable after retries — starting scheduler anyway, syncs will retry automatically");
+  if (!dbReady) {
+    logger.error("DB unavailable after retries — starting scheduler anyway, syncs will back off automatically");
   } else {
-    logger.info("Supabase connection verified");
+    logger.info("DB connection verified (direct Postgres)");
   }
 
-  return supabaseReady;
+  return dbReady;
 
   // Fetch active tenants from Supabase
   const tenants = await getActiveTenants();
