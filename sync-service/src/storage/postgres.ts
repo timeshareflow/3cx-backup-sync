@@ -36,6 +36,7 @@ export function getPgPool(): Pool {
     pool = new Pool({
       ...parsed,
       ssl: { rejectUnauthorized: false },
+      family: 4,            // force IPv4 — server has no IPv6 route to Supabase
       max: 5,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
