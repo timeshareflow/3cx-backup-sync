@@ -121,27 +121,31 @@ setOnTunnelDiedCallback((tenantId: string) => {
 const ACTIVE_USER_THRESHOLD_MS = 15 * 60 * 1000;
 
 export async function getActiveTenants(): Promise<TenantConfig[]> {
-  // Direct postgres — bypasses PostgREST entirely, survives schema cache errors
-  const pg = getPgPool();
+  const supabase = getSupabaseClient();
 
-  const { rows } = await pg.query<RawTenantData & { last_user_activity_at: string | null }>(`
-    SELECT
+  const { data: tenants, error } = await supabase
+    .from("tenants")
+    .select(`
       id, name, slug, threecx_host,
       ssh_port, ssh_user, ssh_password, threecx_db_password,
       sftp_port, sftp_user, sftp_password, threecx_password,
-      threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path,
-      threecx_fax_path, threecx_meetings_path,
-      backup_chats, backup_chat_media, backup_recordings, backup_voicemails,
-      backup_faxes, backup_cdr, backup_meetings,
+      threecx_chat_files_path, threecx_recordings_path, threecx_voicemail_path, threecx_fax_path, threecx_meetings_path,
+      backup_chats, backup_chat_media, backup_recordings, backup_voicemails, backup_faxes, backup_cdr, backup_meetings,
       is_active, sync_enabled, last_user_activity_at
-    FROM tenants
-    WHERE is_active = true AND sync_enabled = true AND threecx_host IS NOT NULL
-  `);
+    `)
+    .eq("is_active", true)
+    .eq("sync_enabled", true)
+    .not("threecx_host", "is", null);
+
+  if (error) {
+    logger.error("Failed to fetch active tenants", { error: error.message });
+    throw new Error(`Failed to fetch tenants: ${error.message}`);
+  }
 
   const now = Date.now();
 
-  return rows.map((raw) => {
-    const tenant = normalizeTenant(raw);
+  return (tenants || []).map((raw) => {
+    const tenant = normalizeTenant(raw as RawTenantData);
     const lastActivity = raw.last_user_activity_at
       ? new Date(raw.last_user_activity_at).getTime()
       : 0;

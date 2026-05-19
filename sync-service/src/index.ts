@@ -59,29 +59,26 @@ async function initialize(): Promise<boolean> {
   resetAllCircuits();
   logger.info("Circuit breakers reset");
 
-  // Test DB connection via direct Postgres — avoids PostgREST schema cache issues
-  let dbReady = false;
+  // Test Supabase connection with backoff
+  const supabase = getSupabaseClient();
+  let supabaseReady = false;
   const delays = [0, 5000, 15000, 30000, 60000];
   for (const delay of delays) {
     if (delay > 0) {
-      logger.warn(`DB not ready, retrying in ${delay / 1000}s...`);
+      logger.warn(`Supabase not ready, retrying in ${delay / 1000}s...`);
       await new Promise((r) => setTimeout(r, delay));
     }
-    try {
-      await getPgPool().query("SELECT 1");
-      dbReady = true;
-      break;
-    } catch (err) {
-      logger.warn(`DB connection attempt failed: ${(err as Error).message}`);
-    }
+    const { error: connErr } = await supabase.from("sync_status").select("id").limit(1);
+    if (!connErr) { supabaseReady = true; break; }
+    logger.warn(`Supabase connection attempt failed: ${connErr.message}`);
   }
-  if (!dbReady) {
-    logger.error("DB unavailable after retries — starting scheduler anyway, syncs will back off automatically");
+  if (!supabaseReady) {
+    logger.error("Supabase unavailable after retries — starting scheduler anyway, syncs will back off automatically");
   } else {
-    logger.info("DB connection verified (direct Postgres)");
+    logger.info("Supabase connection verified");
   }
 
-  return dbReady;
+  return supabaseReady;
 
   // Fetch active tenants from Supabase
   const tenants = await getActiveTenants();
