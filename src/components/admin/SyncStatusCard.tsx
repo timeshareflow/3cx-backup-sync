@@ -27,21 +27,6 @@ export function SyncStatusCard() {
   const [overallHealth, setOverallHealth] = useState<OverallHealth>("healthy");
   const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    fetchSyncStatus();
-
-    // Realtime subscription — get instant updates when sync_status changes
-    const supabase = createClient();
-    const channel = supabase
-      .channel("sync-status-realtime")
-      .on("postgres_changes", { event: "*", schema: "public", table: "sync_status" }, () => {
-        fetchSyncStatus();
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [fetchSyncStatus]);
-
   const fetchSyncStatus = useCallback(async () => {
     try {
       const response = await fetch("/api/sync/status");
@@ -56,6 +41,18 @@ export function SyncStatusCard() {
       setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    fetchSyncStatus();
+    const supabase = createClient();
+    const channel = supabase
+      .channel("sync-status-realtime")
+      .on("postgres_changes", { event: "*", schema: "public", table: "sync_status" }, () => {
+        fetchSyncStatus();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [fetchSyncStatus]);
 
   const getStatusIcon = (status: string) => {
     switch (status) {
