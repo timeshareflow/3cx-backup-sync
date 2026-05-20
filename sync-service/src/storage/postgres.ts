@@ -1,5 +1,9 @@
 import { Pool, PoolClient } from "pg";
+import dns from "dns";
 import { logger } from "../utils/logger";
+
+// Force IPv4 — the 3CX server has no IPv6 route to Supabase
+dns.setDefaultResultOrder("ipv4first");
 
 let pool: Pool | null = null;
 
