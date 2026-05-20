@@ -1,9 +1,9 @@
 import { Pool, PoolClient } from "pg";
-import dns from "dns";
+import { lookup } from "dns";
+import { promisify } from "util";
 import { logger } from "../utils/logger";
 
-// Force IPv4 — the 3CX server has no IPv6 route to Supabase
-dns.setDefaultResultOrder("ipv4first");
+const dnsLookup = promisify(lookup);
 
 let pool: Pool | null = null;
 
@@ -31,24 +31,54 @@ function parseDbUrl(url: string) {
   return { user, password, host, port, database };
 }
 
-export function getPgPool(): Pool {
-  if (!pool) {
-    const url = process.env.DATABASE_URL;
-    if (!url) throw new Error("DATABASE_URL not set — direct Postgres unavailable");
+// Initialise pool async so we can resolve hostname to IPv4 first
+let poolPromise: Promise<Pool> | null = null;
 
-    const parsed = parseDbUrl(url);
-    pool = new Pool({
-      ...parsed,
-      ssl: { rejectUnauthorized: false },
-      max: 5,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-    });
+async function initPool(): Promise<Pool> {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL not set — direct Postgres unavailable");
 
-    pool.on("error", (err) => logger.error("PG pool error", { error: err.message }));
-    logger.info("Direct Postgres pool created");
+  const parsed = parseDbUrl(url);
+
+  // Resolve to IPv4 — the 3CX server has no IPv6 route to Supabase
+  let host = parsed.host;
+  try {
+    const result = await dnsLookup(parsed.host, { family: 4 } as Parameters<typeof dnsLookup>[1]);
+    host = (result as unknown as { address: string }).address;
+    logger.info(`Resolved ${parsed.host} → ${host} (IPv4)`);
+  } catch (err) {
+    logger.warn(`IPv4 DNS lookup failed for ${parsed.host}, using hostname`);
   }
-  return pool;
+
+  const p = new Pool({
+    ...parsed,
+    host,
+    ssl: { rejectUnauthorized: false },
+    max: 5,
+    idleTimeoutMillis: 30_000,
+    connectionTimeoutMillis: 10_000,
+  });
+  p.on("error", (err) => logger.error("PG pool error", { error: err.message }));
+  pool = p;
+  logger.info("Direct Postgres pool created");
+  return p;
+}
+
+export function getPgPool(): Pool {
+  if (pool) return pool;
+  if (!poolPromise) poolPromise = initPool();
+  // Fallback: return a lazy proxy — real pool resolves on first await
+  return new Proxy({} as Pool, {
+    get(_t, prop: string) {
+      if (prop === "query" || prop === "connect") {
+        return async (...args: unknown[]) => {
+          const p = await poolPromise!;
+          return (p as any)[prop](...args);
+        };
+      }
+      return pool ? (pool as any)[prop] : undefined;
+    },
+  });
 }
 
 // ─── Messages ────────────────────────────────────────────────────────────────
