@@ -70,30 +70,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Get stats for current tenant
-    let conversationQuery = supabase.from("conversations").select("*", { count: "exact", head: true });
-    let messageQuery = supabase.from("messages").select("*", { count: "exact", head: true });
-    let mediaQuery = supabase.from("media_files").select("*", { count: "exact", head: true });
-    let extensionQuery = supabase.from("extensions").select("*", { count: "exact", head: true });
-
-    if (context.tenantId) {
-      conversationQuery = conversationQuery.eq("tenant_id", context.tenantId);
-      messageQuery = messageQuery.eq("tenant_id", context.tenantId);
-      mediaQuery = mediaQuery.eq("tenant_id", context.tenantId);
-      extensionQuery = extensionQuery.eq("tenant_id", context.tenantId);
-    }
-
-    const [
-      { count: conversationCount },
-      { count: messageCount },
-      { count: mediaCount },
-      { count: extensionCount },
-    ] = await Promise.all([
-      conversationQuery,
-      messageQuery,
-      mediaQuery,
-      extensionQuery,
-    ]);
+    // Get stats via single RPC — avoids 4 separate HEAD count requests that fail silently on large tables
+    const tenantIdForStats = context.tenantId || "00000000-0000-0000-0000-000000000000";
+    const { data: statsData } = await supabase.rpc("get_tenant_stats", { p_tenant_id: tenantIdForStats });
+    const conversationCount = statsData?.total_conversations ?? 0;
+    const messageCount      = statsData?.total_messages      ?? 0;
+    const mediaCount        = statsData?.total_media         ?? 0;
+    const extensionCount    = statsData?.total_extensions    ?? 0;
 
     // Enrich sync status with health metadata
     const now = Date.now();
