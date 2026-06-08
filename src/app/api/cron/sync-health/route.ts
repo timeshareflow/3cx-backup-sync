@@ -4,16 +4,23 @@ import { sendEmail } from "@/lib/notifications";
 
 export const dynamic = "force-dynamic";
 
-// Max minutes since last success before alerting
+// Max minutes since last success before alerting.
+// Thresholds are set for idle mode (no active users), which is the worst case:
+//   messages/CDR: run every 30 min via background sync (can be delayed by media backfill)
+//   media/voicemails: run every 60 min in idle mode
+//   recordings/faxes/meetings: run every 90 min in idle mode
+//   extensions: run every 4 hours in idle mode
+// When users are active, all syncs run much more frequently so these thresholds
+// will never be reached under normal operation.
 const STALENESS_THRESHOLDS: Record<string, { warning: number; critical: number }> = {
-  messages:   { warning: 45,  critical: 90 },
-  media:      { warning: 30,  critical: 60 },
-  cdr:        { warning: 30,  critical: 60 },
-  recordings: { warning: 60,  critical: 120 },
-  voicemails: { warning: 60,  critical: 120 },
-  faxes:      { warning: 60,  critical: 120 },
-  meetings:   { warning: 60,  critical: 120 },
-  extensions: { warning: 120, critical: 240 },
+  messages:   { warning: 75,  critical: 120 },
+  media:      { warning: 90,  critical: 150 },
+  cdr:        { warning: 75,  critical: 120 },
+  recordings: { warning: 120, critical: 210 },
+  voicemails: { warning: 90,  critical: 150 },
+  faxes:      { warning: 120, critical: 210 },
+  meetings:   { warning: 120, critical: 210 },
+  extensions: { warning: 300, critical: 480 },
 };
 
 type HealthLevel = "healthy" | "warning" | "critical";
