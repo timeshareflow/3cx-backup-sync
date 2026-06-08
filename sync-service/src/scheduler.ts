@@ -3,6 +3,8 @@ import { logger } from "./utils/logger";
 import { runMultiTenantSync, runMultiTenantSyncByType, SyncType } from "./sync";
 import { getSupabaseClient } from "./storage/supabase";
 import { getActiveTenants, getActiveUserTenants, getInactiveTenants } from "./tenant";
+import { startRealtimeListener, stopAllRealtimeListeners } from "./threecx/realtime-listener";
+import { syncRealtimeMessage } from "./sync/sync-realtime-message";
 
 // Track which sync types are currently running
 const runningSync: Set<SyncType | "full"> = new Set();
@@ -512,6 +514,23 @@ export function startScheduler(): void {
   logger.info(`  - CDR: every ${intervals.cdr} minutes`);
   logger.info(`  - Extensions: every ${intervals.extensions} minutes`);
   logger.info(`  - Background full sync (inactive tenants): every ${intervals.background} minutes`);
+
+  // Start realtime LISTEN connections for all active tenants.
+  // Fire-and-forget — if this fails, polling continues as the data safety net.
+  getActiveTenants().then((tenants) => {
+    if (tenants.length === 0) {
+      logger.info("Realtime listener: no active tenants found, will retry on next scheduler init");
+      return;
+    }
+    for (const tenant of tenants) {
+      startRealtimeListener(tenant.id, (payload) => syncRealtimeMessage(payload, tenant));
+    }
+    logger.info(`Realtime listener: started for ${tenants.length} tenant(s)`);
+  }).catch((err: Error) => {
+    logger.warn("Realtime listener: could not load tenants — polling will be used as fallback", {
+      error: err.message,
+    });
+  });
 }
 
 export function stopScheduler(): void {
@@ -539,6 +558,11 @@ export function stopScheduler(): void {
     backgroundSyncTask.stop();
     backgroundSyncTask = null;
   }
+  // Stop realtime listeners
+  stopAllRealtimeListeners().catch((err: Error) => {
+    logger.warn("Error stopping realtime listeners", { error: err.message });
+  });
+
   logger.info("Scheduler stopped");
 }
 

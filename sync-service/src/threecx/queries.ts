@@ -483,6 +483,49 @@ export async function getAllLiveConversations(
   }, pool);
 }
 
+// Fetch a single message by id_message (integer PK from chat_message table).
+// Queries both chat views the same way getNewMessages does — sharing $1 across the UNION.
+// Returns null if the message is not yet visible in the views.
+export async function getMessageById(
+  idMessage: number,
+  pool?: Pool
+): Promise<ThreeCXMessage | null> {
+  return withClient(async (client) => {
+    const schemaCheck = await client.query(`
+      SELECT table_name
+      FROM information_schema.views
+      WHERE table_schema = 'public'
+      AND table_name IN ('chat_messages_history_view', 'chat_messages_view')
+    `);
+    const availableViews = schemaCheck.rows.map((r: { table_name: string }) => r.table_name);
+    const hasHistory = availableViews.includes("chat_messages_history_view");
+    const hasActive = availableViews.includes("chat_messages_view");
+
+    if (!hasHistory && !hasActive) return null;
+
+    const messageFields = `
+      message_id, conversation_id, is_external, queue_number,
+      sender_participant_ip, sender_participant_name, sender_participant_no,
+      sender_participant_phone, time_sent, message
+    `;
+
+    // Both UNION parts can share $1 — parameter refs are query-scoped in PostgreSQL
+    const idAsText = idMessage.toString();
+    const queryParts: string[] = [];
+    if (hasHistory) queryParts.push(`SELECT ${messageFields} FROM chat_messages_history_view WHERE message_id = $1`);
+    if (hasActive)  queryParts.push(`SELECT ${messageFields} FROM chat_messages_view WHERE message_id = $1`);
+
+    const query = `SELECT * FROM (${queryParts.join(" UNION ")}) combined LIMIT 1`;
+    const result = await client.query(query, [idAsText]);
+    if (!result.rows[0]) return null;
+
+    return {
+      ...result.rows[0],
+      time_sent: new Date(result.rows[0].time_sent),
+    } as ThreeCXMessage;
+  }, pool);
+}
+
 // Get all file mappings for recent messages (for bulk sync)
 export async function getAllFileMappings(
   limit: number = 1000,
