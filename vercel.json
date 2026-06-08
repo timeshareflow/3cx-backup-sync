@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/sync-health",
       "schedule": "*/5 * * * *"
+    },
+    {
+      "path": "/api/cron/storage-recalc",
+      "schedule": "*/30 * * * *"
     }
   ]
 }

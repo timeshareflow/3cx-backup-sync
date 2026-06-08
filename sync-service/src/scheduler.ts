@@ -45,6 +45,20 @@ let chatCycleCount = 0;
 let activeTenantCache: { tenants: { id: string }[]; fetchedAt: number } | null = null;
 const TENANT_CACHE_TTL_MS = 60_000; // refresh every 60 seconds
 
+// Idle mode — true when no user has been active recently.
+// Media/recordings/extensions syncs slow down in idle mode to reduce CPU load.
+let systemIsIdle = false;
+
+// Per-sync timestamps used to throttle in idle mode (0 = run immediately next cycle)
+let lastMediaSyncAt = 0;
+let lastRecordingsSyncAt = 0;
+let lastExtensionsSyncAt = 0;
+
+// How long to wait between syncs when the system is idle (no active users)
+const IDLE_MEDIA_INTERVAL_MS      = 60 * 60_000;       // 60 min  (vs 5 min active)
+const IDLE_RECORDINGS_INTERVAL_MS = 90 * 60_000;       // 90 min  (vs 15 min active)
+const IDLE_EXTENSIONS_INTERVAL_MS = 4  * 60 * 60_000;  // 4 hours (vs 60 min active)
+
 async function getCachedActiveUserTenants() {
   const now = Date.now();
   if (activeTenantCache && now - activeTenantCache.fetchedAt < TENANT_CACHE_TTL_MS) {
@@ -52,6 +66,23 @@ async function getCachedActiveUserTenants() {
   }
   const tenants = await getActiveUserTenants();
   activeTenantCache = { tenants, fetchedAt: now };
+
+  // Update idle mode. Transition logs are emitted so PM2 logs show when the
+  // system enters/exits idle — useful for debugging CPU usage reports.
+  const wasIdle = systemIsIdle;
+  systemIsIdle = tenants.length === 0;
+  if (wasIdle !== systemIsIdle) {
+    if (systemIsIdle) {
+      logger.info("No active users — entering idle mode (media/recordings/extensions sync slowed)");
+    } else {
+      logger.info("Active users detected — exiting idle mode, restoring full sync frequency");
+      // Reset throttle timestamps so syncs fire on the very next cycle
+      lastMediaSyncAt = 0;
+      lastRecordingsSyncAt = 0;
+      lastExtensionsSyncAt = 0;
+    }
+  }
+
   return tenants;
 }
 
@@ -211,6 +242,16 @@ async function runMediaSync(): Promise<void> {
     return;
   }
 
+  // In idle mode, throttle to once per hour instead of every 5 minutes.
+  // Data is never lost — files stay on 3CX until the next sync cycle picks them up.
+  if (systemIsIdle) {
+    const elapsed = Date.now() - lastMediaSyncAt;
+    if (elapsed < IDLE_MEDIA_INTERVAL_MS) {
+      logger.debug(`Media sync skipped — idle mode (~${Math.round((IDLE_MEDIA_INTERVAL_MS - elapsed) / 60_000)}m until next)`);
+      return;
+    }
+  }
+
   try {
     // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
     // Media backup should happen regardless of whether users are logged in
@@ -221,7 +262,7 @@ async function runMediaSync(): Promise<void> {
 
     runningSync.add("media");
 
-    logger.info(`Media sync for ${allTenants.length} tenant(s)`);
+    logger.info(`Media sync for ${allTenants.length} tenant(s)${systemIsIdle ? " [idle mode]" : ""}`);
 
     await Promise.race([
       runMultiTenantSyncByType(
@@ -235,6 +276,8 @@ async function runMediaSync(): Promise<void> {
         )
       ),
     ]);
+
+    lastMediaSyncAt = Date.now();
   } catch (error) {
     logger.error("Media sync failed", { error: (error as Error).message });
   } finally {
@@ -254,6 +297,15 @@ async function runRecordingsSync(): Promise<void> {
     return;
   }
 
+  // In idle mode, throttle to once per 90 minutes instead of every 15 minutes.
+  if (systemIsIdle) {
+    const elapsed = Date.now() - lastRecordingsSyncAt;
+    if (elapsed < IDLE_RECORDINGS_INTERVAL_MS) {
+      logger.debug(`Recordings sync skipped — idle mode (~${Math.round((IDLE_RECORDINGS_INTERVAL_MS - elapsed) / 60_000)}m until next)`);
+      return;
+    }
+  }
+
   try {
     // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
     // Recording backup should happen regardless of whether users are logged in
@@ -264,7 +316,7 @@ async function runRecordingsSync(): Promise<void> {
 
     runningSync.add("recordings");
 
-    logger.info(`Recordings sync for ${allTenants.length} tenant(s)`);
+    logger.info(`Recordings sync for ${allTenants.length} tenant(s)${systemIsIdle ? " [idle mode]" : ""}`);
 
     await Promise.race([
       runMultiTenantSyncByType(
@@ -278,6 +330,8 @@ async function runRecordingsSync(): Promise<void> {
         )
       ),
     ]);
+
+    lastRecordingsSyncAt = Date.now();
   } catch (error) {
     logger.error("Recordings sync failed", { error: (error as Error).message });
   } finally {
@@ -335,6 +389,16 @@ async function runExtensionsSync(): Promise<void> {
     return;
   }
 
+  // In idle mode, throttle to once per 4 hours instead of every 60 minutes.
+  // Extension names/metadata change rarely so this is safe.
+  if (systemIsIdle) {
+    const elapsed = Date.now() - lastExtensionsSyncAt;
+    if (elapsed < IDLE_EXTENSIONS_INTERVAL_MS) {
+      logger.debug(`Extensions sync skipped — idle mode (~${Math.round((IDLE_EXTENSIONS_INTERVAL_MS - elapsed) / 60_000)}m until next)`);
+      return;
+    }
+  }
+
   try {
     // Use getActiveTenants (all enabled tenants) instead of getActiveUserTenants
     // Extensions should sync regardless of user activity to keep names up to date
@@ -345,12 +409,14 @@ async function runExtensionsSync(): Promise<void> {
 
     runningSync.add("extensions");
 
-    logger.info(`Extensions sync for ${allTenants.length} tenant(s)`);
+    logger.info(`Extensions sync for ${allTenants.length} tenant(s)${systemIsIdle ? " [idle mode]" : ""}`);
 
     await runMultiTenantSyncByType(
       ["extensions"],
       allTenants.map((t) => t.id)
     );
+
+    lastExtensionsSyncAt = Date.now();
   } catch (error) {
     logger.error("Extensions sync failed", { error: (error as Error).message });
   } finally {

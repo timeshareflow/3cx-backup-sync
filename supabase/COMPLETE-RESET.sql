@@ -490,31 +490,65 @@ CREATE TRIGGER trigger_update_conversation_stats
 AFTER INSERT ON messages
 FOR EACH ROW EXECUTE FUNCTION update_conversation_stats();
 
--- Update tenant storage usage
-CREATE OR REPLACE FUNCTION update_tenant_storage()
+-- Incremental storage counter — fires on INSERT (adds file_size to tenant total)
+CREATE OR REPLACE FUNCTION increment_tenant_storage()
 RETURNS TRIGGER AS $$
 BEGIN
-  UPDATE tenants SET storage_used_bytes = (
-    SELECT COALESCE(SUM(file_size), 0) FROM media_files WHERE tenant_id = NEW.tenant_id
-  ) + (
-    SELECT COALESCE(SUM(file_size), 0) FROM call_recordings WHERE tenant_id = NEW.tenant_id
-  ) + (
-    SELECT COALESCE(SUM(file_size), 0) FROM voicemails WHERE tenant_id = NEW.tenant_id
-  ) + (
-    SELECT COALESCE(SUM(file_size), 0) FROM faxes WHERE tenant_id = NEW.tenant_id
-  ) + (
-    SELECT COALESCE(SUM(file_size), 0) FROM meeting_recordings WHERE tenant_id = NEW.tenant_id
-  )
-  WHERE id = NEW.tenant_id;
+  IF NEW.file_size IS NOT NULL AND NEW.file_size > 0 THEN
+    UPDATE tenants
+    SET storage_used_bytes = storage_used_bytes + NEW.file_size
+    WHERE id = NEW.tenant_id;
+  END IF;
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TRIGGER trigger_media_storage AFTER INSERT ON media_files FOR EACH ROW EXECUTE FUNCTION update_tenant_storage();
-CREATE TRIGGER trigger_recording_storage AFTER INSERT ON call_recordings FOR EACH ROW EXECUTE FUNCTION update_tenant_storage();
-CREATE TRIGGER trigger_voicemail_storage AFTER INSERT ON voicemails FOR EACH ROW EXECUTE FUNCTION update_tenant_storage();
-CREATE TRIGGER trigger_fax_storage AFTER INSERT ON faxes FOR EACH ROW EXECUTE FUNCTION update_tenant_storage();
-CREATE TRIGGER trigger_meeting_storage AFTER INSERT ON meeting_recordings FOR EACH ROW EXECUTE FUNCTION update_tenant_storage();
+-- Incremental storage counter — fires on DELETE (subtracts file_size from tenant total)
+CREATE OR REPLACE FUNCTION decrement_tenant_storage()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF OLD.file_size IS NOT NULL AND OLD.file_size > 0 THEN
+    UPDATE tenants
+    SET storage_used_bytes = GREATEST(0, storage_used_bytes - OLD.file_size)
+    WHERE id = OLD.tenant_id;
+  END IF;
+  RETURN OLD;
+END;
+$$ LANGUAGE plpgsql;
+
+-- Full recalculation function — called by the /api/cron/storage-recalc cron every 30 min
+-- Acts as a safety net to correct any incremental drift
+CREATE OR REPLACE FUNCTION recalculate_all_tenant_storage()
+RETURNS void AS $$
+BEGIN
+  UPDATE tenants t
+  SET storage_used_bytes = (
+    SELECT COALESCE(SUM(file_size), 0) FROM media_files        WHERE tenant_id = t.id
+  ) + (
+    SELECT COALESCE(SUM(file_size), 0) FROM call_recordings    WHERE tenant_id = t.id
+  ) + (
+    SELECT COALESCE(SUM(file_size), 0) FROM voicemails          WHERE tenant_id = t.id
+  ) + (
+    SELECT COALESCE(SUM(file_size), 0) FROM faxes               WHERE tenant_id = t.id
+  ) + (
+    SELECT COALESCE(SUM(file_size), 0) FROM meeting_recordings  WHERE tenant_id = t.id
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- INSERT triggers (increment on new file)
+CREATE TRIGGER trigger_media_storage_inc     AFTER INSERT ON media_files        FOR EACH ROW EXECUTE FUNCTION increment_tenant_storage();
+CREATE TRIGGER trigger_recording_storage_inc AFTER INSERT ON call_recordings    FOR EACH ROW EXECUTE FUNCTION increment_tenant_storage();
+CREATE TRIGGER trigger_voicemail_storage_inc AFTER INSERT ON voicemails          FOR EACH ROW EXECUTE FUNCTION increment_tenant_storage();
+CREATE TRIGGER trigger_fax_storage_inc       AFTER INSERT ON faxes               FOR EACH ROW EXECUTE FUNCTION increment_tenant_storage();
+CREATE TRIGGER trigger_meeting_storage_inc   AFTER INSERT ON meeting_recordings  FOR EACH ROW EXECUTE FUNCTION increment_tenant_storage();
+
+-- DELETE triggers (decrement on file removal)
+CREATE TRIGGER trigger_media_storage_dec     AFTER DELETE ON media_files        FOR EACH ROW EXECUTE FUNCTION decrement_tenant_storage();
+CREATE TRIGGER trigger_recording_storage_dec AFTER DELETE ON call_recordings    FOR EACH ROW EXECUTE FUNCTION decrement_tenant_storage();
+CREATE TRIGGER trigger_voicemail_storage_dec AFTER DELETE ON voicemails          FOR EACH ROW EXECUTE FUNCTION decrement_tenant_storage();
+CREATE TRIGGER trigger_fax_storage_dec       AFTER DELETE ON faxes               FOR EACH ROW EXECUTE FUNCTION decrement_tenant_storage();
+CREATE TRIGGER trigger_meeting_storage_dec   AFTER DELETE ON meeting_recordings  FOR EACH ROW EXECUTE FUNCTION decrement_tenant_storage();
 
 -- Update updated_at timestamp
 CREATE OR REPLACE FUNCTION update_updated_at()
