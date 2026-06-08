@@ -238,7 +238,12 @@ export async function syncRealtimeMessage(
 
     // Handle media attachment
     if (payload.has_media && payload.internal_file_name && convId) {
-      let fileInfo: Record<string, unknown> | null = null;
+      // Assign narrowed locals so TypeScript sees string (not string | null)
+      const internalFile: string = payload.internal_file_name;
+      const publicFile: string = payload.public_file_name || "";
+      const safeConvId: string = convId;
+
+      let fileInfo: { Width?: number; Height?: number; Size?: number } | null = null;
       if (payload.file_info) {
         try { fileInfo = JSON.parse(payload.file_info); } catch { /* ignore */ }
       }
@@ -246,10 +251,10 @@ export async function syncRealtimeMessage(
       // Link the file to the message — we already have the hash→filename mapping from the trigger
       await linkMediaToMessage(
         tenantId,
-        payload.internal_file_name,
+        internalFile,
         messageId,
-        payload.public_file_name ?? null,
-        convId,
+        publicFile,
+        safeConvId,
         fileInfo
       );
 
@@ -258,13 +263,13 @@ export async function syncRealtimeMessage(
       if (tenant.backup_chat_media) {
         syncSingleMediaFile(
           tenant,
-          payload.internal_file_name,
+          internalFile,
           payload.public_file_name,
           tenantId
         ).catch((err) => {
           logger.warn("Realtime: immediate media file sync failed — periodic sync will retry", {
             tenantId,
-            internal_file_name: payload.internal_file_name,
+            internal_file_name: internalFile,
             error: (err as Error).message,
           });
         });
