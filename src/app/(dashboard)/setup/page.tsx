@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
@@ -17,6 +17,7 @@ import {
   ArrowRight,
   Shield,
   Terminal,
+  Download,
 } from "lucide-react";
 
 interface SetupFormData {
@@ -49,6 +50,9 @@ export default function TenantSetupPage() {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isConfigured, setIsConfigured] = useState(false);
+  const [installStatus, setInstallStatus] = useState<"idle" | "installing" | "success" | "error">("idle");
+  const [installLogs, setInstallLogs] = useState<string[]>([]);
+  const logsEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // Wait for auth to finish loading
@@ -118,6 +122,76 @@ export default function TenantSetupPage() {
       setConnectionError((error as Error).message || "Connection failed");
     } finally {
       setIsTestingConnection(false);
+    }
+  };
+
+  // Auto-scroll install log to bottom
+  useEffect(() => {
+    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [installLogs]);
+
+  const handleInstallAgent = async () => {
+    if (!formData.threecx_host || !formData.ssh_user || !formData.ssh_password || !formData.threecx_db_password) {
+      setError("Please fill in all SSH and database credentials before installing.");
+      return;
+    }
+
+    setInstallStatus("installing");
+    setInstallLogs(["Starting installation..."]);
+
+    try {
+      const response = await fetch("/api/tenant/install-sync-agent", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          host: formData.threecx_host,
+          ssh_port: parseInt(formData.ssh_port),
+          ssh_user: formData.ssh_user,
+          ssh_password: formData.ssh_password,
+          db_password: formData.threecx_db_password,
+        }),
+      });
+
+      if (!response.ok || !response.body) {
+        throw new Error("Failed to start installation");
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const events = buffer.split("\n\n");
+        buffer = events.pop() ?? "";
+
+        for (const event of events) {
+          const line = event.replace(/^data: /, "").trim();
+          if (!line) continue;
+          try {
+            const parsed = JSON.parse(line) as { type: string; msg: string };
+            if (parsed.type === "done") {
+              // stream ended
+            } else if (parsed.type === "success") {
+              setInstallStatus("success");
+              setInstallLogs((prev) => [...prev, `✓ ${parsed.msg}`]);
+            } else if (parsed.type === "error") {
+              setInstallStatus("error");
+              setInstallLogs((prev) => [...prev, `✗ ${parsed.msg}`]);
+            } else {
+              setInstallLogs((prev) => [...prev, parsed.msg]);
+            }
+          } catch { /* ignore parse errors */ }
+        }
+      }
+
+      setInstallStatus((prev) => prev === "installing" ? "success" : prev);
+    } catch (err) {
+      setInstallStatus("error");
+      setInstallLogs((prev) => [...prev, `Error: ${(err as Error).message}`]);
     }
   };
 
@@ -378,6 +452,66 @@ export default function TenantSetupPage() {
             )}
           </div>
         </div>
+
+        {/* Install Sync Agent — shown after successful connection test */}
+        {connectionStatus === "success" && (
+          <div className="p-4 bg-teal-50 rounded-xl border border-teal-200 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-medium text-slate-800 flex items-center gap-2">
+                  <Download className="h-4 w-4 text-teal-600" />
+                  Install Sync Agent
+                </h4>
+                <p className="text-sm text-slate-500 mt-0.5">
+                  Automatically install the sync service on your 3CX server
+                </p>
+              </div>
+              {installStatus === "idle" && (
+                <Button
+                  onClick={handleInstallAgent}
+                  className="bg-teal-600 hover:bg-teal-700 text-white"
+                >
+                  Install Now
+                </Button>
+              )}
+              {installStatus === "installing" && (
+                <span className="flex items-center gap-2 text-sm text-teal-700 font-medium">
+                  <Spinner size="sm" /> Installing...
+                </span>
+              )}
+              {installStatus === "success" && (
+                <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-sm font-semibold bg-emerald-100 text-emerald-700 border border-emerald-200">
+                  <CheckCircle className="h-4 w-4" /> Installed
+                </span>
+              )}
+              {installStatus === "error" && (
+                <Button
+                  onClick={handleInstallAgent}
+                  variant="outline"
+                  className="border-red-300 text-red-700 hover:bg-red-50"
+                >
+                  Retry
+                </Button>
+              )}
+            </div>
+
+            {installLogs.length > 0 && (
+              <div className="bg-slate-900 rounded-lg p-3 font-mono text-xs text-slate-200 max-h-48 overflow-y-auto">
+                {installLogs.map((line, i) => (
+                  <div key={i} className={
+                    line.startsWith("✓") ? "text-emerald-400" :
+                    line.startsWith("✗") ? "text-red-400" :
+                    line.startsWith("[stderr]") ? "text-yellow-400" :
+                    "text-slate-200"
+                  }>
+                    {line}
+                  </div>
+                ))}
+                <div ref={logsEndRef} />
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex items-center justify-between mt-8 pt-6 border-t border-slate-200">
