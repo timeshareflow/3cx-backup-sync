@@ -1,6 +1,9 @@
 import { Client, ConnectConfig } from "ssh2";
 import * as net from "net";
 import * as dns from "dns";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import { promisify } from "util";
 import { logger } from "./utils/logger";
 
@@ -102,11 +105,31 @@ async function attemptSshConnection(
   return new Promise((resolve, reject) => {
     const sshClient = new Client();
 
+    // Try to load the host's default SSH private key — allows key-based auth even
+    // when the remote server has password auth disabled (e.g. after a 3CX tools reset).
+    let privateKey: Buffer | undefined;
+    const defaultKeyPaths = [
+      path.join(os.homedir(), ".ssh", "id_rsa"),
+      path.join(os.homedir(), ".ssh", "id_ed25519"),
+    ];
+    for (const keyPath of defaultKeyPaths) {
+      try {
+        if (fs.existsSync(keyPath)) {
+          privateKey = fs.readFileSync(keyPath);
+          logger.debug(`Loaded SSH private key from ${keyPath}`, { tenantId });
+          break;
+        }
+      } catch {
+        // Key not readable — skip
+      }
+    }
+
     const sshConfig: ConnectConfig = {
       host: config.sshHost,
       port: config.sshPort,
       username: config.sshUsername,
-      password: config.sshPassword,
+      ...(config.sshPassword ? { password: config.sshPassword } : {}),
+      ...(privateKey ? { privateKey } : {}),
       readyTimeout: SSH_CONFIG.readyTimeout,
       keepaliveInterval: SSH_CONFIG.keepaliveInterval,
       keepaliveCountMax: SSH_CONFIG.keepaliveCountMax,

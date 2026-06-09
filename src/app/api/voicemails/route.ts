@@ -73,11 +73,12 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Build query
+    // Build query — exclude system files (greetings.bin, etc.)
     let query = supabase
       .from("voicemails")
       .select("*", { count: "exact" })
       .eq("tenant_id", context.tenantId)
+      .like("threecx_voicemail_id", "vmail_%")
       .order("received_at", { ascending: false })
       .range(offset, offset + pageSize - 1);
 

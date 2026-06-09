@@ -23,10 +23,10 @@ import {
   getMessagesByThreecxIds,
 } from "../storage/supabase";
 
-// Rate-limit expensive backfills to avoid hammering Supabase every 20 seconds
-let lastConvSyncAt = 0;
+// Rate-limit expensive operations
+let convSyncCycleCount = 0;
+const CONV_SYNC_EVERY_N_CYCLES = 15; // every 15th call (~5 min at 30s intervals)
 let lastMediaBackfillAt = 0;
-const CONV_SYNC_INTERVAL_MS = 2 * 60_000;      // sync all conversations at most once per 2 min
 const MEDIA_BACKFILL_INTERVAL_MS = 30 * 60_000; // media backfill at most once per 30 min
 
 export interface MessageSyncResult {
@@ -158,10 +158,9 @@ export async function syncMessages(
     await updateSyncStatus("messages", "running", { tenantId });
 
     // Sync all conversations from live table (including empty group chats)
-    // Rate-limited to once per 2 minutes to avoid 346 Supabase queries every 20 seconds
-    const now = Date.now();
-    if (now - lastConvSyncAt >= CONV_SYNC_INTERVAL_MS) {
-      lastConvSyncAt = now;
+    // Cycle-counted to avoid running on every 30-second message sync
+    convSyncCycleCount++;
+    if (convSyncCycleCount % CONV_SYNC_EVERY_N_CYCLES === 0) {
       const conversationSync = await syncAllConversations(pool, tenantId);
       result.conversationsCreated += conversationSync.created;
     }
@@ -409,51 +408,53 @@ export async function syncMessages(
       totalProcessed,
     });
 
-    // Backfill: link any remaining unlinked media files using 3CX file mappings
-    // Rate-limited to once per 5 minutes — fetches up to 5000 file mappings + Supabase queries per run
+    // Backfill: link any remaining unlinked media files using 3CX file mappings.
+    // Runs fire-and-forget so it never blocks or times out the main sync cycle.
     if (tenantId && Date.now() - lastMediaBackfillAt >= MEDIA_BACKFILL_INTERVAL_MS) {
       lastMediaBackfillAt = Date.now();
-      try {
-        const unlinkedCount = await getUnlinkedMediaCount(tenantId);
-        if (unlinkedCount > 0) {
-          logger.info(`Found ${unlinkedCount} unlinked media files, attempting backfill`, { tenantId });
+      void (async () => {
+        try {
+          const unlinkedCount = await getUnlinkedMediaCount(tenantId);
+          if (unlinkedCount === 0) return;
+
+          logger.info(`Found ${unlinkedCount} unlinked media files, attempting backfill in background`, { tenantId });
 
           const allMappings = await getAllFileMappings(5000, pool);
-          if (allMappings.length > 0) {
-            // Get Supabase message IDs for all mapped messages
-            const threecxIds = allMappings.map((m) => m.message_id);
-            const supabaseMessages = await getMessagesByThreecxIds(threecxIds, tenantId);
-            const messageMap = new Map(
-              supabaseMessages.map((m) => [m.threecx_message_id, m])
-            );
+          if (allMappings.length === 0) return;
 
-            let linked = 0;
-            for (const mapping of allMappings) {
-              const msg = messageMap.get(mapping.message_id);
-              if (msg) {
-                const wasLinked = await linkMediaToMessage(
-                  tenantId,
-                  mapping.internal_file_name,
-                  msg.id,
-                  mapping.public_file_name,
-                  msg.conversation_id,
-                  mapping.file_info
-                );
-                if (wasLinked) linked++;
-              }
-            }
+          // Single bulk query to resolve all message IDs at once
+          const threecxIds = allMappings.map((m) => m.message_id);
+          const supabaseMessages = await getMessagesByThreecxIds(threecxIds, tenantId);
+          const messageMap = new Map(
+            supabaseMessages.map((m) => [m.threecx_message_id, m])
+          );
 
-            if (linked > 0) {
-              logger.info(`Backfill linked ${linked} media files to messages`, { tenantId });
+          let linked = 0;
+          for (const mapping of allMappings) {
+            const msg = messageMap.get(mapping.message_id);
+            if (msg) {
+              const wasLinked = await linkMediaToMessage(
+                tenantId,
+                mapping.internal_file_name,
+                msg.id,
+                mapping.public_file_name,
+                msg.conversation_id,
+                mapping.file_info
+              );
+              if (wasLinked) linked++;
             }
           }
+
+          if (linked > 0) {
+            logger.info(`Backfill linked ${linked} media files to messages`, { tenantId });
+          }
+        } catch (error) {
+          logger.warn("Media backfill failed (non-critical)", {
+            tenantId,
+            error: (error as Error).message,
+          });
         }
-      } catch (error) {
-        logger.warn("Media backfill failed (non-critical)", {
-          tenantId,
-          error: (error as Error).message,
-        });
-      }
+      })();
     }
 
     return result;

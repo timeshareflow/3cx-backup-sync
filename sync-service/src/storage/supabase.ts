@@ -787,13 +787,15 @@ export async function updateSyncStatus(
     updated_at: now,
   };
 
+  // Always persist the sync cursor when provided — including mid-batch "running" checkpoints —
+  // so a crash or restart resumes from the right place rather than re-scanning from the start.
+  if (details?.lastSyncedTimestamp) {
+    record.last_synced_message_at = details.lastSyncedTimestamp;
+  }
+
   if (status === "success") {
     record.last_success_at = now;
     record.last_error = null;
-    // Store the timestamp of the last synced message for incremental sync
-    if (details.lastSyncedTimestamp) {
-      record.last_synced_message_at = details.lastSyncedTimestamp;
-    }
   }
 
   if (status === "error" && details?.errorMessage) {
@@ -1094,7 +1096,7 @@ export async function insertVoicemail(voicemail: {
     .from("voicemails")
     .upsert(dbRecord, {
       onConflict: "tenant_id,threecx_voicemail_id",
-      ignoreDuplicates: true,
+      ignoreDuplicates: false,
     })
     .select("id")
     .single();

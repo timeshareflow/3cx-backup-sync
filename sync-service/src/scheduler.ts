@@ -211,8 +211,8 @@ async function runChatSync(): Promise<void> {
     ]);
 
     // After chat sync, check if new media messages need files downloaded
-    // Only check every 6th cycle (~2 minutes) to reduce Supabase read load
-    if (chatCycleCount % 6 === 0 && !runningSync.has("media") && !runningSync.has("full")) {
+    // Only check every 2nd cycle (~40 seconds) to catch new media quickly
+    if (chatCycleCount % 2 === 0 && !runningSync.has("media") && !runningSync.has("full")) {
       const needsMedia = await hasRecentUnlinkedMedia();
       if (needsMedia) {
         logger.info("New media messages detected - triggering immediate media sync");
@@ -523,7 +523,11 @@ export function startScheduler(): void {
       return;
     }
     for (const tenant of tenants) {
-      startRealtimeListener(tenant.id, (payload) => syncRealtimeMessage(payload, tenant));
+      startRealtimeListener(tenant.id, (payload) => syncRealtimeMessage(payload, tenant), {
+        user: "phonesystem",
+        password: tenant.threecx_db_password ?? undefined,
+        database: "database_single",
+      });
     }
     logger.info(`Realtime listener: started for ${tenants.length} tenant(s)`);
   }).catch((err: Error) => {

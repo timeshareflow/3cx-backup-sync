@@ -103,14 +103,13 @@ function normalizeTenant(raw: RawTenantData): TenantConfig {
 // Cache for tenant database pools
 const tenantPools: Map<string, Pool> = new Map();
 
-// Register callback to clean up stale pools when SSH tunnel dies
+// Register callback to clean up stale pools when SSH tunnel dies.
+// Only evict from cache — do NOT call pool.end() here. Calling end() while a sync
+// is mid-flight causes "cannot use pool after calling end" crashes. The pool will
+// drain naturally; the next sync will create a fresh one via the new tunnel.
 setOnTunnelDiedCallback((tenantId: string) => {
-  const pool = tenantPools.get(tenantId);
-  if (pool) {
-    logger.info(`Invalidating stale database pool after SSH tunnel died`, { tenantId });
-    pool.end().catch((err) => {
-      logger.error(`Error ending stale pool`, { tenantId, error: err.message });
-    });
+  if (tenantPools.has(tenantId)) {
+    logger.info(`Evicting stale database pool after SSH tunnel died`, { tenantId });
     tenantPools.delete(tenantId);
   }
 });

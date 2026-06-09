@@ -413,10 +413,15 @@ export async function uploadBufferWithCompression(
     compressionSettings
   );
 
-  // Update storage path with new extension if compressed
+  // Update storage path if the output extension differs from what's in the storage path.
+  // Compare against the extension already in storagePath (not originalExtension) so that
+  // hash-named files with no extension (e.g. "abc123.bin") don't get the wrong suffix.
   let finalStoragePath = storagePath;
-  if (compressionResult.wasCompressed && compressionResult.newExtension !== originalExtension) {
-    const pathWithoutExt = storagePath.replace(/\.[^.]+$/, "");
+  const storagePathExt = storagePath.includes(".")
+    ? storagePath.slice(storagePath.lastIndexOf(".") + 1)
+    : "";
+  if (compressionResult.newExtension && compressionResult.newExtension !== storagePathExt) {
+    const pathWithoutExt = storagePath.slice(0, storagePath.lastIndexOf("."));
     finalStoragePath = `${pathWithoutExt}.${compressionResult.newExtension}`;
   }
 

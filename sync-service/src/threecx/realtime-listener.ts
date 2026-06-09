@@ -1,4 +1,5 @@
 import { Client } from "pg";
+import { getExistingTunnel } from "../ssh-tunnel";
 import { logger } from "../utils/logger";
 
 export interface RealtimeMessagePayload {
@@ -14,8 +15,15 @@ export interface RealtimeMessagePayload {
 
 type NotifyHandler = (payload: RealtimeMessagePayload) => Promise<void>;
 
+export interface RealtimeDbConfig {
+  user?: string;
+  password?: string;
+  database?: string;
+}
+
 interface ListenerState {
   tenantId: string;
+  dbConfig: RealtimeDbConfig;
   client: Client | null;
   isConnected: boolean;
   stopped: boolean;
@@ -32,20 +40,26 @@ function reconnectDelay(attempts: number): number {
   return Math.min(BASE_RECONNECT_MS * Math.pow(2, Math.min(attempts, 7)), MAX_RECONNECT_MS);
 }
 
-function makeClient(): Client {
+function makeClient(tenantId: string, cfg: RealtimeDbConfig): Client {
+  // If an SSH tunnel is active for this tenant, connect through it.
+  // This handles remote-mode deployments (sync service not on the 3CX server).
+  const tunnel = getExistingTunnel(tenantId);
+  const host = tunnel ? "127.0.0.1" : (process.env.THREECX_DB_HOST || "127.0.0.1");
+  const port = tunnel ? tunnel.localPort : parseInt(process.env.THREECX_DB_PORT || "5432");
+
   return new Client({
-    host: process.env.THREECX_DB_HOST || "127.0.0.1",
-    port: parseInt(process.env.THREECX_DB_PORT || "5432"),
-    database: process.env.THREECX_DB_NAME || "database_single",
-    user: process.env.THREECX_DB_USER || "phonesystem",
-    password: process.env.THREECX_DB_PASSWORD,
+    host,
+    port,
+    database: cfg.database || process.env.THREECX_DB_NAME || "database_single",
+    user: cfg.user || process.env.THREECX_DB_USER || "phonesystem",
+    password: cfg.password || process.env.THREECX_DB_PASSWORD,
   });
 }
 
 async function connectListener(state: ListenerState): Promise<void> {
   if (state.stopped) return;
 
-  const client = makeClient();
+  const client = makeClient(state.tenantId, state.dbConfig);
   state.client = client;
 
   // Handle unexpected errors from the client
@@ -139,7 +153,7 @@ function scheduleReconnect(state: ListenerState): void {
 // Map of tenantId → listener state
 const listeners = new Map<string, ListenerState>();
 
-export function startRealtimeListener(tenantId: string, handler: NotifyHandler): void {
+export function startRealtimeListener(tenantId: string, handler: NotifyHandler, dbConfig?: RealtimeDbConfig): void {
   if (listeners.has(tenantId)) {
     logger.debug("Realtime listener already running for tenant", { tenantId });
     return;
@@ -147,6 +161,7 @@ export function startRealtimeListener(tenantId: string, handler: NotifyHandler):
 
   const state: ListenerState = {
     tenantId,
+    dbConfig: dbConfig ?? {},
     client: null,
     isConnected: false,
     stopped: false,

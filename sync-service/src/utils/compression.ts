@@ -31,17 +31,17 @@ export interface CompressionSettings {
 // Default compression settings optimized for storage savings
 export const DEFAULT_COMPRESSION_SETTINGS: CompressionSettings = {
   // Images: Resize large images and compress
-  imageMaxDimension: 1920, // Full HD max
-  imageQuality: 80, // Good quality with decent compression
+  imageMaxDimension: 1200, // Reduced from 1920 — covers most display sizes with smaller files
+  imageQuality: 65, // Reduced from 80 — still acceptable for chat media
   imageFormat: "webp", // WebP offers best compression
 
   // Audio: Convert to MP3 (good for voice recordings)
   audioBitrate: "128k", // Good quality for voice
   audioFormat: "mp3",
 
-  // Video: Compress to 720p MP4
+  // Video: Compress to 1080p MP4 — most phone videos are already ≤1080p so they remux, not re-encode
   videoBitrate: "", // Empty = CRF-only mode (better quality-per-bit)
-  videoMaxHeight: 720, // 720p max
+  videoMaxHeight: 1080, // 1080p max
   videoFormat: "mp4",
   videoCodec: "libx264",
   videoPreset: "veryfast", // Fast encoding, slightly larger files - good for backup
@@ -355,7 +355,7 @@ export async function compressVideo(
 
     const outputOptions: string[] = [
       `-preset ${settings.videoPreset}`,
-      "-crf 23",
+      "-crf 28",
       "-movflags +faststart",
     ];
 

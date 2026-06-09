@@ -96,6 +96,7 @@ export async function syncMedia(
       host: sftpConfig.host,
     });
     sftp = await createSftpClient(sftpConfig);
+    const sftpClient = sftp;
 
     // Try each path until we find one that exists
     let chatFilesPath: string | null = null;
@@ -150,85 +151,89 @@ export async function syncMedia(
 
     logger.info(`${filesToSync.length} new files to sync, ${result.filesSkipped} already synced`, { tenantId });
 
-    for (const file of filesToSync) {
-      try {
-        // Determine upload strategy based on file size
-        const useStreaming = file.size > MAX_FILE_SIZE_BYTES;
+    const CONCURRENCY = 4;
+    for (let i = 0; i < filesToSync.length; i += CONCURRENCY) {
+      const batch = filesToSync.slice(i, i + CONCURRENCY);
+      await Promise.all(batch.map(async (file) => {
+        try {
+          // Determine upload strategy based on file size
+          const useStreaming = file.size > MAX_FILE_SIZE_BYTES;
 
-        // Get file info from filename for streaming (can't detect from buffer)
-        const fileInfo = getFileInfo(file.filename);
+          // Get file info from filename for streaming (can't detect from buffer)
+          const fileInfo = getFileInfo(file.filename);
 
-        // Generate storage path - preserve subfolder structure
-        const storagePath = generateStoragePath(tenantId, "chat-media", file.relativePath, fileInfo.extension);
+          // Generate storage path - preserve subfolder structure
+          const storagePath = generateStoragePath(tenantId, "chat-media", file.relativePath, fileInfo.extension);
 
-        let uploadedPath: string;
-        let uploadedSize: number;
-        let mimeType: string;
-        let fileType: string;
+          let uploadedPath: string;
+          let uploadedSize: number;
+          let mimeType: string;
+          let fileType: string;
 
-        if (useStreaming) {
-          // STREAMING: For large files (25MB-500MB), stream directly to S3
-          logger.info("Using streaming upload for large file", {
-            tenantId,
-            filename: file.relativePath,
-            size: formatBytes(file.size),
+          if (useStreaming) {
+            // STREAMING: For large files (25MB-500MB), stream directly to S3
+            logger.info("Using streaming upload for large file", {
+              tenantId,
+              filename: file.relativePath,
+              size: formatBytes(file.size),
+            });
+
+            const stream = await downloadFileStream(sftpClient, file.fullPath);
+            const streamResult = await streamUpload(stream, storagePath, fileInfo.mimeType, file.size);
+
+            uploadedPath = streamResult.path;
+            uploadedSize = file.size;
+            mimeType = fileInfo.mimeType;
+            fileType = fileInfo.fileType;
+          } else {
+            // BUFFER: For smaller files (<25MB), download to buffer and compress
+            const buffer = await downloadFile(sftpClient, file.fullPath);
+
+            // Detect file type from buffer (more accurate than filename)
+            const detected = detectFileType(buffer);
+            fileType = detected.fileType;
+
+            // Upload with compression
+            const uploadResult = await uploadBufferWithCompression(
+              buffer,
+              storagePath,
+              detected.fileType,
+              detected.extension,
+              DEFAULT_COMPRESSION_SETTINGS
+            );
+
+            uploadedPath = uploadResult.path;
+            uploadedSize = uploadResult.size;
+            mimeType = uploadResult.newMimeType;
+          }
+
+          // Record in database
+          await insertMediaFileNew({
+            tenant_id: tenantId,
+            original_filename: file.filename,
+            stored_filename: path.basename(uploadedPath),
+            file_type: fileType,
+            mime_type: mimeType,
+            file_size: uploadedSize,
+            storage_path: uploadedPath,
+            storage_backend: "spaces",
           });
 
-          const stream = await downloadFileStream(sftp, file.fullPath);
-          const streamResult = await streamUpload(stream, storagePath, fileInfo.mimeType, file.size);
-
-          uploadedPath = streamResult.path;
-          uploadedSize = file.size;
-          mimeType = fileInfo.mimeType;
-          fileType = fileInfo.fileType;
-        } else {
-          // BUFFER: For smaller files (<25MB), download to buffer and compress
-          const buffer = await downloadFile(sftp, file.fullPath);
-
-          // Detect file type from buffer (more accurate than filename)
-          const detected = detectFileType(buffer);
-          fileType = detected.fileType;
-
-          // Upload with compression
-          const uploadResult = await uploadBufferWithCompression(
-            buffer,
-            storagePath,
-            detected.fileType,
-            detected.extension,
-            DEFAULT_COMPRESSION_SETTINGS
-          );
-
-          uploadedPath = uploadResult.path;
-          uploadedSize = uploadResult.size;
-          mimeType = uploadResult.newMimeType;
+          result.filesSynced++;
+          logger.info(`Synced media file`, { tenantId, filename: file.relativePath, size: formatBytes(file.size) });
+        } catch (error) {
+          const err = handleError(error);
+          result.errors.push({
+            filename: file.relativePath,
+            error: err.message,
+          });
+          logger.error("Failed to sync media file", {
+            tenantId,
+            filename: file.relativePath,
+            error: err.message,
+          });
         }
-
-        // Record in database
-        await insertMediaFileNew({
-          tenant_id: tenantId,
-          original_filename: file.filename,
-          stored_filename: path.basename(uploadedPath),
-          file_type: fileType,
-          mime_type: mimeType,
-          file_size: uploadedSize,
-          storage_path: uploadedPath,
-          storage_backend: "spaces",
-        });
-
-        result.filesSynced++;
-        logger.info(`Synced media file`, { tenantId, filename: file.relativePath, size: formatBytes(file.size) });
-      } catch (error) {
-        const err = handleError(error);
-        result.errors.push({
-          filename: file.relativePath,
-          error: err.message,
-        });
-        logger.error("Failed to sync media file", {
-          tenantId,
-          filename: file.relativePath,
-          error: err.message,
-        });
-      }
+      }));
     }
 
     await updateSyncStatus("media", "success", {

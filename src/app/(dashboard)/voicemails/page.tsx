@@ -1,12 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Voicemail, Play, Pause, Download, Search, Check, Circle, Loader2 } from "lucide-react";
-import { formatDistanceToNow } from "date-fns";
+import { Voicemail, Play, Pause, Download, Search, Loader2 } from "lucide-react";
+import { format, formatDistanceToNow } from "date-fns";
 
 interface VoicemailRecord {
   id: string;
-  extension_number: string | null;
+  threecx_voicemail_id: string | null;
   caller_number: string | null;
   caller_name: string | null;
   duration_seconds: number | null;
@@ -187,21 +187,23 @@ export default function VoicemailsPage() {
                     <Voicemail className={`h-6 w-6 ${vm.is_read ? "text-slate-500" : "text-teal-600"}`} />
                   </div>
                   <div>
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-2 flex-wrap">
                       <h3 className="font-semibold text-slate-800">
                         {vm.caller_name || vm.caller_number || "Unknown Caller"}
                       </h3>
+                      {vm.caller_number && (
+                        <span className="text-xs text-slate-400 font-mono">Ext {vm.caller_number}</span>
+                      )}
                       {!vm.is_read && (
                         <span className="px-2 py-0.5 bg-teal-100 text-teal-700 text-xs font-semibold rounded-full">
                           New
                         </span>
                       )}
                     </div>
-                    {vm.caller_name && vm.caller_number && (
-                      <p className="text-sm text-slate-500">{vm.caller_number}</p>
-                    )}
-                    <div className="flex items-center gap-4 mt-2 text-sm text-slate-500">
-                      <span>Extension: {vm.extension_number || "-"}</span>
+                    <div className="flex items-center gap-3 mt-1 text-sm text-slate-500">
+                      {vm.threecx_voicemail_id && (
+                        <span>Mailbox: {vm.threecx_voicemail_id.split("_")[2] || "-"}</span>
+                      )}
                       <span className="font-mono">{formatDuration(vm.duration_seconds)}</span>
                       <span>{formatFileSize(vm.file_size)}</span>
                     </div>
@@ -213,9 +215,14 @@ export default function VoicemailsPage() {
                   </div>
                 </div>
                 <div className="flex flex-col items-end gap-3">
-                  <span className="text-sm text-slate-500">
-                    {formatDistanceToNow(new Date(vm.received_at), { addSuffix: true })}
-                  </span>
+                  <div className="text-right">
+                    <p className="text-sm font-medium text-slate-700">
+                      {format(new Date(vm.received_at), "MMM d, yyyy")}
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      {format(new Date(vm.received_at), "h:mm a")} · {formatDistanceToNow(new Date(vm.received_at), { addSuffix: true })}
+                    </p>
+                  </div>
                   <div className="flex items-center gap-2">
                     <button
                       onClick={() => setPlayingId(playingId === vm.id ? null : vm.id)}

@@ -44,9 +44,11 @@ interface MonitorPanel {
 
 type ViewMode = "grid" | "feed";
 type SelectorTab = "extensions" | "groups";
+type CardColumns = 1 | 2 | 3;
 
 export default function MonitorPage() {
   const [viewMode, setViewMode] = useState<ViewMode>("grid");
+  const [cardColumns, setCardColumns] = useState<CardColumns>(2);
   const [panels, setPanels] = useState<MonitorPanel[]>([]);
   const [showSelector, setShowSelector] = useState(false);
   const [selectorTab, setSelectorTab] = useState<SelectorTab>("extensions");
@@ -79,6 +81,7 @@ export default function MonitorPage() {
         if (mode !== undefined) {
           body.monitorViewMode = mode;
         }
+        body.monitorCardColumns = cardColumns;
         await fetch("/api/user/preferences", {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
@@ -93,6 +96,11 @@ export default function MonitorPage() {
   const handleViewModeChange = useCallback((mode: ViewMode) => {
     setViewMode(mode);
     saveMonitorPreferences(panels, mode);
+  }, [panels, saveMonitorPreferences]);
+
+  const handleCardColumnsChange = useCallback((cols: CardColumns) => {
+    setCardColumns(cols);
+    saveMonitorPreferences(panels);
   }, [panels, saveMonitorPreferences]);
 
   const fetchExtensions = useCallback(async (): Promise<Extension[]> => {
@@ -145,8 +153,11 @@ export default function MonitorPage() {
             prefsData.preferences?.monitorGroupChatIds || [];
           const savedViewMode: ViewMode =
             prefsData.preferences?.monitorViewMode || "grid";
+          const savedCardColumns: CardColumns =
+            (prefsData.preferences?.monitorCardColumns as CardColumns) || 2;
 
           setViewMode(savedViewMode);
+          setCardColumns(savedCardColumns);
 
           const savedPanels: MonitorPanel[] = [];
 
@@ -299,9 +310,8 @@ export default function MonitorPage() {
   const maximizedPanel = panels.find((p) => p.isMaximized);
 
   const getGridCols = () => {
-    if (panels.length <= 1) return "grid-cols-1";
-    if (panels.length === 2) return "grid-cols-2";
-    if (panels.length <= 4) return "grid-cols-2";
+    if (cardColumns === 1) return "grid-cols-1";
+    if (cardColumns === 2) return "grid-cols-2";
     return "grid-cols-3";
   };
 
@@ -362,6 +372,24 @@ export default function MonitorPage() {
 
             {viewMode === "grid" && (
               <>
+                {/* Column count picker */}
+                <div className="flex items-center bg-slate-100 rounded-lg p-1 gap-0.5" title="Columns">
+                  {([1, 2, 3] as CardColumns[]).map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => handleCardColumnsChange(n)}
+                      className={`w-8 h-7 rounded-md text-xs font-bold transition-colors ${
+                        cardColumns === n
+                          ? "bg-white text-slate-800 shadow-sm"
+                          : "text-slate-500 hover:text-slate-700"
+                      }`}
+                      title={`${n} column${n > 1 ? "s" : ""}`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+
                 <span className="text-sm text-gray-500 flex items-center gap-1">
                   <Columns className="h-4 w-4" />
                   {panels.length} active
