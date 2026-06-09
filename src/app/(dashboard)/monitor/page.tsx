@@ -586,7 +586,7 @@ export default function MonitorPage() {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 min-h-0 overflow-hidden">
+              <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                 {maximizedPanel.type === "extension" && maximizedPanel.extension ? (
                   <ExtensionMessageList extensionId={maximizedPanel.extension.id} />
                 ) : maximizedPanel.type === "group" && maximizedPanel.conversation ? (
@@ -623,7 +623,7 @@ export default function MonitorPage() {
                       </button>
                     </div>
                   </div>
-                  <div className="flex-1 min-h-0 overflow-hidden">
+                  <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
                     {panel.type === "extension" && panel.extension ? (
                       <ExtensionMessageList extensionId={panel.extension.id} />
                     ) : panel.type === "group" && panel.conversation ? (

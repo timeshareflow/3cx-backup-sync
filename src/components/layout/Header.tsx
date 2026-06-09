@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -16,6 +16,9 @@ import {
   Check,
   Zap,
   Globe,
+  AlertCircle,
+  Voicemail,
+  X,
 } from "lucide-react";
 import { useAuth } from "@/contexts/AuthContext";
 
@@ -39,9 +42,17 @@ export function Header() {
   const [syncTriggered, setSyncTriggered] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showTenantMenu, setShowTenantMenu] = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
   const [searchFocused, setSearchFocused] = useState(false);
+  const [notifications, setNotifications] = useState<{
+    voicemails: { unread_count: number; recent: Array<{ id: string; caller_name: string | null; caller_number: string | null; received_at: string; duration_seconds: number | null; extension_number: string | null }> };
+    sync_errors: Array<{ sync_type: string; last_error: string; last_success_at: string | null }>;
+    total_unread: number;
+  } | null>(null);
+  const [isMarkingRead, setIsMarkingRead] = useState(false);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const tenantMenuRef = useRef<HTMLDivElement>(null);
+  const notificationRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
@@ -51,10 +62,59 @@ export function Header() {
       if (tenantMenuRef.current && !tenantMenuRef.current.contains(event.target as Node)) {
         setShowTenantMenu(false);
       }
+      if (notificationRef.current && !notificationRef.current.contains(event.target as Node)) {
+        setShowNotifications(false);
+      }
     }
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
+
+  const fetchNotifications = useCallback(async () => {
+    try {
+      const res = await fetch("/api/notifications");
+      if (res.ok) {
+        const data = await res.json();
+        setNotifications(data);
+      }
+    } catch {
+      // Silently fail
+    }
+  }, []);
+
+  // Fetch on mount and every 60s
+  useEffect(() => {
+    fetchNotifications();
+    const interval = setInterval(fetchNotifications, 60_000);
+    return () => clearInterval(interval);
+  }, [fetchNotifications]);
+
+  const handleMarkAllRead = async () => {
+    setIsMarkingRead(true);
+    try {
+      await fetch("/api/notifications", { method: "PATCH" });
+      await fetchNotifications();
+    } finally {
+      setIsMarkingRead(false);
+    }
+  };
+
+  const formatDuration = (seconds: number | null) => {
+    if (!seconds) return "";
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, "0")}`;
+  };
+
+  const formatTimeAgo = (dateStr: string) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60_000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return `${Math.floor(hrs / 24)}d ago`;
+  };
 
   const handleSearch = (e: React.FormEvent) => {
     e.preventDefault();
@@ -261,10 +321,143 @@ export function Header() {
           )}
 
           {/* Notifications */}
-          <button className="relative p-3 text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-white border-2 border-slate-100 hover:border-slate-200 rounded-xl transition-all hover:shadow-lg hover:shadow-slate-200/50 group">
-            <Bell className="h-5 w-5 group-hover:animate-wiggle" />
-            <span className="absolute top-2 right-2 w-2.5 h-2.5 bg-gradient-to-r from-rose-500 to-pink-500 rounded-full border-2 border-white shadow-lg shadow-rose-500/50" />
-          </button>
+          <div className="relative" ref={notificationRef}>
+            <button
+              onClick={() => setShowNotifications((v) => !v)}
+              className="relative p-3 text-slate-500 hover:text-slate-700 bg-slate-50 hover:bg-white border-2 border-slate-100 hover:border-slate-200 rounded-xl transition-all hover:shadow-lg hover:shadow-slate-200/50 group"
+            >
+              <Bell className="h-5 w-5" />
+              {notifications && notifications.total_unread > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 bg-gradient-to-r from-rose-500 to-pink-500 rounded-full border-2 border-white flex items-center justify-center text-[10px] font-bold text-white shadow-lg shadow-rose-500/50">
+                  {notifications.total_unread > 99 ? "99+" : notifications.total_unread}
+                </span>
+              )}
+            </button>
+
+            {showNotifications && (
+              <div className="absolute right-0 mt-2 w-96 bg-white rounded-2xl shadow-2xl border border-slate-200 z-50 animate-in fade-in slide-in-from-top-2 duration-200 overflow-hidden">
+                {/* Header */}
+                <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100 bg-gradient-to-br from-slate-50 to-white">
+                  <div>
+                    <p className="text-sm font-bold text-slate-800">Notifications</p>
+                    {notifications && notifications.total_unread > 0 && (
+                      <p className="text-xs text-slate-500 mt-0.5">{notifications.total_unread} unread</p>
+                    )}
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {notifications && notifications.voicemails.unread_count > 0 && (
+                      <button
+                        onClick={handleMarkAllRead}
+                        disabled={isMarkingRead}
+                        className="text-xs text-teal-600 hover:text-teal-700 font-medium disabled:opacity-50"
+                      >
+                        {isMarkingRead ? "Marking..." : "Mark all read"}
+                      </button>
+                    )}
+                    <button onClick={() => setShowNotifications(false)} className="p-1 hover:bg-slate-100 rounded-lg">
+                      <X className="h-4 w-4 text-slate-400" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-[440px] overflow-y-auto">
+                  {/* Sync Errors */}
+                  {notifications && notifications.sync_errors.length > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-red-50 border-b border-red-100">
+                        <p className="text-xs font-bold text-red-600 uppercase tracking-wider flex items-center gap-1.5">
+                          <AlertCircle className="h-3.5 w-3.5" />
+                          Sync Errors
+                        </p>
+                      </div>
+                      {notifications.sync_errors.map((err) => (
+                        <div key={err.sync_type} className="px-4 py-3 border-b border-slate-100 hover:bg-red-50 transition-colors">
+                          <div className="flex items-start gap-3">
+                            <div className="p-1.5 bg-red-100 rounded-lg shrink-0 mt-0.5">
+                              <AlertCircle className="h-3.5 w-3.5 text-red-600" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-slate-800 capitalize">{err.sync_type.replace("_", " ")} sync error</p>
+                              <p className="text-xs text-red-600 mt-0.5 line-clamp-2">{err.last_error}</p>
+                              {err.last_success_at && (
+                                <p className="text-xs text-slate-400 mt-1">Last ok: {formatTimeAgo(err.last_success_at)}</p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Unread Voicemails */}
+                  {notifications && notifications.voicemails.unread_count > 0 && (
+                    <div>
+                      <div className="px-4 py-2 bg-slate-50 border-b border-slate-100">
+                        <p className="text-xs font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
+                          <Voicemail className="h-3.5 w-3.5" />
+                          Unread Voicemails ({notifications.voicemails.unread_count})
+                        </p>
+                      </div>
+                      {notifications.voicemails.recent.map((vm) => (
+                        <Link
+                          key={vm.id}
+                          href="/voicemails"
+                          onClick={() => setShowNotifications(false)}
+                          className="flex items-center gap-3 px-4 py-3 border-b border-slate-100 hover:bg-slate-50 transition-colors"
+                        >
+                          <div className="p-1.5 bg-teal-100 rounded-lg shrink-0">
+                            <Voicemail className="h-3.5 w-3.5 text-teal-600" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-semibold text-slate-800 truncate">
+                              {vm.caller_name || vm.caller_number || "Unknown Caller"}
+                            </p>
+                            <p className="text-xs text-slate-500">
+                              {vm.caller_number && vm.caller_name ? `Ext ${vm.caller_number} · ` : ""}
+                              {vm.extension_number ? `to ${vm.extension_number} · ` : ""}
+                              {formatDuration(vm.duration_seconds)}
+                            </p>
+                          </div>
+                          <span className="text-xs text-slate-400 shrink-0">{formatTimeAgo(vm.received_at)}</span>
+                        </Link>
+                      ))}
+                      {notifications.voicemails.unread_count > notifications.voicemails.recent.length && (
+                        <Link
+                          href="/voicemails"
+                          onClick={() => setShowNotifications(false)}
+                          className="flex items-center justify-center px-4 py-3 text-sm font-medium text-teal-600 hover:bg-teal-50 transition-colors border-b border-slate-100"
+                        >
+                          View {notifications.voicemails.unread_count - notifications.voicemails.recent.length} more →
+                        </Link>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Empty state */}
+                  {(!notifications || notifications.total_unread === 0) && (
+                    <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+                      <div className="p-4 bg-slate-100 rounded-2xl mb-3">
+                        <Bell className="h-8 w-8 text-slate-400" />
+                      </div>
+                      <p className="text-sm font-semibold text-slate-700">All caught up!</p>
+                      <p className="text-xs text-slate-500 mt-1">No unread voicemails or sync errors</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Footer */}
+                <div className="px-4 py-3 border-t border-slate-100 bg-slate-50">
+                  <Link
+                    href="/voicemails"
+                    onClick={() => setShowNotifications(false)}
+                    className="text-xs font-medium text-teal-600 hover:text-teal-700"
+                  >
+                    View all voicemails →
+                  </Link>
+                </div>
+              </div>
+            )}
+          </div>
 
           {/* Sync Button */}
           <button
