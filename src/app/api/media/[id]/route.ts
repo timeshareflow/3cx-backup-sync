@@ -80,7 +80,7 @@ export async function GET(
       filename: media.file_name,
       mime_type: media.mime_type,
       file_type: media.file_type,
-      storage_backend: media.storage_backend || "supabase",
+      storage_backend: media.storage_backend || "spaces",
     });
   } catch (error) {
     console.error("Error in media API:", error);

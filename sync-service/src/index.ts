@@ -41,6 +41,20 @@ async function validateEnvironment(): Promise<void> {
   if (missing.length > 0) {
     throw new Error(`Missing required environment variables: ${missing.join(", ")}`);
   }
+
+  // Warn clearly if DO Spaces is not configured — recordings and media backup will be disabled
+  const spacesVars = ["DO_SPACES_KEY", "DO_SPACES_SECRET", "DO_SPACES_BUCKET", "DO_SPACES_ENDPOINT"];
+  const missingSpaces = spacesVars.filter((key) => !process.env[key]);
+  if (missingSpaces.length > 0) {
+    logger.warn("==========================================================");
+    logger.warn("  WARNING: DigitalOcean Spaces credentials are NOT set");
+    logger.warn(`  Missing: ${missingSpaces.join(", ")}`);
+    logger.warn("  Recording sync and media file backup are DISABLED.");
+    logger.warn("  Add these to the .env file and restart to enable them.");
+    logger.warn("==========================================================");
+  } else {
+    logger.info("DO Spaces credentials verified — recordings and media backup enabled");
+  }
 }
 
 async function initialize(): Promise<boolean> {

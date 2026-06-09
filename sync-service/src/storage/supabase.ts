@@ -966,7 +966,7 @@ export async function insertCallRecording(recording: {
     duration_seconds: recording.duration_seconds,
     started_at: recording.recorded_at || recording.call_started_at || new Date().toISOString(),
     ended_at: recording.call_ended_at,
-    storage_backend: recording.storage_backend || "supabase",
+    storage_backend: recording.storage_backend || "spaces",
   };
 
   const { data, error } = await client
@@ -1087,7 +1087,7 @@ export async function insertVoicemail(voicemail: {
     is_read: voicemail.is_read ?? false,
     transcription: voicemail.transcription,
     received_at: voicemail.received_at,
-    storage_backend: voicemail.storage_backend || "supabase",
+    storage_backend: voicemail.storage_backend || "spaces",
   };
 
   const { data, error } = await client
@@ -1365,7 +1365,7 @@ export async function insertMediaFileNew(media: {
     mime_type: media.mime_type,
     file_size: media.file_size,
     file_name: fileName,  // Required NOT NULL column in database - never null
-    storage_backend: media.storage_backend || "supabase", // Track storage location
+    storage_backend: media.storage_backend || "spaces",
   };
 
   // Optional fields
