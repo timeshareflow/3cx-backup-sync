@@ -328,7 +328,7 @@ export default function MonitorPage() {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-8rem)]">
+    <div className="flex flex-col">
       <Navigation breadcrumbs={[{ label: "Multi-Chat Monitor" }]} />
 
       {/* Header */}
@@ -537,13 +537,13 @@ export default function MonitorPage() {
 
       {/* Content */}
       {viewMode === "feed" ? (
-        <div className="flex-1 bg-white rounded-lg shadow overflow-hidden">
+        <div className="bg-white rounded-lg shadow overflow-hidden h-[calc(100vh-240px)]">
           <ActivityFeed />
         </div>
       ) : (
         <>
           {panels.length === 0 ? (
-            <div className="flex-1 bg-white rounded-lg shadow flex items-center justify-center">
+            <div className="bg-white rounded-lg shadow flex items-center justify-center h-[calc(100vh-260px)]">
               <div className="text-center">
                 <Columns className="h-12 w-12 text-gray-300 mx-auto mb-4" />
                 <h3 className="text-lg font-medium text-gray-900 mb-2">
@@ -559,7 +559,7 @@ export default function MonitorPage() {
               </div>
             </div>
           ) : maximizedPanel ? (
-            <div className="flex-1 bg-white rounded-lg shadow overflow-hidden flex flex-col">
+            <div className="bg-white rounded-lg shadow overflow-hidden flex flex-col h-[calc(100vh-240px)]">
               <div className="p-3 border-b bg-gray-50 flex items-center justify-between">
                 <h3 className="font-medium text-gray-900 truncate flex items-center gap-2">
                   {maximizedPanel.type === "group" ? (
@@ -586,7 +586,7 @@ export default function MonitorPage() {
                   </button>
                 </div>
               </div>
-              <div className="flex-1 overflow-auto min-h-0">
+              <div className="flex-1 min-h-0 overflow-hidden">
                 {maximizedPanel.type === "extension" && maximizedPanel.extension ? (
                   <ExtensionMessageList extensionId={maximizedPanel.extension.id} />
                 ) : maximizedPanel.type === "group" && maximizedPanel.conversation ? (
@@ -595,11 +595,11 @@ export default function MonitorPage() {
               </div>
             </div>
           ) : (
-            <div className={`flex-1 grid ${getGridCols()} gap-4 overflow-auto`}>
+            <div className={`grid ${getGridCols()} gap-4`}>
               {panels.map((panel) => (
                 <div
                   key={panel.id}
-                  className="bg-white rounded-lg shadow overflow-hidden flex flex-col min-h-0"
+                  className="bg-white rounded-lg shadow flex flex-col h-[calc(100vh-260px)]"
                 >
                   <div className="p-3 border-b bg-gray-50 flex items-center justify-between shrink-0">
                     <h3 className="font-medium text-gray-900 truncate text-sm flex items-center gap-2">
@@ -623,7 +623,7 @@ export default function MonitorPage() {
                       </button>
                     </div>
                   </div>
-                  <div className="flex-1 overflow-auto min-h-0">
+                  <div className="flex-1 min-h-0 overflow-hidden">
                     {panel.type === "extension" && panel.extension ? (
                       <ExtensionMessageList extensionId={panel.extension.id} />
                     ) : panel.type === "group" && panel.conversation ? (
