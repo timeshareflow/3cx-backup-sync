@@ -20,6 +20,12 @@ interface SearchResultsProps {
   onLoadMore?: () => void;
 }
 
+interface ThreadGroup {
+  conversationId: string;
+  conversation: SearchResultMessage["conversations"];
+  messages: SearchResultMessage[];
+}
+
 function getMediaType(mimeType: string | null): "image" | "video" | "audio" | "document" {
   if (!mimeType) return "document";
   if (mimeType.startsWith("image/")) return "image";
@@ -44,18 +50,146 @@ function MediaThumbnail({ media }: { media: MediaFile }) {
         if (url) window.open(url, "_blank", "noopener,noreferrer");
       }
     } catch {
-      // Silently fail — user can still navigate to the conversation
+      // silently fail
     }
   };
 
   return (
     <button
       onClick={handleOpen}
-      className={`h-12 w-12 rounded-lg border ${bg} flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity cursor-pointer`}
+      className={`h-10 w-10 rounded-lg border ${bg} flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity cursor-pointer`}
       title={`Open ${media.file_name || type}`}
     >
-      <Icon className={`h-5 w-5 ${iconColor}`} />
+      <Icon className={`h-4 w-4 ${iconColor}`} />
     </button>
+  );
+}
+
+function highlightText(text: string, searchQuery: string) {
+  if (!searchQuery || !text) return text;
+  try {
+    const escaped = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const parts = text.split(new RegExp(`(${escaped})`, "gi"));
+    return parts.map((part, i) =>
+      part.toLowerCase() === searchQuery.toLowerCase() ? (
+        <mark key={i} className="bg-yellow-200 rounded px-0.5">{part}</mark>
+      ) : part
+    );
+  } catch {
+    return text;
+  }
+}
+
+function ThreadCard({ thread, query }: { thread: ThreadGroup; query: string }) {
+  const conv = thread.conversation;
+  const name = conv?.conversation_name || "Unnamed conversation";
+  const Icon = conv?.is_external ? Globe : conv?.is_group_chat ? Users : UserCircle;
+  const iconColor = conv?.is_external ? "text-amber-500" : conv?.is_group_chat ? "text-purple-500" : "text-teal-500";
+  const iconBg = conv?.is_external ? "bg-amber-50" : conv?.is_group_chat ? "bg-purple-50" : "bg-teal-50";
+  const badgeLabel = conv?.is_external ? "External" : conv?.is_group_chat ? "Group" : "Internal";
+  const badgeColor = conv?.is_external
+    ? "bg-amber-100 text-amber-700"
+    : conv?.is_group_chat
+    ? "bg-purple-100 text-purple-700"
+    : "bg-teal-100 text-teal-700";
+
+  // Show messages in chronological order, most recent last (natural thread flow)
+  const sorted = [...thread.messages].sort(
+    (a, b) => new Date(a.sent_at).getTime() - new Date(b.sent_at).getTime()
+  );
+  const SHOW_MAX = 5;
+  const visible = sorted.slice(0, SHOW_MAX);
+  const hiddenCount = sorted.length - visible.length;
+
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200 shadow-sm hover:shadow-md hover:border-teal-200 transition-all overflow-hidden">
+      {/* Thread header */}
+      <div className="flex items-center justify-between px-4 py-3 bg-slate-50 border-b border-slate-100">
+        <div className="flex items-center gap-3 min-w-0">
+          <div className={`p-2 rounded-xl ${iconBg} shrink-0`}>
+            <Icon className={`h-4 w-4 ${iconColor}`} />
+          </div>
+          <div className="min-w-0">
+            <p className="font-semibold text-slate-800 text-sm truncate">{name}</p>
+          </div>
+          <span className={`px-2 py-0.5 rounded-full text-xs font-medium shrink-0 ${badgeColor}`}>
+            {badgeLabel}
+          </span>
+        </div>
+        <span className="shrink-0 ml-3 px-2.5 py-1 bg-teal-100 text-teal-700 text-xs font-bold rounded-full">
+          {thread.messages.length} match{thread.messages.length !== 1 ? "es" : ""}
+        </span>
+      </div>
+
+      {/* Messages in thread */}
+      <div className="divide-y divide-slate-50">
+        {visible.map((message) => (
+          <Link
+            key={message.id}
+            href={`/conversations/${message.conversation_id}?highlight=${message.id}&q=${encodeURIComponent(query)}`}
+            className="flex items-start gap-3 px-4 py-3 hover:bg-teal-50/40 transition-colors group"
+          >
+            {/* Avatar */}
+            <div className="h-8 w-8 rounded-full bg-gradient-to-br from-slate-400 to-slate-600 flex items-center justify-center text-white text-xs font-bold shrink-0 mt-0.5">
+              {message.sender_name
+                ? message.sender_name.charAt(0).toUpperCase()
+                : message.sender_identifier?.charAt(0) || "?"}
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 min-w-0">
+              <div className="flex items-baseline gap-2 mb-0.5">
+                <span className="text-sm font-semibold text-slate-800">
+                  {message.sender_name || message.sender_identifier || "Unknown"}
+                </span>
+                {message.sender_identifier && message.sender_name && (
+                  <span className="text-xs text-slate-400">{message.sender_identifier}</span>
+                )}
+                <span className="text-xs text-slate-400 ml-auto shrink-0">
+                  {formatMessageTime(message.sent_at)}
+                </span>
+              </div>
+
+              {message.content && (
+                <p className="text-sm text-slate-600 line-clamp-2">
+                  {highlightText(message.content, query)}
+                </p>
+              )}
+
+              {message.has_media && message.media_files.length > 0 && (
+                <div className="mt-1.5 flex items-center gap-1.5">
+                  {message.media_files.slice(0, 5).map((file) => (
+                    <MediaThumbnail key={file.id} media={file} />
+                  ))}
+                  {message.media_files.length > 5 && (
+                    <span className="text-xs text-slate-400">+{message.media_files.length - 5}</span>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <ArrowRight className="h-3.5 w-3.5 text-slate-300 group-hover:text-teal-400 transition-colors shrink-0 mt-1" />
+          </Link>
+        ))}
+
+        {hiddenCount > 0 && (
+          <div className="px-4 py-2 text-xs text-slate-400 text-center">
+            +{hiddenCount} more message{hiddenCount !== 1 ? "s" : ""} in this thread
+          </div>
+        )}
+      </div>
+
+      {/* Footer — view full conversation */}
+      <div className="px-4 py-2.5 border-t border-slate-100 bg-slate-50/50">
+        <Link
+          href={`/conversations/${thread.conversationId}?q=${encodeURIComponent(query)}`}
+          className="flex items-center gap-1.5 text-xs font-semibold text-teal-600 hover:text-teal-700 transition-colors"
+        >
+          View full conversation
+          <ArrowRight className="h-3.5 w-3.5" />
+        </Link>
+      </div>
+    </div>
   );
 }
 
@@ -81,9 +215,7 @@ export function SearchResults({
       <div className="text-center py-12 text-slate-500">
         <MessageSquare className="h-12 w-12 mx-auto mb-4 text-slate-300" />
         <p className="text-lg">Enter a search term to find messages</p>
-        <p className="text-sm mt-1">
-          Search through all archived conversations
-        </p>
+        <p className="text-sm mt-1">Search through all archived conversations</p>
       </div>
     );
   }
@@ -98,114 +230,37 @@ export function SearchResults({
     );
   }
 
-  const highlightText = (text: string, searchQuery: string) => {
-    if (!searchQuery || !text) return text;
-
-    try {
-      const escaped = searchQuery.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-      const parts = text.split(new RegExp(`(${escaped})`, "gi"));
-      return parts.map((part, i) =>
-        part.toLowerCase() === searchQuery.toLowerCase() ? (
-          <mark key={i} className="bg-yellow-200 rounded px-0.5">
-            {part}
-          </mark>
-        ) : (
-          part
-        )
-      );
-    } catch {
-      return text;
+  // Group messages by conversation, preserving order of first appearance
+  const threadMap = new Map<string, ThreadGroup>();
+  for (const msg of results) {
+    const convId = msg.conversation_id;
+    if (!threadMap.has(convId)) {
+      threadMap.set(convId, {
+        conversationId: convId,
+        conversation: msg.conversations,
+        messages: [],
+      });
     }
-  };
-
-  const getConversationLabel = (msg: SearchResultMessage) => {
-    const conv = msg.conversations;
-    if (!conv) return null;
-    const name = conv.conversation_name || "Unnamed conversation";
-    const Icon = conv.is_external ? Globe : conv.is_group_chat ? Users : UserCircle;
-    const color = conv.is_external
-      ? "text-amber-500"
-      : conv.is_group_chat
-        ? "text-purple-500"
-        : "text-teal-500";
-    return (
-      <div className="flex items-center gap-1.5 text-xs text-slate-500">
-        <Icon className={`h-3.5 w-3.5 ${color}`} />
-        <span className="truncate">{name}</span>
-      </div>
-    );
-  };
+    threadMap.get(convId)!.messages.push(msg);
+  }
+  const threads = Array.from(threadMap.values());
 
   return (
     <div>
       {totalCount !== undefined && (
         <p className="text-sm text-slate-500 mb-4">
-          Found {totalCount.toLocaleString()} result{totalCount !== 1 ? "s" : ""}
-          {results.length < totalCount && ` (showing ${results.length})`}
+          {totalCount.toLocaleString()} message{totalCount !== 1 ? "s" : ""} across{" "}
+          {threads.length} conversation{threads.length !== 1 ? "s" : ""}
+          {results.length < totalCount && ` (showing ${results.length} messages)`}
         </p>
       )}
 
-      <div className="space-y-3">
-        {results.map((message) => (
-          <Link
-            key={message.id}
-            href={`/conversations/${message.conversation_id}?highlight=${message.id}&q=${encodeURIComponent(query)}`}
-            className="block bg-white rounded-xl border border-slate-200 p-4 hover:border-teal-300 hover:shadow-md hover:shadow-teal-500/10 transition-all"
-          >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex-1 min-w-0">
-                {/* Conversation context */}
-                {getConversationLabel(message)}
-
-                {/* Sender and time */}
-                <div className="flex items-center gap-2 mt-1.5 mb-1.5">
-                  <div className="h-6 w-6 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-xs font-medium shrink-0">
-                    {message.sender_name
-                      ? message.sender_name.charAt(0).toUpperCase()
-                      : message.sender_identifier?.charAt(0) || "?"}
-                  </div>
-                  <span className="font-medium text-slate-800 text-sm">
-                    {message.sender_name || message.sender_identifier || "Unknown"}
-                  </span>
-                  {message.sender_identifier && message.sender_name && (
-                    <span className="text-xs text-slate-400">
-                      ext. {message.sender_identifier}
-                    </span>
-                  )}
-                  <span className="text-xs text-slate-400">
-                    {formatMessageTime(message.sent_at)}
-                  </span>
-                </div>
-
-                {/* Message text */}
-                {message.content && (
-                  <p className="text-slate-700 text-sm line-clamp-3">
-                    {highlightText(message.content, query)}
-                  </p>
-                )}
-
-                {/* Media thumbnails */}
-                {message.has_media && message.media_files.length > 0 && (
-                  <div className="mt-2 flex items-center gap-1.5">
-                    {message.media_files.slice(0, 4).map((file) => (
-                      <MediaThumbnail key={file.id} media={file} />
-                    ))}
-                    {message.media_files.length > 4 && (
-                      <span className="text-xs text-slate-400 ml-1">
-                        +{message.media_files.length - 4} more
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-
-              <ArrowRight className="h-4 w-4 text-slate-300 flex-shrink-0 mt-1" />
-            </div>
-          </Link>
+      <div className="space-y-4">
+        {threads.map((thread) => (
+          <ThreadCard key={thread.conversationId} thread={thread} query={query} />
         ))}
       </div>
 
-      {/* Load More */}
       {hasMore && (
         <div className="text-center mt-6">
           <button
@@ -216,7 +271,7 @@ export function SearchResults({
             {isLoadingMore ? (
               <span className="flex items-center gap-2">
                 <Spinner size="sm" />
-                Loading...
+                Loading more...
               </span>
             ) : (
               "Load more results"
