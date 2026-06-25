@@ -4,7 +4,6 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  Search,
   RefreshCw,
   LogOut,
   Settings,
@@ -14,7 +13,6 @@ import {
   User,
   Sparkles,
   Check,
-  Zap,
   Globe,
   AlertCircle,
   Voicemail,
@@ -37,13 +35,11 @@ export function Header() {
     isViewingAsTenant,
     setViewingAsTenant,
   } = useAuth();
-  const [searchQuery, setSearchQuery] = useState("");
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncTriggered, setSyncTriggered] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showTenantMenu, setShowTenantMenu] = useState(false);
   const [showNotifications, setShowNotifications] = useState(false);
-  const [searchFocused, setSearchFocused] = useState(false);
   const [notifications, setNotifications] = useState<{
     voicemails: { unread_count: number; recent: Array<{ id: string; caller_name: string | null; caller_number: string | null; received_at: string; duration_seconds: number | null; extension_number: string | null }> };
     sync_errors: Array<{ sync_type: string; last_error: string; last_success_at: string | null }>;
@@ -116,13 +112,6 @@ export function Header() {
     return `${Math.floor(hrs / 24)}d ago`;
   };
 
-  const handleSearch = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (searchQuery.trim()) {
-      router.push(`/search?q=${encodeURIComponent(searchQuery.trim())}`);
-    }
-  };
-
   const handleManualSync = async () => {
     setIsSyncing(true);
     setSyncTriggered(false);
@@ -160,24 +149,7 @@ export function Header() {
 
   return (
     <header className="bg-white/80 backdrop-blur-xl border-b border-slate-200/50 px-6 py-4 sticky top-0 z-40">
-      <div className="flex items-center justify-between gap-4">
-        {/* Search */}
-        <form onSubmit={handleSearch} className="flex-1 max-w-xl">
-          <div className={`relative transition-all duration-300 ${searchFocused ? "transform scale-[1.02]" : ""}`}>
-            <div className={`absolute inset-0 bg-gradient-to-r from-teal-500/20 to-cyan-500/20 rounded-2xl blur-xl transition-opacity duration-300 ${searchFocused ? "opacity-100" : "opacity-0"}`} />
-            <Search className={`absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 transition-colors duration-200 ${searchFocused ? "text-teal-500" : "text-slate-400"}`} />
-            <input
-              type="text"
-              placeholder="Search messages, conversations..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              onFocus={() => setSearchFocused(true)}
-              onBlur={() => setSearchFocused(false)}
-              className="relative w-full pl-12 pr-4 py-3.5 bg-slate-50/80 border-2 border-slate-100 rounded-2xl focus:outline-none focus:bg-white focus:border-teal-500 focus:ring-4 focus:ring-teal-500/10 transition-all text-slate-800 placeholder:text-slate-400 font-medium"
-            />
-          </div>
-        </form>
-
+      <div className="flex items-center justify-end gap-4">
         <div className="flex items-center gap-3">
           {/* Super Admin Tenant Selector - View as any tenant or platform-wide */}
           {profile?.role === "super_admin" && allTenants.length > 0 && (

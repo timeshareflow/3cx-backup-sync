@@ -15,16 +15,6 @@ import {
   TrendingUp,
 } from "lucide-react";
 
-interface StoragePlan {
-  id: string;
-  name: string;
-  description: string | null;
-  storage_limit_gb: number;
-  price_monthly: string;
-  price_yearly: string | null;
-  features: string[];
-}
-
 interface BillingStatus {
   tenant_id: string;
   tenant_name: string;
@@ -72,9 +62,7 @@ function BillingMessages() {
 
 export default function BillingPage() {
   const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
-  const [availablePlans, setAvailablePlans] = useState<StoragePlan[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [checkoutLoading, setCheckoutLoading] = useState<string | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -82,48 +70,15 @@ export default function BillingPage() {
 
   async function fetchData() {
     try {
-      const [statusRes, plansRes] = await Promise.all([
-        fetch("/api/billing/status"),
-        fetch("/api/admin/storage-plans"),
-      ]);
-
+      const statusRes = await fetch("/api/billing/status");
       if (statusRes.ok) {
         const data = await statusRes.json();
         setBillingStatus(data);
-      }
-
-      if (plansRes.ok) {
-        const data = await plansRes.json();
-        setAvailablePlans(data.plans || []);
       }
     } catch (error) {
       console.error("Error fetching billing data:", error);
     } finally {
       setIsLoading(false);
-    }
-  }
-
-  async function handleCheckout(planId: string, billingCycle: "monthly" | "yearly") {
-    setCheckoutLoading(`${planId}-${billingCycle}`);
-    try {
-      const response = await fetch("/api/billing/checkout", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan_id: planId, billing_cycle: billingCycle }),
-      });
-
-      const data = await response.json();
-
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        alert(data.error || "Failed to start checkout");
-      }
-    } catch (error) {
-      console.error("Checkout error:", error);
-      alert("Failed to start checkout");
-    } finally {
-      setCheckoutLoading(null);
     }
   }
 
@@ -312,93 +267,6 @@ export default function BillingPage() {
         </Card>
       </div>
 
-      {/* Available Plans */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Available Plans</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {availablePlans.map((plan) => {
-              const isCurrent = billingStatus?.plan?.id === plan.id;
-              const price = parseFloat(plan.price_monthly);
-              const yearlyPrice = plan.price_yearly ? parseFloat(plan.price_yearly) : null;
-
-              return (
-                <div
-                  key={plan.id}
-                  className={`relative p-6 rounded-2xl border-2 ${
-                    isCurrent
-                      ? "border-violet-400 bg-gradient-to-br from-violet-50 to-purple-50"
-                      : "border-gray-200 bg-white hover:border-gray-300"
-                  }`}
-                >
-                  {isCurrent && (
-                    <div className="absolute -top-3 left-4 px-3 py-1 bg-violet-500 text-white text-xs font-medium rounded-full">
-                      Current Plan
-                    </div>
-                  )}
-
-                  <h3 className="text-xl font-bold text-gray-900 mb-2">{plan.name}</h3>
-                  <p className="text-gray-500 text-sm mb-4">{plan.description}</p>
-
-                  <div className="mb-4">
-                    <span className="text-3xl font-bold text-gray-900">${price.toFixed(0)}</span>
-                    <span className="text-gray-500">/month</span>
-                    {yearlyPrice && yearlyPrice > 0 && (
-                      <p className="text-sm text-gray-400">
-                        or ${yearlyPrice.toFixed(0)}/year (save {Math.round((1 - yearlyPrice / (price * 12)) * 100)}%)
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-2 mb-4 text-sm text-gray-600">
-                    <HardDrive className="h-4 w-4" />
-                    {plan.storage_limit_gb === 0 ? "Unlimited" : `${plan.storage_limit_gb} GB`} Storage
-                  </div>
-
-                  <ul className="space-y-2 mb-6 text-sm">
-                    {(plan.features || []).slice(0, 4).map((feature, i) => (
-                      <li key={i} className="flex items-center gap-2 text-gray-600">
-                        <Check className="h-4 w-4 text-green-500" />
-                        {feature}
-                      </li>
-                    ))}
-                  </ul>
-
-                  {!isCurrent && price > 0 && (
-                    <div className="space-y-2">
-                      <Button
-                        onClick={() => handleCheckout(plan.id, "monthly")}
-                        disabled={checkoutLoading === `${plan.id}-monthly`}
-                        className="w-full"
-                      >
-                        {checkoutLoading === `${plan.id}-monthly` ? "Loading..." : "Subscribe Monthly"}
-                      </Button>
-                      {yearlyPrice && yearlyPrice > 0 && (
-                        <Button
-                          variant="outline"
-                          onClick={() => handleCheckout(plan.id, "yearly")}
-                          disabled={checkoutLoading === `${plan.id}-yearly`}
-                          className="w-full"
-                        >
-                          {checkoutLoading === `${plan.id}-yearly` ? "Loading..." : "Subscribe Yearly"}
-                        </Button>
-                      )}
-                    </div>
-                  )}
-
-                  {isCurrent && (
-                    <div className="text-center text-sm text-violet-600 font-medium">
-                      Your current plan
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </CardContent>
-      </Card>
     </div>
   );
 }
