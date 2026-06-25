@@ -15,6 +15,16 @@ import {
   TrendingUp,
 } from "lucide-react";
 
+interface StoragePlan {
+  id: string;
+  name: string;
+  description: string | null;
+  storage_limit_gb: number;
+  price_monthly: string;
+  price_yearly: string | null;
+  features: string[];
+}
+
 interface BillingStatus {
   tenant_id: string;
   tenant_name: string;
