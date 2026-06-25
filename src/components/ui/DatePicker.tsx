@@ -60,14 +60,13 @@ export function DateRangePicker({
   endLabel = "End Date",
 }: DateRangePickerProps) {
   return (
-    <div className="flex items-center gap-4">
+    <div className="space-y-3">
       <DatePicker
         label={startLabel}
         value={startDate}
         onChange={(e) => onStartDateChange(e.target.value)}
         max={endDate || undefined}
       />
-      <span className="text-gray-500 mt-6">to</span>
       <DatePicker
         label={endLabel}
         value={endDate}

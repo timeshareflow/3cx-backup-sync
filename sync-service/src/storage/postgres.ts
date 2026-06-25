@@ -186,7 +186,7 @@ export async function pgBulkInsertCallLogs(
   if (callLogs.length === 0) return { inserted: 0, skipped: 0 };
   const pg = getPgPool();
 
-  // Split into chunks to avoid exceeding max parameters (65535)
+  // Split into chunks to avoid exceeding max parameters (65535): 14 params/row × 500 = 7,000
   const CHUNK = 500;
   let inserted = 0;
 
@@ -194,24 +194,28 @@ export async function pgBulkInsertCallLogs(
     const chunk = callLogs.slice(i, i + CHUNK);
     const values: unknown[] = [];
     const placeholders = chunk.map((c, idx) => {
-      const base = idx * 11;
+      const base = idx * 14;
       values.push(
         c.tenant_id, c.threecx_call_id ?? null,
         c.caller_number ?? null, c.caller_name ?? null,
         c.callee_number ?? null, c.callee_name ?? null,
         c.direction ?? null, c.call_type ?? null,
+        c.status ?? null,
         c.ring_duration_seconds ?? null,
         c.total_duration_seconds ?? c.talk_duration_seconds ?? null,
-        c.call_started_at
+        c.call_started_at,
+        c.call_answered_at ?? null,
+        c.call_ended_at ?? null
       );
-      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10},$${base+11})`;
+      return `($${base+1},$${base+2},$${base+3},$${base+4},$${base+5},$${base+6},$${base+7},$${base+8},$${base+9},$${base+10},$${base+11},$${base+12},$${base+13},$${base+14})`;
     });
 
     const { rowCount } = await pg.query(`
       INSERT INTO call_logs
         (tenant_id, threecx_call_id, caller_number, caller_name,
          callee_number, callee_name, direction, call_type,
-         ring_duration_seconds, duration_seconds, started_at)
+         status, ring_duration_seconds, duration_seconds,
+         started_at, answered_at, ended_at)
       VALUES ${placeholders.join(",")}
       ON CONFLICT (tenant_id, threecx_call_id) DO NOTHING
     `, values);

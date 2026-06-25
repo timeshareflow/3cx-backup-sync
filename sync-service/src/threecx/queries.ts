@@ -721,10 +721,13 @@ export async function getCallRecords(
             ? `
               SELECT
                 idmpch14::text as call_id,
-                party_callerid as caller_number,
-                party_name as caller_name,
-                dialed_number as callee_number,
-                party_name as callee_name,
+                CASE WHEN calltype = 2 THEN dnowner::text ELSE party_callerid END as caller_number,
+                CASE WHEN calltype = 2 THEN NULL ELSE party_name END as caller_name,
+                CASE WHEN calltype = 2
+                  THEN COALESCE(NULLIF(dialed_number::text, ''), party_callerid)
+                  ELSE dnowner::text
+                END as callee_number,
+                CASE WHEN calltype = 2 THEN party_name ELSE NULL END as callee_name,
                 dnowner::text as extension_number,
                 CASE
                   WHEN calltype = 1 THEN 'inbound'
@@ -756,10 +759,13 @@ export async function getCallRecords(
             : `
               SELECT
                 idmpch14::text as call_id,
-                party_callerid as caller_number,
-                party_name as caller_name,
-                dialed_number as callee_number,
-                party_name as callee_name,
+                CASE WHEN calltype = 2 THEN dnowner::text ELSE party_callerid END as caller_number,
+                CASE WHEN calltype = 2 THEN NULL ELSE party_name END as caller_name,
+                CASE WHEN calltype = 2
+                  THEN COALESCE(NULLIF(dialed_number::text, ''), party_callerid)
+                  ELSE dnowner::text
+                END as callee_number,
+                CASE WHEN calltype = 2 THEN party_name ELSE NULL END as callee_name,
                 dnowner::text as extension_number,
                 CASE
                   WHEN calltype = 1 THEN 'inbound'
@@ -869,7 +875,7 @@ export async function getCallRecords(
                 from_no as caller_number,
                 callerid as caller_name,
                 to_no as callee_number,
-                dialednumber as callee_name,
+                NULL as callee_name,
                 COALESCE(group_no, line_no) as extension_number,
                 CASE
                   WHEN is_fromoutside = true THEN 'inbound'
@@ -899,7 +905,7 @@ export async function getCallRecords(
                 from_no as caller_number,
                 callerid as caller_name,
                 to_no as callee_number,
-                dialednumber as callee_name,
+                NULL as callee_name,
                 COALESCE(group_no, line_no) as extension_number,
                 CASE
                   WHEN is_fromoutside = true THEN 'inbound'

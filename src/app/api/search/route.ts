@@ -7,16 +7,15 @@ import { rateLimitConfigs } from "@/lib/rate-limit";
 export const dynamic = "force-dynamic";
 
 export async function GET(request: NextRequest) {
-  // Rate limit: 30 searches per minute to prevent abuse
   const rateLimited = withRateLimit(request, rateLimitConfigs.search);
   if (rateLimited) return rateLimited;
+
   const searchParams = request.nextUrl.searchParams;
   const query = searchParams.get("q");
   const page = parseInt(searchParams.get("page") || "1");
   const limit = Math.min(parseInt(searchParams.get("limit") || "20"), 100);
   const offset = (page - 1) * limit;
 
-  // Optional filters
   const startDate = searchParams.get("start_date");
   const endDate = searchParams.get("end_date");
   const sender = searchParams.get("sender");
@@ -24,7 +23,6 @@ export async function GET(request: NextRequest) {
   const conversationId = searchParams.get("conversation_id");
   const channelType = searchParams.get("channel_type");
 
-  // Allow empty query if date filters are provided (date-based browsing)
   const hasDateFilter = startDate || endDate;
   if (!hasDateFilter && (!query || query.trim().length < 2)) {
     return NextResponse.json(
@@ -41,73 +39,102 @@ export async function GET(request: NextRequest) {
     }
 
     if (!context.tenantId) {
-      return NextResponse.json({
-        data: [],
-        total: 0,
-        page,
-        page_size: limit,
-        has_more: false,
-      });
+      return NextResponse.json({ data: [], total: 0, page, page_size: limit, has_more: false });
     }
 
-    // Use admin client to bypass RLS - we've already validated tenant access
     const supabase = createAdminClient();
 
-    // Build the search query with tenant filter via conversations join
+    // Step 1: Get all conversations for this tenant (applying channel filter here)
+    // This avoids complex !inner join + embedded resource filter issues
+    let convQuery = supabase
+      .from("conversations")
+      .select("id, conversation_name, channel_type, threecx_conversation_id")
+      .eq("tenant_id", context.tenantId);
+
+    if (channelType && channelType !== "all") {
+      convQuery = convQuery.eq("channel_type", channelType);
+    }
+
+    const { data: tenantConvs, error: convError } = await convQuery;
+
+    if (convError) {
+      console.error("Error fetching conversations for search:", convError);
+      return NextResponse.json({ error: "Failed to search" }, { status: 500 });
+    }
+
+    const convMap = new Map((tenantConvs || []).map(c => [c.id, c]));
+    const allConvIds = Array.from(convMap.keys());
+
+    if (allConvIds.length === 0) {
+      return NextResponse.json({ data: [], total: 0, page, page_size: limit, has_more: false });
+    }
+
+    // If filtering by a specific conversation, validate it belongs to this tenant
+    const targetConvId = conversationId && convMap.has(conversationId) ? conversationId : null;
+
+    // Step 2: Build messages query using direct IN filter — no join complexity
     let dbQuery = supabase
       .from("messages")
-      .select(
-        `
-        *,
-        media_files (*),
-        conversations!inner (id, conversation_name, channel_type, threecx_conversation_id, tenant_id)
-      `,
-        { count: "exact" }
-      )
-      .eq("conversations.tenant_id", context.tenantId)
+      .select(`*, media_files (*)`, { count: "exact" })
       .order("sent_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    // Apply text search on content and sender name
-    if (query && query.trim()) {
-      const q = query.trim();
-      dbQuery = dbQuery.or(`content.ilike.%${q}%,sender_name.ilike.%${q}%,sender_identifier.ilike.%${q}%`);
+    if (targetConvId) {
+      dbQuery = dbQuery.eq("conversation_id", targetConvId);
+    } else {
+      dbQuery = dbQuery.in("conversation_id", allConvIds);
     }
 
-    // Apply filters
-    if (startDate) {
-      dbQuery = dbQuery.gte("sent_at", `${startDate}T00:00:00.000Z`);
+    // Text search: messages content/sender AND conversation names
+    if (query && query.trim()) {
+      const q = query.trim();
+      const qLower = q.toLowerCase();
+
+      // Find conversations whose name contains the query
+      const nameMatchIds = (tenantConvs || [])
+        .filter(c => c.conversation_name?.toLowerCase().includes(qLower))
+        .map(c => c.id);
+
+      const orParts = [
+        `content.ilike.%${q}%`,
+        `sender_name.ilike.%${q}%`,
+        `sender_identifier.ilike.%${q}%`,
+      ];
+
+      // Include messages from name-matched conversations in the OR
+      if (nameMatchIds.length > 0) {
+        orParts.push(`conversation_id.in.(${nameMatchIds.join(",")})`);
+      }
+
+      dbQuery = dbQuery.or(orParts.join(","));
     }
-    if (endDate) {
-      dbQuery = dbQuery.lte("sent_at", `${endDate}T23:59:59.999Z`);
-    }
-    if (sender) {
-      dbQuery = dbQuery.eq("sender_identifier", sender);
-    }
-    if (hasMedia === "true") {
-      dbQuery = dbQuery.eq("has_media", true);
-    } else if (hasMedia === "false") {
-      dbQuery = dbQuery.eq("has_media", false);
-    }
-    if (conversationId) {
-      dbQuery = dbQuery.eq("conversation_id", conversationId);
-    }
-    if (channelType && channelType !== "all") {
-      dbQuery = dbQuery.eq("conversations.channel_type", channelType);
-    }
+
+    // Date filters
+    if (startDate) dbQuery = dbQuery.gte("sent_at", `${startDate}T00:00:00.000Z`);
+    if (endDate) dbQuery = dbQuery.lte("sent_at", `${endDate}T23:59:59.999Z`);
+
+    // Sender filter — exact extension_number match (matches dropdown value)
+    if (sender) dbQuery = dbQuery.eq("sender_identifier", sender);
+
+    // Media filter
+    if (hasMedia === "true") dbQuery = dbQuery.eq("has_media", true);
+    else if (hasMedia === "false") dbQuery = dbQuery.eq("has_media", false);
 
     const { data: messages, error, count } = await dbQuery;
 
     if (error) {
       console.error("Error searching messages:", error);
-      return NextResponse.json(
-        { error: "Failed to search messages" },
-        { status: 500 }
-      );
+      return NextResponse.json({ error: "Failed to search messages" }, { status: 500 });
     }
 
+    // Enrich with conversation metadata for display
+    const enrichedMessages = (messages || []).map(m => ({
+      ...m,
+      conversations: convMap.get(m.conversation_id) || null,
+    }));
+
     return NextResponse.json({
-      data: messages || [],
+      data: enrichedMessages,
       total: count || 0,
       page,
       page_size: limit,
@@ -115,9 +142,6 @@ export async function GET(request: NextRequest) {
     });
   } catch (error) {
     console.error("Error in search API:", error);
-    return NextResponse.json(
-      { error: "Internal server error" },
-      { status: 500 }
-    );
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 });
   }
 }

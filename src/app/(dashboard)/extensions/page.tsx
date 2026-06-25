@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Users, Mail, CheckCircle, XCircle, Eye, EyeOff, Search } from "lucide-react";
+import { Users, Mail, CheckCircle, XCircle, Eye, EyeOff, Search, RefreshCw } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { Input } from "@/components/ui/Input";
 import type { Extension } from "@/types";
@@ -76,6 +76,8 @@ export default function ExtensionsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [showUnregistered, setShowUnregistered] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
 
   useEffect(() => {
     fetchExtensions();
@@ -92,6 +94,23 @@ export default function ExtensionsPage() {
       console.error("Failed to fetch extensions:", error);
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  const handleForceSync = async () => {
+    setIsSyncing(true);
+    setSyncMessage(null);
+    try {
+      const res = await fetch("/api/sync/trigger", { method: "POST" });
+      if (res.ok) {
+        setSyncMessage("Sync queued — extensions will update within a minute.");
+      } else {
+        setSyncMessage("Failed to trigger sync. Please try again.");
+      }
+    } catch {
+      setSyncMessage("Failed to trigger sync. Please try again.");
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -150,6 +169,20 @@ export default function ExtensionsPage() {
               {registeredCount} registered, {unregisteredCount} unregistered
             </p>
           </div>
+        </div>
+
+        <div className="flex flex-col items-end gap-1">
+          <button
+            onClick={handleForceSync}
+            disabled={isSyncing}
+            className="flex items-center gap-2 px-4 py-2.5 bg-teal-500 text-white rounded-xl text-sm font-medium hover:bg-teal-600 disabled:opacity-50 transition-colors"
+          >
+            <RefreshCw className={`h-4 w-4 ${isSyncing ? "animate-spin" : ""}`} />
+            {isSyncing ? "Syncing..." : "Force Sync"}
+          </button>
+          {syncMessage && (
+            <p className="text-xs text-slate-500">{syncMessage}</p>
+          )}
         </div>
       </div>
 

@@ -13,12 +13,10 @@ interface CallLog {
   callee_number: string | null;
   callee_name: string | null;
   extension_number: string | null;
-  queue_name: string | null;
-  ring_duration: number | null;
-  talk_duration: number | null;
-  total_duration: number | null;
+  // Actual DB column names from the call_logs table
+  ring_duration_seconds: number | null;
+  duration_seconds: number | null;      // total/talk duration
   status: string | null;
-  hangup_cause: string | null;
   has_recording: boolean;
   started_at: string;
   answered_at: string | null;
@@ -118,7 +116,15 @@ export default function CallLogsPage() {
     }
   };
 
-  const getStatusBadge = (status: string | null) => {
+  const deriveStatus = (call: CallLog): string => {
+    if (call.status) return call.status;
+    // Derive from duration when status not stored (older CDR records)
+    if (call.duration_seconds && call.duration_seconds > 0) return "answered";
+    return "missed";
+  };
+
+  const getStatusBadge = (call: CallLog) => {
+    const status = deriveStatus(call);
     const styles: Record<string, string> = {
       answered: "bg-emerald-100 text-emerald-700",
       completed: "bg-emerald-100 text-emerald-700",
@@ -129,8 +135,8 @@ export default function CallLogsPage() {
     };
 
     return (
-      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full capitalize ${styles[status || ""] || "bg-slate-100 text-slate-600"}`}>
-        {status?.replace("_", " ") || "Unknown"}
+      <span className={`px-2 py-0.5 text-xs font-semibold rounded-full capitalize ${styles[status] || "bg-slate-100 text-slate-600"}`}>
+        {status.replace(/_/g, " ")}
       </span>
     );
   };
@@ -255,9 +261,9 @@ export default function CallLogsPage() {
                     </div>
                   </td>
                   <td className="px-6 py-4 text-sm text-slate-600">{call.extension_number || "-"}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-mono">{formatDuration(call.ring_duration)}</td>
-                  <td className="px-6 py-4 text-sm text-slate-600 font-mono">{formatDuration(call.talk_duration)}</td>
-                  <td className="px-6 py-4">{getStatusBadge(call.status)}</td>
+                  <td className="px-6 py-4 text-sm text-slate-600 font-mono">{formatDuration(call.ring_duration_seconds)}</td>
+                  <td className="px-6 py-4 text-sm text-slate-600 font-mono">{formatDuration(call.duration_seconds)}</td>
+                  <td className="px-6 py-4">{getStatusBadge(call)}</td>
                   <td className="px-6 py-4">
                     <div>
                       <p className="text-sm text-slate-800">{format(new Date(call.started_at), "MMM d, yyyy")}</p>

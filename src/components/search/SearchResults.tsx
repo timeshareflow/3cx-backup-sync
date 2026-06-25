@@ -34,10 +34,28 @@ function MediaThumbnail({ media }: { media: MediaFile }) {
   const bg = type === "image" ? "bg-blue-50 border-blue-200" : type === "video" ? "bg-purple-50 border-purple-200" : type === "audio" ? "bg-amber-50 border-amber-200" : "bg-gray-50 border-gray-200";
   const iconColor = type === "image" ? "text-blue-400" : type === "video" ? "text-purple-400" : type === "audio" ? "text-amber-400" : "text-gray-400";
 
+  const handleOpen = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/media/${media.id}`);
+      if (res.ok) {
+        const { url } = await res.json();
+        if (url) window.open(url, "_blank", "noopener,noreferrer");
+      }
+    } catch {
+      // Silently fail — user can still navigate to the conversation
+    }
+  };
+
   return (
-    <div className={`h-12 w-12 rounded-lg border ${bg} flex items-center justify-center shrink-0`} title={media.file_name || type}>
+    <button
+      onClick={handleOpen}
+      className={`h-12 w-12 rounded-lg border ${bg} flex items-center justify-center shrink-0 hover:opacity-80 transition-opacity cursor-pointer`}
+      title={`Open ${media.file_name || type}`}
+    >
       <Icon className={`h-5 w-5 ${iconColor}`} />
-    </div>
+    </button>
   );
 }
 
