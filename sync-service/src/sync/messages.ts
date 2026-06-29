@@ -62,10 +62,10 @@ function parseParticipants(
 }
 
 // Map 3CX provider_type to our channel_type
-function mapProviderToChannel(providerType: string | null): string {
+function mapProviderToChannel(providerType: unknown): string {
   if (!providerType) return "internal";
 
-  const type = providerType.toLowerCase();
+  const type = String(providerType).toLowerCase();
 
   // Direct mappings for known types
   if (type.includes("sms")) return "sms";

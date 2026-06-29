@@ -1417,15 +1417,15 @@ export async function linkMediaToMessage(
 ): Promise<boolean> {
   const client = getSupabaseClient();
 
-  // Find media file by hash (the internal_file_name is stored as file_name in our DB)
-  // The file_name might include or exclude the extension, so we check both
+  // Find media file by hash — try with extension first, then without
+  // Use two eq checks instead of ilike to use the btree index on (tenant_id, file_name)
   const hashWithoutExt = internalFileName.replace(/\.[^/.]+$/, "");
 
   const { data: mediaFiles, error: findError } = await client
     .from("media_files")
     .select("id, file_name")
     .eq("tenant_id", tenantId)
-    .or(`file_name.eq.${internalFileName},file_name.ilike.${hashWithoutExt}%`);
+    .or(`file_name.eq.${internalFileName},file_name.eq.${hashWithoutExt}`);
 
   if (findError) {
     logger.error("Failed to find media file by hash", {

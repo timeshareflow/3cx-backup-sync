@@ -34,9 +34,9 @@ const CHAT_FILE_PATHS = [
   "/home/phonesystem/.3CXPhone System/Data/Http/Files/Chat Files",
 ];
 
-function mapProviderToChannel(providerType: string | null): string {
+function mapProviderToChannel(providerType: unknown): string {
   if (!providerType) return "internal";
-  const t = providerType.toLowerCase();
+  const t = String(providerType).toLowerCase();
   if (t.includes("sms")) return "sms";
   if (t.includes("mms")) return "mms";
   if (t.includes("facebook") || t.includes("fb")) return "facebook";
