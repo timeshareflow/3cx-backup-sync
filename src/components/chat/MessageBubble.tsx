@@ -83,6 +83,15 @@ function highlightText(text: string, query: string | undefined): React.ReactNode
   }
 }
 
+// Decide which side a message sits on, messaging-app style.
+// "Our" side (the business's agents) send from an internal extension — a short
+// numeric id like 303, 900. Customers send from a phone number (+1813...), which
+// is long or starts with "+". Extension → right (outgoing); everything else → left.
+function isOutgoingMessage(senderIdentifier: string | null): boolean {
+  const id = (senderIdentifier || "").trim();
+  return /^\d{1,6}$/.test(id);
+}
+
 export function MessageBubble({ message, isHighlighted = false, highlightQuery }: MessageBubbleProps) {
   const hasMedia = message.media_files && message.media_files.length > 0;
   const hasText = message.content && message.content.trim().length > 0;
@@ -93,14 +102,25 @@ export function MessageBubble({ message, isHighlighted = false, highlightQuery }
   // Show attachment card when content is a filename but no linked media
   const shouldShowAttachmentCard = contentIsFilename && !hasMedia;
 
+  const isOutgoing = isOutgoingMessage(message.sender_identifier);
+  // Only show the "ext." tag for our own agents, where the extension differs from the name.
+  const showExtension =
+    isOutgoing && !!message.sender_name && message.sender_identifier !== message.sender_name;
+
   return (
     <div
       className={`message-enter ${isHighlighted ? "bg-yellow-50 -mx-2 px-2 py-1 rounded-lg" : ""}`}
     >
-      <div className="flex items-start gap-3">
+      <div className={`flex items-start gap-3 ${isOutgoing ? "flex-row-reverse" : ""}`}>
         {/* Avatar */}
         <div className="flex-shrink-0">
-          <div className="h-8 w-8 rounded-full bg-gradient-to-br from-blue-400 to-blue-600 flex items-center justify-center text-white text-sm font-medium">
+          <div
+            className={`h-8 w-8 rounded-full flex items-center justify-center text-white text-sm font-medium ${
+              isOutgoing
+                ? "bg-gradient-to-br from-teal-400 to-teal-600"
+                : "bg-gradient-to-br from-blue-400 to-blue-600"
+            }`}
+          >
             {message.sender_name
               ? message.sender_name.charAt(0).toUpperCase()
               : message.sender_identifier?.charAt(0) || "?"}
@@ -108,13 +128,13 @@ export function MessageBubble({ message, isHighlighted = false, highlightQuery }
         </div>
 
         {/* Message content */}
-        <div className="flex-1 min-w-0">
+        <div className={`flex-1 min-w-0 flex flex-col ${isOutgoing ? "items-end" : "items-start"}`}>
           {/* Sender info */}
-          <div className="flex items-baseline gap-2 mb-1">
+          <div className={`flex items-baseline gap-2 mb-1 ${isOutgoing ? "flex-row-reverse" : ""}`}>
             <span className="font-medium text-gray-900">
               {message.sender_name || message.sender_identifier || "Unknown"}
             </span>
-            {message.sender_identifier && message.sender_name && (
+            {showExtension && (
               <span className="text-xs text-gray-500">
                 ext. {message.sender_identifier}
               </span>
@@ -126,8 +146,14 @@ export function MessageBubble({ message, isHighlighted = false, highlightQuery }
 
           {/* Text content */}
           {shouldShowText && (
-            <div className="bg-gray-100 rounded-2xl rounded-tl-md px-4 py-2 inline-block max-w-[80%]">
-              <p className="text-gray-800 whitespace-pre-wrap break-words">
+            <div
+              className={`rounded-2xl px-4 py-2 inline-block max-w-[80%] ${
+                isOutgoing
+                  ? "bg-teal-500 text-white rounded-tr-md"
+                  : "bg-gray-100 text-gray-800 rounded-tl-md"
+              }`}
+            >
+              <p className="whitespace-pre-wrap break-words">
                 {highlightQuery ? highlightText(message.content!, highlightQuery) : message.content}
               </p>
             </div>
@@ -141,7 +167,7 @@ export function MessageBubble({ message, isHighlighted = false, highlightQuery }
           {/* Media content */}
           {hasMedia && (
             <div className={`${shouldShowText ? "mt-2" : ""}`}>
-              <div className="flex flex-wrap gap-2">
+              <div className={`flex flex-wrap gap-2 ${isOutgoing ? "justify-end" : ""}`}>
                 {message.media_files.map((media) => (
                   <MediaPreview key={media.id} media={media} />
                 ))}
