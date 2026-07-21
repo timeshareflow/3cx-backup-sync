@@ -4,16 +4,22 @@ import { getTenantContext } from "@/lib/tenant";
 
 export const dynamic = "force-dynamic";
 
-// Expected max intervals per sync type (minutes) — how long since last successful sync run
+// Expected max intervals per sync type (minutes) — how long since last successful sync run.
+// These MUST account for idle mode, where the sync service deliberately slows down
+// when no users are active, to avoid flagging perfectly healthy syncs as "stale":
+//   media/voicemails: run every 60 min in idle mode
+//   recordings/faxes/meetings: run every 90 min in idle mode
+//   extensions: run every 4 hours in idle mode
+// Kept in sync with STALENESS_THRESHOLDS in api/cron/sync-health/route.ts.
 const EXPECTED_INTERVALS: Record<string, { warning: number; critical: number }> = {
-  messages:   { warning: 10,  critical: 15 },
-  media:      { warning: 20,  critical: 30 },
-  cdr:        { warning: 15,  critical: 30 },
-  recordings: { warning: 30,  critical: 60 },
-  voicemails: { warning: 30,  critical: 60 },
-  faxes:      { warning: 30,  critical: 60 },
-  meetings:   { warning: 30,  critical: 60 },
-  extensions: { warning: 90,  critical: 120 },
+  messages:   { warning: 75,  critical: 120 },
+  media:      { warning: 90,  critical: 150 },
+  cdr:        { warning: 75,  critical: 120 },
+  recordings: { warning: 120, critical: 210 },
+  voicemails: { warning: 90,  critical: 150 },
+  faxes:      { warning: 120, critical: 210 },
+  meetings:   { warning: 120, critical: 210 },
+  extensions: { warning: 300, critical: 480 },
 };
 
 // How long since the last actual message/record was synced before we alert
