@@ -729,9 +729,14 @@ export async function getCallRecords(
                 END as callee_number,
                 CASE WHEN calltype = 2 THEN party_name ELSE NULL END as callee_name,
                 dnowner::text as extension_number,
+                -- Direction from who is actually external, not 3CX's calltype code
+                -- (calltype does not reliably mean in/out/internal). The other
+                -- party is party_callerid (or dialed_number for outbound); if it
+                -- is an external number the call is in/out, otherwise internal.
                 CASE
-                  WHEN calltype = 1 THEN 'inbound'
-                  WHEN calltype = 2 THEN 'outbound'
+                  WHEN left(coalesce(nullif(party_callerid, ''), nullif(dialed_number::text, ''), ''), 1) = '+'
+                       OR length(regexp_replace(coalesce(nullif(party_callerid, ''), nullif(dialed_number::text, ''), ''), '[^0-9]', '', 'g')) >= 7
+                    THEN CASE WHEN calltype = 2 THEN 'outbound' ELSE 'inbound' END
                   ELSE 'internal'
                 END as direction,
                 calltype::text as call_type,
@@ -740,7 +745,11 @@ export async function getCallRecords(
                   WHEN end_status = 5 THEN 'missed'
                   ELSE 'missed'
                 END as status,
-                NULL::integer as ring_duration,
+                -- Ring time = start → answer (or start → hangup when unanswered)
+                CASE
+                  WHEN established_time IS NOT NULL THEN EXTRACT(EPOCH FROM (established_time - start_time))::integer
+                  ELSE EXTRACT(EPOCH FROM (end_time - start_time))::integer
+                END as ring_duration,
                 CASE
                   WHEN established_time IS NOT NULL
                   THEN EXTRACT(EPOCH FROM (end_time - established_time))::integer
@@ -767,9 +776,14 @@ export async function getCallRecords(
                 END as callee_number,
                 CASE WHEN calltype = 2 THEN party_name ELSE NULL END as callee_name,
                 dnowner::text as extension_number,
+                -- Direction from who is actually external, not 3CX's calltype code
+                -- (calltype does not reliably mean in/out/internal). The other
+                -- party is party_callerid (or dialed_number for outbound); if it
+                -- is an external number the call is in/out, otherwise internal.
                 CASE
-                  WHEN calltype = 1 THEN 'inbound'
-                  WHEN calltype = 2 THEN 'outbound'
+                  WHEN left(coalesce(nullif(party_callerid, ''), nullif(dialed_number::text, ''), ''), 1) = '+'
+                       OR length(regexp_replace(coalesce(nullif(party_callerid, ''), nullif(dialed_number::text, ''), ''), '[^0-9]', '', 'g')) >= 7
+                    THEN CASE WHEN calltype = 2 THEN 'outbound' ELSE 'inbound' END
                   ELSE 'internal'
                 END as direction,
                 calltype::text as call_type,
@@ -778,7 +792,11 @@ export async function getCallRecords(
                   WHEN end_status = 5 THEN 'missed'
                   ELSE 'missed'
                 END as status,
-                NULL::integer as ring_duration,
+                -- Ring time = start → answer (or start → hangup when unanswered)
+                CASE
+                  WHEN established_time IS NOT NULL THEN EXTRACT(EPOCH FROM (established_time - start_time))::integer
+                  ELSE EXTRACT(EPOCH FROM (end_time - start_time))::integer
+                END as ring_duration,
                 CASE
                   WHEN established_time IS NOT NULL
                   THEN EXTRACT(EPOCH FROM (end_time - established_time))::integer
