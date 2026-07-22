@@ -72,13 +72,14 @@ export async function GET(request: NextRequest) {
       }
     }
 
-    // Build query - use uploaded_at for ordering as it's the default timestamp
-    // recorded_at may not exist on older table versions
+    // Order by created_at — the timestamp that actually exists on this table.
+    // (The table has no uploaded_at/recorded_at column; ordering by a missing
+    // column returns a 400 and surfaces as "failed to fetch" in the UI.)
     let query = supabase
       .from("meeting_recordings")
       .select("*", { count: "exact" })
       .eq("tenant_id", context.tenantId)
-      .order("uploaded_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .range(offset, offset + pageSize - 1);
 
     // Filter by host extension if specified
