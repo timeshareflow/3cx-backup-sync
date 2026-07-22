@@ -41,30 +41,31 @@ function MediaThumbnail({ media }: { media: MediaFile }) {
   );
 }
 
-// Loads a real poster frame for a video grid cell via its signed URL.
-// Uses a muted <video preload="metadata"> seeked to ~0.5s so the browser
-// paints an actual frame — no server-side thumbnail needed. Falls back to a
-// video icon while loading or if playback isn't supported.
+// Shows a video's server-generated poster frame (a tiny webp) via its signed URL.
+// Only fetches when the row actually has a thumbnail; otherwise (poster not yet
+// generated / unsupported) it shows a video icon and never downloads the full file.
 function VideoThumbnail({ media }: { media: MediaFile }) {
   const [url, setUrl] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
+  const hasPoster = !!media.thumbnail_path;
 
   useEffect(() => {
+    if (!hasPoster) return;
     let active = true;
-    fetch(`/api/media/${media.id}`)
+    fetch(`/api/media/${media.id}?thumb=1`)
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error("fetch failed"))))
-      .then((d) => { if (active) setUrl(d.url); })
+      .then((d) => { if (active) { if (d.url) setUrl(d.url); else setFailed(true); } })
       .catch(() => { if (active) setFailed(true); });
     return () => { active = false; };
-  }, [media.id]);
+  }, [media.id, hasPoster]);
 
-  if (url && !failed) {
+  if (hasPoster && url && !failed) {
     return (
-      <video
-        src={`${url}#t=0.5`}
-        muted
-        playsInline
-        preload="metadata"
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={url}
+        alt={media.file_name || "video"}
+        loading="lazy"
         className="w-full h-full object-cover bg-slate-800"
         onError={() => setFailed(true)}
       />

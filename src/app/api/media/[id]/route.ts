@@ -13,6 +13,7 @@ interface MediaFile {
   file_type: string;
   tenant_id: string;
   storage_backend?: string; // 'supabase' or 'spaces'
+  thumbnail_path?: string | null; // poster frame (webp) for videos, in Spaces
 }
 
 export async function GET(
@@ -20,6 +21,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  // ?thumb=1 → return a signed URL for the lightweight poster instead of the
+  // full-size original (used by the gallery grid so it never downloads whole videos).
+  const wantThumb = request.nextUrl.searchParams.get("thumb") === "1";
 
   try {
     const context = await getTenantContext();
@@ -57,6 +61,22 @@ export async function GET(
     }
 
     const media = data as unknown as MediaFile;
+
+    // Poster request: sign the thumbnail if one exists (posters always live in
+    // Spaces). If none yet, report null so the client shows an icon instead of
+    // fetching the full-size original.
+    if (wantThumb) {
+      if (!media.thumbnail_path) {
+        return NextResponse.json({ url: null, is_thumbnail: false });
+      }
+      try {
+        const thumbUrl = await getSpacesSignedUrl(media.thumbnail_path, 3600);
+        return NextResponse.json({ url: thumbUrl, is_thumbnail: true });
+      } catch (thumbError) {
+        console.error("Failed to sign thumbnail URL:", media.thumbnail_path, thumbError);
+        return NextResponse.json({ url: null, is_thumbnail: false });
+      }
+    }
 
     let signedUrl: string;
 
