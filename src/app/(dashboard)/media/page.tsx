@@ -41,6 +41,77 @@ function MediaThumbnail({ media }: { media: MediaFile }) {
   );
 }
 
+// Loads a real poster frame for a video grid cell via its signed URL.
+// Uses a muted <video preload="metadata"> seeked to ~0.5s so the browser
+// paints an actual frame — no server-side thumbnail needed. Falls back to a
+// video icon while loading or if playback isn't supported.
+function VideoThumbnail({ media }: { media: MediaFile }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/media/${media.id}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("fetch failed"))))
+      .then((d) => { if (active) setUrl(d.url); })
+      .catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [media.id]);
+
+  if (url && !failed) {
+    return (
+      <video
+        src={`${url}#t=0.5`}
+        muted
+        playsInline
+        preload="metadata"
+        className="w-full h-full object-cover bg-slate-800"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <div className="w-full h-full flex items-center justify-center bg-slate-800">
+      <Video className="h-12 w-12 text-white" />
+    </div>
+  );
+}
+
+// Buckets a date into a human-friendly section label for the gallery.
+// Assumes the caller feeds items already sorted newest-first.
+function getDateBucket(dateStr: string): string {
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return "Unknown date";
+
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startOfDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const diffDays = Math.round((startOfToday.getTime() - startOfDay.getTime()) / dayMs);
+
+  if (diffDays <= 0) return "Today";
+  if (diffDays === 1) return "Yesterday";
+  if (diffDays < 7) return "This Week";
+  if (diffDays < 14) return "Last Week";
+  return d.toLocaleDateString(undefined, { month: "long", year: "numeric" });
+}
+
+// Groups an already-sorted (newest-first) list into consecutive date sections.
+function groupByDate(files: MediaFile[]): { label: string; items: MediaFile[] }[] {
+  const groups: { label: string; items: MediaFile[] }[] = [];
+  for (const file of files) {
+    const label = getDateBucket(file.created_at);
+    const last = groups[groups.length - 1];
+    if (last && last.label === label) {
+      last.items.push(file);
+    } else {
+      groups.push({ label, items: [file] });
+    }
+  }
+  return groups;
+}
+
 export default function MediaGalleryPage() {
   const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -213,47 +284,62 @@ export default function MediaGalleryPage() {
         </div>
       )}
 
-      {/* Media Grid */}
+      {/* Media Grid — grouped into date sections */}
       {mediaFiles.length > 0 && (
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
-          {mediaFiles.map((media) => {
-            const fileType = getFileType(media.mime_type);
+        <div className="space-y-8">
+          {groupByDate(mediaFiles).map((group) => (
+            <section key={group.label}>
+              <h2 className="sticky top-0 z-10 -mx-6 px-6 py-2 bg-white/90 backdrop-blur-sm text-sm font-semibold text-slate-600 border-b border-slate-100">
+                {group.label}
+                <span className="ml-2 text-slate-400 font-normal">{group.items.length}</span>
+              </h2>
+              <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4 mt-4">
+                {group.items.map((media) => {
+                  const fileType = getFileType(media.mime_type);
 
-            return (
-              <button
-                key={media.id}
-                onClick={() => openViewer(media)}
-                className="group relative aspect-square bg-slate-100 rounded-xl overflow-hidden border border-slate-200 hover:border-teal-300 hover:shadow-lg transition-all"
-              >
-                {fileType === "image" ? (
-                  <MediaThumbnail media={media} />
-                ) : fileType === "video" ? (
-                  <div className="w-full h-full flex items-center justify-center bg-slate-800">
-                    <Video className="h-12 w-12 text-white" />
-                  </div>
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center bg-slate-100">
-                    <FileText className="h-12 w-12 text-slate-400" />
-                  </div>
-                )}
+                  return (
+                    <button
+                      key={media.id}
+                      onClick={() => openViewer(media)}
+                      className="group relative aspect-square bg-slate-100 rounded-xl overflow-hidden border border-slate-200 hover:border-teal-300 hover:shadow-lg transition-all"
+                    >
+                      {fileType === "image" ? (
+                        <MediaThumbnail media={media} />
+                      ) : fileType === "video" ? (
+                        <VideoThumbnail media={media} />
+                      ) : (
+                        <div className="w-full h-full flex items-center justify-center bg-slate-100">
+                          <FileText className="h-12 w-12 text-slate-400" />
+                        </div>
+                      )}
 
-                {/* Overlay */}
-                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
-                  <ZoomIn className="h-8 w-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                </div>
+                      {/* Video play badge */}
+                      {fileType === "video" && (
+                        <div className="absolute top-2 right-2 bg-black/50 rounded-full p-1.5 backdrop-blur-sm">
+                          <Video className="h-3.5 w-3.5 text-white" />
+                        </div>
+                      )}
 
-                {/* File info */}
-                <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
-                  <p className="text-white text-xs truncate">
-                    {media.file_name || "Unknown"}
-                  </p>
-                  <p className="text-white/70 text-xs">
-                    {formatFileSize(media.file_size)}
-                  </p>
-                </div>
-              </button>
-            );
-          })}
+                      {/* Overlay */}
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/40 transition-colors flex items-center justify-center">
+                        <ZoomIn className="h-8 w-8 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
+
+                      {/* File info */}
+                      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-2">
+                        <p className="text-white text-xs truncate">
+                          {media.file_name || "Unknown"}
+                        </p>
+                        <p className="text-white/70 text-xs">
+                          {formatFileSize(media.file_size)}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
         </div>
       )}
 
