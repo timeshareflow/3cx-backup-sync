@@ -77,11 +77,28 @@ export async function GET(request: NextRequest) {
       });
     }
 
-    // Fetch conversation names for labeling
+    // Fetch conversation names for labeling — scoped to this tenant. This is also
+    // the tenant guard: the `participants` table has no tenant_id, so the
+    // external_id (extension number) match above can surface OTHER tenants'
+    // conversations that happen to share an extension number. Restricting to this
+    // tenant here — and reusing only these ids downstream — closes that leak.
     const { data: convData } = await supabase
       .from("conversations")
       .select("id, conversation_name, is_group_chat, is_external")
-      .in("id", conversationIds);
+      .in("id", conversationIds)
+      .eq("tenant_id", context.tenantId);
+
+    // Re-derive the working set from the tenant-scoped conversations only.
+    const tenantConversationIds = (convData || []).map((c) => c.id);
+    if (tenantConversationIds.length === 0) {
+      return NextResponse.json({
+        data: [],
+        conversations: [],
+        total: 0,
+        has_more: false,
+        has_newer: false,
+      });
+    }
 
     const convMap: Record<
       string,
@@ -116,7 +133,8 @@ export async function GET(request: NextRequest) {
       `,
         { count: "exact" }
       )
-      .in("conversation_id", conversationIds);
+      .in("conversation_id", tenantConversationIds)
+      .eq("tenant_id", context.tenantId);
 
     if (before) {
       query = query.lt("sent_at", before);
@@ -155,6 +173,7 @@ export async function GET(request: NextRequest) {
           .from("media_files")
           .select("*")
           .eq("file_name", filename)
+          .eq("tenant_id", context.tenantId)
           .limit(1);
 
         if (matchedMedia && matchedMedia.length > 0) {
@@ -183,7 +202,7 @@ export async function GET(request: NextRequest) {
       const { count: olderCount } = await supabase
         .from("messages")
         .select("id", { count: "exact", head: true })
-        .in("conversation_id", conversationIds)
+        .in("conversation_id", tenantConversationIds)
         .lt("sent_at", firstMessageTime);
 
       hasMore = (olderCount || 0) > 0;
@@ -196,7 +215,7 @@ export async function GET(request: NextRequest) {
       const { count: newerCount } = await supabase
         .from("messages")
         .select("id", { count: "exact", head: true })
-        .in("conversation_id", conversationIds)
+        .in("conversation_id", tenantConversationIds)
         .gt("sent_at", lastMessageTime);
 
       hasNewer = (newerCount || 0) > 0;

@@ -36,8 +36,13 @@ export async function GET(
       .select("*")
       .eq("id", id);
 
-    // Non-super-admin users: restrict to their tenant
-    if (context.role !== "super_admin" && context.tenantId) {
+    // Non-super-admin users must be scoped to their tenant. If a non-super-admin
+    // has no tenant, deny — never fall through to an unscoped query, which would
+    // return any tenant's media by id (IDOR).
+    if (context.role !== "super_admin") {
+      if (!context.tenantId) {
+        return NextResponse.json({ error: "No tenant access" }, { status: 403 });
+      }
       query = query.eq("tenant_id", context.tenantId);
     }
 
