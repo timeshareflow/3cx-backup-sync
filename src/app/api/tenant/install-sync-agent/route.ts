@@ -267,18 +267,14 @@ export async function POST(request: Request) {
     .eq("id", user.id)
     .single();
 
+  // SECURITY: this route provisions the agent with the GLOBAL service-role key
+  // (which bypasses every tenant's RLS). It is therefore restricted to super
+  // admins only. A tenant admin could otherwise install an agent onto a machine
+  // they control, read the key from its .env, and access all tenants' data.
   const isSuper = profile?.role === "super_admin";
 
   if (!isSuper) {
-    const { data: membership } = await supabase
-      .from("user_tenants")
-      .select("role")
-      .eq("user_id", user.id)
-      .single();
-
-    if (membership?.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    return NextResponse.json({ error: "Forbidden — super admin only" }, { status: 403 });
   }
 
   const body = await request.json().catch(() => ({}));

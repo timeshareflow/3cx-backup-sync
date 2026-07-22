@@ -91,19 +91,10 @@ export async function POST(request: NextRequest) {
       agent = data;
     }
 
-    // Return Supabase credentials for the agent to use
-    // These are read from environment variables
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-    if (!supabaseUrl || !supabaseServiceKey) {
-      console.error("Missing Supabase environment variables");
-      return NextResponse.json(
-        { success: false, error: "Server configuration error" },
-        { status: 500 }
-      );
-    }
-
+    // SECURITY: never return the global service-role key over the API — it
+    // bypasses every tenant's RLS. Agents receive credentials at install time
+    // (super-admin only) and read them from their own environment. This
+    // endpoint only records the agent's registration/heartbeat.
     return NextResponse.json({
       success: true,
       message: "Agent registered successfully",
@@ -111,8 +102,6 @@ export async function POST(request: NextRequest) {
       tenant_name: tenant.name,
       tenant_slug: tenant.slug,
       agent_id: agent.id,
-      supabase_url: supabaseUrl,
-      supabase_service_role_key: supabaseServiceKey,
     });
   } catch (error) {
     console.error("Agent registration error:", error);
