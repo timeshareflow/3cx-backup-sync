@@ -6,6 +6,41 @@ import type { MediaFile } from "@/types";
 
 type FileTypeFilter = "all" | "image" | "video" | "audio" | "document";
 
+// Loads the real image thumbnail for a grid cell via its signed URL.
+// Falls back to the placeholder icon while loading or if the object is missing.
+function MediaThumbnail({ media }: { media: MediaFile }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch(`/api/media/${media.id}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error("fetch failed"))))
+      .then((d) => { if (active) setUrl(d.url); })
+      .catch(() => { if (active) setFailed(true); });
+    return () => { active = false; };
+  }, [media.id]);
+
+  if (url && !failed) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={url}
+        alt={media.file_name || "media"}
+        loading="lazy"
+        className="w-full h-full object-cover"
+        onError={() => setFailed(true)}
+      />
+    );
+  }
+
+  return (
+    <div className="w-full h-full flex items-center justify-center bg-slate-200">
+      <Image className="h-12 w-12 text-slate-400" />
+    </div>
+  );
+}
+
 export default function MediaGalleryPage() {
   const [mediaFiles, setMediaFiles] = useState<MediaFile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -191,9 +226,7 @@ export default function MediaGalleryPage() {
                 className="group relative aspect-square bg-slate-100 rounded-xl overflow-hidden border border-slate-200 hover:border-teal-300 hover:shadow-lg transition-all"
               >
                 {fileType === "image" ? (
-                  <div className="w-full h-full flex items-center justify-center bg-slate-200">
-                    <Image className="h-12 w-12 text-slate-400" />
-                  </div>
+                  <MediaThumbnail media={media} />
                 ) : fileType === "video" ? (
                   <div className="w-full h-full flex items-center justify-center bg-slate-800">
                     <Video className="h-12 w-12 text-white" />
