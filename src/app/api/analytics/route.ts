@@ -39,13 +39,9 @@ export async function GET(request: NextRequest) {
       // Overall stats
       supabase.rpc("get_call_stats", { p_tenant_id: tid, p_from: from, p_to: to }),
 
-      // Daily volume grouped by date and direction
-      supabase
-        .from("call_logs")
-        .select("started_at, direction")
-        .eq("tenant_id", tid)
-        .gte("started_at", from)
-        .lte("started_at", to),
+      // Daily volume grouped by date and direction (server-side aggregation —
+      // a raw row fetch silently caps at 1,000 rows and misrepresents the period)
+      supabase.rpc("get_daily_volume", { p_tenant_id: tid, p_from: from, p_to: to }),
 
       // Hourly distribution
       supabase.rpc("get_hourly_distribution", { p_tenant_id: tid, p_from: from, p_to: to }),
@@ -57,18 +53,17 @@ export async function GET(request: NextRequest) {
       supabase.rpc("get_queue_stats", { p_tenant_id: tid, p_from: from, p_to: to }),
     ]);
 
-    // Build daily volume from lightweight direction+date rows (no heavy columns)
-    const dailyMap = new Map<string, { date: string; inbound: number; outbound: number; internal: number; total: number }>();
-    for (const row of (dailyRes.data || [])) {
-      const date = new Date(row.started_at).toISOString().split("T")[0];
-      const entry = dailyMap.get(date) || { date, inbound: 0, outbound: 0, internal: 0, total: 0 };
-      entry.total++;
-      if (row.direction === "inbound") entry.inbound++;
-      else if (row.direction === "outbound") entry.outbound++;
-      else entry.internal++;
-      dailyMap.set(date, entry);
-    }
-    const dailyVolume = Array.from(dailyMap.values()).sort((a, b) => a.date.localeCompare(b.date));
+    // Daily volume is already aggregated server-side by get_daily_volume.
+    // Numeric aggregates arrive as strings, so coerce to numbers for the UI.
+    const dailyVolume = (dailyRes.data || []).map((row: {
+      date: string; inbound: number | string; outbound: number | string; internal: number | string; total: number | string;
+    }) => ({
+      date: row.date,
+      inbound: Number(row.inbound),
+      outbound: Number(row.outbound),
+      internal: Number(row.internal),
+      total: Number(row.total),
+    }));
 
     return NextResponse.json({
       stats: statsRes.data || null,

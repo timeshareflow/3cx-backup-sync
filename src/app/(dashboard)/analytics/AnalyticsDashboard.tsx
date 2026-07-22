@@ -5,7 +5,6 @@ import {
   Phone,
   PhoneIncoming,
   PhoneOutgoing,
-  PhoneMissed,
   Clock,
   Users,
   TrendingUp,
@@ -14,14 +13,15 @@ import {
 
 interface CallStats {
   totalCalls: number;
-  inboundCalls: number;
-  outboundCalls: number;
-  internalCalls: number;
-  answeredCalls: number;
-  missedCalls: number;
+  totalTalkSeconds: number;
+  incomingConnected: number;
+  incomingMissed: number;
+  incomingTalkSeconds: number;
+  outgoingConnected: number;
+  outgoingTalkSeconds: number;
+  internalConnected: number;
+  internalTalkSeconds: number;
   avgTalkDuration: number;
-  avgRingDuration: number;
-  totalTalkTime: number;
 }
 
 interface DailyCallVolume {
@@ -118,6 +118,51 @@ function StatCard({
   );
 }
 
+// Prominent card for one call direction: shows connected-call count and total
+// talk time side by side, with an optional footnote (e.g. missed / answer rate).
+function DirectionCard({
+  title,
+  calls,
+  talkSeconds,
+  footnote,
+  icon: Icon,
+  color,
+}: {
+  title: string;
+  calls: number;
+  talkSeconds: number;
+  footnote?: string;
+  icon: React.ComponentType<{ className?: string }>;
+  color: "green" | "purple" | "blue";
+}) {
+  const colorClasses = {
+    green: "bg-green-100 text-green-600",
+    purple: "bg-purple-100 text-purple-600",
+    blue: "bg-blue-100 text-blue-600",
+  };
+  return (
+    <div className="bg-white rounded-lg border border-gray-200 p-6">
+      <div className="flex items-center gap-3 mb-4">
+        <div className={`p-2.5 rounded-lg ${colorClasses[color]}`}>
+          <Icon className="h-5 w-5" />
+        </div>
+        <p className="text-sm font-medium text-gray-700">{title}</p>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <p className="text-2xl font-bold text-gray-900">{calls.toLocaleString()}</p>
+          <p className="text-xs text-gray-500">calls</p>
+        </div>
+        <div>
+          <p className="text-2xl font-bold text-gray-900">{formatDuration(talkSeconds)}</p>
+          <p className="text-xs text-gray-500">talk time</p>
+        </div>
+      </div>
+      {footnote && <p className="text-xs text-gray-400 mt-3">{footnote}</p>}
+    </div>
+  );
+}
+
 function BarChart({
   data,
   maxValue,
@@ -202,8 +247,10 @@ export function AnalyticsDashboard() {
   }
 
   const stats = data?.stats;
-  const answerRate = stats && stats.inboundCalls > 0
-    ? Math.round((stats.answeredCalls / stats.inboundCalls) * 100)
+  // Incoming answer rate = connected / (connected + missed) — bounded 0–100%.
+  const incomingTotal = stats ? stats.incomingConnected + stats.incomingMissed : 0;
+  const answerRate = incomingTotal > 0
+    ? Math.round((stats!.incomingConnected / incomingTotal) * 100)
     : 0;
 
   // Get max values for charts
@@ -226,7 +273,7 @@ export function AnalyticsDashboard() {
           <select
             value={period}
             onChange={(e) => setPeriod(e.target.value)}
-            className="px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
             <option value="7d">Last 7 Days</option>
             <option value="30d">Last 30 Days</option>
@@ -253,59 +300,51 @@ export function AnalyticsDashboard() {
         </div>
       </div>
 
-      {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* Direction split — Incoming / Outgoing / Internal, each with calls + talk time */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <DirectionCard
+          title="Incoming"
+          calls={stats?.incomingConnected || 0}
+          talkSeconds={stats?.incomingTalkSeconds || 0}
+          footnote={stats ? `${stats.incomingMissed.toLocaleString()} missed · ${answerRate}% answered` : undefined}
+          icon={PhoneIncoming}
+          color="green"
+        />
+        <DirectionCard
+          title="Outgoing"
+          calls={stats?.outgoingConnected || 0}
+          talkSeconds={stats?.outgoingTalkSeconds || 0}
+          icon={PhoneOutgoing}
+          color="purple"
+        />
+        <DirectionCard
+          title="Internal (ext-to-ext)"
+          calls={stats?.internalConnected || 0}
+          talkSeconds={stats?.internalTalkSeconds || 0}
+          icon={Users}
+          color="blue"
+        />
+      </div>
+
+      {/* Supporting totals */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         <StatCard
-          title="Total Calls"
+          title="Total Calls (all legs)"
           value={stats?.totalCalls.toLocaleString() || 0}
           icon={Phone}
           color="blue"
         />
         <StatCard
-          title="Inbound Calls"
-          value={stats?.inboundCalls.toLocaleString() || 0}
-          subtitle={`${answerRate}% answer rate`}
-          icon={PhoneIncoming}
+          title="Total Talk Time"
+          value={formatDuration(stats?.totalTalkSeconds || 0)}
+          icon={TrendingUp}
           color="green"
         />
-        <StatCard
-          title="Outbound Calls"
-          value={stats?.outboundCalls.toLocaleString() || 0}
-          icon={PhoneOutgoing}
-          color="purple"
-        />
-        <StatCard
-          title="Missed Calls"
-          value={stats?.missedCalls.toLocaleString() || 0}
-          icon={PhoneMissed}
-          color="red"
-        />
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           title="Avg Talk Time"
           value={formatDuration(stats?.avgTalkDuration || 0)}
           icon={Clock}
           color="blue"
-        />
-        <StatCard
-          title="Avg Ring Time"
-          value={formatDuration(stats?.avgRingDuration || 0)}
-          icon={Clock}
-          color="yellow"
-        />
-        <StatCard
-          title="Total Talk Time"
-          value={formatDuration(stats?.totalTalkTime || 0)}
-          icon={TrendingUp}
-          color="green"
-        />
-        <StatCard
-          title="Internal Calls"
-          value={stats?.internalCalls.toLocaleString() || 0}
-          icon={Users}
-          color="purple"
         />
       </div>
 
