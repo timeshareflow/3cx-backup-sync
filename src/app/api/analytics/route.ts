@@ -26,7 +26,8 @@ export async function GET(request: NextRequest) {
     const dateTo = endDate ? new Date(endDate) : new Date();
     const dateFrom = startDate ? new Date(startDate) : (() => {
       const d = new Date();
-      d.setDate(d.getDate() - (period === "7d" ? 7 : period === "90d" ? 90 : 30));
+      if (period === "24h") d.setHours(d.getHours() - 24);
+      else d.setDate(d.getDate() - (period === "7d" ? 7 : period === "90d" ? 90 : 30));
       return d;
     })();
 

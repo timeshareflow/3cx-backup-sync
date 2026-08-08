@@ -271,6 +271,7 @@ export function AnalyticsDashboard() {
             onChange={(e) => setPeriod(e.target.value)}
             className="px-3 py-2 border border-gray-300 rounded-lg bg-white text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
           >
+            <option value="24h">Last 24 Hours</option>
             <option value="7d">Last 7 Days</option>
             <option value="30d">Last 30 Days</option>
             <option value="90d">Last 90 Days</option>
