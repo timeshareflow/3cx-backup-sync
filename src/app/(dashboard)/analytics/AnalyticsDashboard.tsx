@@ -141,24 +141,20 @@ function DirectionCard({
     blue: "bg-blue-100 text-blue-600",
   };
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-6">
+    <div className="bg-white rounded-lg border border-gray-200 p-6 flex flex-col">
       <div className="flex items-center gap-3 mb-4">
         <div className={`p-2.5 rounded-lg ${colorClasses[color]}`}>
           <Icon className="h-5 w-5" />
         </div>
         <p className="text-sm font-medium text-gray-700">{title}</p>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div>
-          <p className="text-2xl font-bold text-gray-900">{calls.toLocaleString()}</p>
-          <p className="text-xs text-gray-500">calls</p>
-        </div>
-        <div>
-          <p className="text-2xl font-bold text-gray-900">{formatDuration(talkSeconds)}</p>
-          <p className="text-xs text-gray-500">talk time</p>
-        </div>
+      <p className="text-3xl font-bold text-gray-900 leading-none">{formatDuration(talkSeconds)}</p>
+      <p className="text-xs text-gray-500 mt-1 mb-4">total talk time</p>
+      <div className="mt-auto flex items-baseline gap-1.5 border-t border-gray-100 pt-3">
+        <span className="text-xl font-semibold text-gray-900">{calls.toLocaleString()}</span>
+        <span className="text-xs text-gray-500">calls</span>
       </div>
-      {footnote && <p className="text-xs text-gray-400 mt-3">{footnote}</p>}
+      {footnote && <p className="text-xs text-gray-400 mt-1">{footnote}</p>}
     </div>
   );
 }
