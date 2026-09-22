@@ -93,10 +93,13 @@ export async function GET(request: NextRequest) {
           health = "warning";
         }
 
-        // Check for active errors (error happened after last success)
+        // Check for active errors (error happened after last success).
+        // A single failed run that will retry on the next cycle is a WARNING, not a page:
+        // it only becomes critical once the sync has also missed its warning window,
+        // i.e. it is failing repeatedly rather than hiccupping once.
         const lastError = sync.last_error_at ? new Date(sync.last_error_at).getTime() : 0;
         if (lastError > lastSuccess && sync.status === "error") {
-          health = "critical";
+          health = stalenessMinutes >= thresholds.warning ? "critical" : "warning";
         }
 
         syncTypeHealths.push({
