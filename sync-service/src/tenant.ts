@@ -207,7 +207,12 @@ export async function getTenantPool(tenant: TenantConfig): Promise<Pool | null> 
       max: 3,
       idleTimeoutMillis: 30000,
       connectionTimeoutMillis: 15000,
-      query_timeout: 25000,  // Kill any query that hangs >25s (SSH tunnel drop protection)
+      query_timeout: 25000,  // Client-side: give up waiting after 25s (SSH tunnel drop protection)
+      // Server-side: make PostgreSQL cancel the query at 25s too. query_timeout alone only
+      // stops waiting — the query keeps running on the server and the pooled connection stays
+      // busy, so the NEXT query on that connection also times out (this cascaded a slow
+      // conversation refresh into a failed message sync every 15th cycle).
+      statement_timeout: 25000,
       ssl: false,
     });
 

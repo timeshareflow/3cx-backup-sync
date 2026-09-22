@@ -419,7 +419,23 @@ export async function getAllLiveConversations(
       // NULLIF handles empty strings by converting them to NULL for COALESCE
       // Determine is_group_chat by: public_name is set OR more than 2 participants in party column
       // For 1-on-1 chats with no messages (no chat_history_view entry), generate name from extensions
+      //
+      // PERF: message counts and history names are pre-aggregated in CTEs (one pass each)
+      // instead of a LATERAL lookup into chat_history_view per joined message row. The old
+      // shape ran the view subquery ~94k times and took ~55s on 12.5k conversations — past the
+      // 25s statement timeout, so it never completed. This shape runs in ~5s on the same data.
       query = `
+        WITH msg AS (
+          SELECT fkid_chat_conversation AS cid, COUNT(*) AS message_count
+          FROM chat_message
+          GROUP BY fkid_chat_conversation
+        ),
+        hist AS (
+          SELECT conversation_id, MIN(chat_name) AS chat_name
+          FROM chat_history_view
+          WHERE chat_name IS NOT NULL AND chat_name != ''
+          GROUP BY conversation_id
+        )
         SELECT
           c.id::text as conversation_id,
           COALESCE(
@@ -428,18 +444,11 @@ export async function getAllLiveConversations(
             ext_names.generated_name
           ) as chat_name,
           c.is_external,
-          COUNT(m.id_message) as message_count,
+          COALESCE(msg.message_count, 0) as message_count,
           (NULLIF(c.public_name, '') IS NOT NULL OR array_length(string_to_array(c.party, ':'), 1) > 2) as is_group_chat
         FROM chat_conversation c
-        LEFT JOIN chat_message m ON m.fkid_chat_conversation = c.id
-        LEFT JOIN LATERAL (
-          SELECT DISTINCT chat_name
-          FROM chat_history_view
-          WHERE conversation_id = c.id
-          AND chat_name IS NOT NULL
-          AND chat_name != ''
-          LIMIT 1
-        ) h ON true
+        LEFT JOIN msg ON msg.cid = c.id
+        LEFT JOIN hist h ON h.conversation_id = c.id
         LEFT JOIN LATERAL (
           -- Generate name from extension numbers for 1-on-1 chats without history
           SELECT string_agg(
@@ -455,7 +464,6 @@ export async function getAllLiveConversations(
           LEFT JOIN users u ON u.iduser = uv.id
           WHERE ext_num != '3CX'  -- Skip system identifier
         ) ext_names ON h.chat_name IS NULL AND NULLIF(c.public_name, '') IS NULL
-        GROUP BY c.id, c.public_name, c.is_external, c.party, h.chat_name, ext_names.generated_name
         ORDER BY c.id
       `;
     } else {
