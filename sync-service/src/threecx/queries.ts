@@ -564,6 +564,36 @@ export async function getAllFileMappings(
 }
 
 // ============================================
+// SAFE TIME MATH
+// ============================================
+//
+// When a call is cut off by a 3CX restart or update, 3CX writes a placeholder end time of
+// 1600-12-31 on that row. A raw `EXTRACT(EPOCH FROM (end - start))::integer` on such a row
+// yields about -1.3e10, which overflows int4. PostgreSQL then fails the WHOLE query with
+// "integer out of range", so the sync cursor can never advance past that one row.
+// (First seen 2026-11-22: recording 60636 stalled recordings sync for 7+ hours.)
+//
+// These helpers return NULL instead of throwing when the span is negative or implausibly long.
+// Every downstream column they feed (durations, ended_at) is nullable.
+
+const MAX_PLAUSIBLE_SPAN = "INTERVAL '30 days'";
+
+/** Whole seconds from `from` to `to`, or NULL if `to` is before `from` or absurdly far after. */
+function safeSecondsSql(from: string, to: string): string {
+  return `(CASE WHEN ${to} >= ${from} AND ${to} < ${from} + ${MAX_PLAUSIBLE_SPAN} THEN EXTRACT(EPOCH FROM (${to} - ${from}))::integer END)`;
+}
+
+/** Whole seconds in an interval column, or NULL if negative or absurd. */
+function safeIntervalSecondsSql(interval: string): string {
+  return `(CASE WHEN ${interval} >= INTERVAL '0' AND ${interval} < ${MAX_PLAUSIBLE_SPAN} THEN EXTRACT(EPOCH FROM ${interval})::integer END)`;
+}
+
+/** `end`, or NULL when it is a placeholder earlier than `start`. */
+function safeEndSql(start: string, end: string): string {
+  return `(CASE WHEN ${end} >= ${start} THEN ${end} END)`;
+}
+
+// ============================================
 // RECORDINGS
 // ============================================
 
@@ -617,6 +647,13 @@ export async function getRecordings(
     const timeColumn = hasStartTime ? "start_time" : "id_recording";
     const orderClause = hasStartTime ? "start_time ASC" : "id_recording ASC";
 
+    // end_time is sanitized too: recordings.ts falls back to computing duration from
+    // start/end in JS, so passing the 1600 placeholder through would reproduce the overflow.
+    const endTimeSql = hasEndTime
+      ? hasStartTime ? safeEndSql("start_time", "end_time") : "end_time"
+      : "NULL";
+    const durationSql = hasStartTime && hasEndTime ? safeSecondsSql("start_time", "end_time") : "NULL";
+
     const query = since && hasStartTime
       ? `
         SELECT
@@ -624,8 +661,8 @@ export async function getRecordings(
           ${hasParticipantId ? "cl_participants_id::text" : "NULL"} as call_participants_id,
           recording_url,
           ${hasStartTime ? "start_time" : "NULL"} as start_time,
-          ${hasEndTime ? "end_time" : "NULL"} as end_time,
-          ${hasStartTime && hasEndTime ? "EXTRACT(EPOCH FROM (end_time - start_time))::int" : "NULL"} as duration_seconds,
+          ${endTimeSql} as end_time,
+          ${durationSql} as duration_seconds,
           ${hasTranscription ? "transcription" : "NULL"} as transcription,
           NULL as extension_number,
           NULL as caller_number,
@@ -641,8 +678,8 @@ export async function getRecordings(
           ${hasParticipantId ? "cl_participants_id::text" : "NULL"} as call_participants_id,
           recording_url,
           ${hasStartTime ? "start_time" : "NULL"} as start_time,
-          ${hasEndTime ? "end_time" : "NULL"} as end_time,
-          ${hasStartTime && hasEndTime ? "EXTRACT(EPOCH FROM (end_time - start_time))::int" : "NULL"} as duration_seconds,
+          ${endTimeSql} as end_time,
+          ${durationSql} as duration_seconds,
           ${hasTranscription ? "transcription" : "NULL"} as transcription,
           NULL as extension_number,
           NULL as caller_number,
@@ -755,18 +792,18 @@ export async function getCallRecords(
                 END as status,
                 -- Ring time = start → answer (or start → hangup when unanswered)
                 CASE
-                  WHEN established_time IS NOT NULL THEN EXTRACT(EPOCH FROM (established_time - start_time))::integer
-                  ELSE EXTRACT(EPOCH FROM (end_time - start_time))::integer
+                  WHEN established_time IS NOT NULL THEN ${safeSecondsSql("start_time", "established_time")}
+                  ELSE ${safeSecondsSql("start_time", "end_time")}
                 END as ring_duration,
                 CASE
                   WHEN established_time IS NOT NULL
-                  THEN EXTRACT(EPOCH FROM (end_time - established_time))::integer
+                  THEN ${safeSecondsSql("established_time", "end_time")}
                   ELSE 0
                 END as talk_duration,
-                EXTRACT(EPOCH FROM (end_time - start_time))::integer as total_duration,
+                ${safeSecondsSql("start_time", "end_time")} as total_duration,
                 start_time as call_started_at,
                 established_time as call_answered_at,
-                end_time as call_ended_at,
+                ${safeEndSql("start_time", "end_time")} as call_ended_at,
                 false as has_recording
               FROM myphone_callhistory_v14
               WHERE start_time > $1
@@ -802,18 +839,18 @@ export async function getCallRecords(
                 END as status,
                 -- Ring time = start → answer (or start → hangup when unanswered)
                 CASE
-                  WHEN established_time IS NOT NULL THEN EXTRACT(EPOCH FROM (established_time - start_time))::integer
-                  ELSE EXTRACT(EPOCH FROM (end_time - start_time))::integer
+                  WHEN established_time IS NOT NULL THEN ${safeSecondsSql("start_time", "established_time")}
+                  ELSE ${safeSecondsSql("start_time", "end_time")}
                 END as ring_duration,
                 CASE
                   WHEN established_time IS NOT NULL
-                  THEN EXTRACT(EPOCH FROM (end_time - established_time))::integer
+                  THEN ${safeSecondsSql("established_time", "end_time")}
                   ELSE 0
                 END as talk_duration,
-                EXTRACT(EPOCH FROM (end_time - start_time))::integer as total_duration,
+                ${safeSecondsSql("start_time", "end_time")} as total_duration,
                 start_time as call_started_at,
                 established_time as call_answered_at,
-                end_time as call_ended_at,
+                ${safeEndSql("start_time", "end_time")} as call_ended_at,
                 false as has_recording
               FROM myphone_callhistory_v14
               ORDER BY start_time ASC
@@ -914,11 +951,11 @@ export async function getCallRecords(
                   ELSE 'missed'
                 END as status,
                 NULL::integer as ring_duration,
-                EXTRACT(EPOCH FROM (endtime - answertime))::integer as talk_duration,
-                EXTRACT(EPOCH FROM duration)::integer as total_duration,
+                ${safeSecondsSql("answertime", "endtime")} as talk_duration,
+                ${safeIntervalSecondsSql("duration")} as total_duration,
                 starttime as call_started_at,
                 CASE WHEN is_answ = true THEN answertime ELSE NULL END as call_answered_at,
-                endtime as call_ended_at,
+                ${safeEndSql("starttime", "endtime")} as call_ended_at,
                 false as has_recording
               FROM callhistory3
               WHERE starttime > $1
@@ -944,11 +981,11 @@ export async function getCallRecords(
                   ELSE 'missed'
                 END as status,
                 NULL::integer as ring_duration,
-                EXTRACT(EPOCH FROM (endtime - answertime))::integer as talk_duration,
-                EXTRACT(EPOCH FROM duration)::integer as total_duration,
+                ${safeSecondsSql("answertime", "endtime")} as talk_duration,
+                ${safeIntervalSecondsSql("duration")} as total_duration,
                 starttime as call_started_at,
                 CASE WHEN is_answ = true THEN answertime ELSE NULL END as call_answered_at,
-                endtime as call_ended_at,
+                ${safeEndSql("starttime", "endtime")} as call_ended_at,
                 false as has_recording
               FROM callhistory3
               ORDER BY starttime ASC
